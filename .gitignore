@@ -1,10 +1,35 @@
-node_modules/ 
-vendor/ 
-.DS_Store 
-Thumbs.db 
-.env 
-.vscode/ 
-.idea/ 
-tmp/ 
-temp/ 
-*.log 
+# Review artifacts and mockup packs
+.codex-remote-attachments/
+_review_artifacts/
+web00_premium_mockups_final/
+_qa/
+test-results/
+
+# WEB00 local design evidence
+/Макеты/
+/web00_premium_mockups_final/
+
+# Recorded review media and archives
+*.zip
+*.webm
+*.mp4
+*.mov
+*.log
+
+# WEB00 local Codex prompt packs / review artifacts
+/WEB00_WAVE*_PROMPT_PACK*/
+/_review/
+
+# Temporary recording scripts
+record_review.mjs
+record_*.mjs
+*_review*.mjs
+
+# Local dependency folders if tools are run manually
+node_modules/
+
+# Local secrets and OS files
+.env
+.env.*
+.DS_Store
+Thumbs.db
