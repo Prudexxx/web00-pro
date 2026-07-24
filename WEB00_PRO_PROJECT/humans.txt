@@ -1,0 +1,14 @@
+/* CREATOR */
+Name: Vitaliy Glebov
+Role: Product Design, Architecture, Frontend, QA
+Project: WEB00 Pro
+
+/* SITE */
+Name: WEB00 Pro
+Description: Premium website platform
+Year: 2026
+
+/* PUBLIC SIGNATURE */
+WEB00 Pro — premium website platform
+Designed & Engineered by Vitaliy Glebov
+© 2026

@@ -1,0 +1,721 @@
+/**
+ * WEB00 components layer.
+ * Shared low-specificity component defaults for light premium WEB00.
+ */
+
+:where(.btn, .button, [class*="__btn"]) {
+  min-height: var(--button-height);
+  border-radius: var(--button-radius);
+  transition:
+    background-color var(--motion-normal),
+    border-color var(--motion-normal),
+    color var(--motion-normal),
+    transform var(--motion-fast),
+    box-shadow var(--motion-normal);
+}
+
+:where(.btn--primary, .button--primary) {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+:where(.btn--secondary, .button--secondary) {
+  border-color: var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-accent);
+}
+
+:where(.btn[disabled], .btn.is-disabled, .button[disabled], .button.is-disabled) {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+:where(.card, [class*="__card"]) {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+:where(.badge, [class*="__badge"]) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  width: fit-content;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-dark);
+  font-size: 0.8rem;
+  font-weight: var(--weight-semibold);
+}
+
+:where(input, select, textarea) {
+  border-color: var(--color-line);
+  border-radius: var(--input-radius);
+}
+
+:where(input:focus, select:focus, textarea:focus) {
+  border-color: var(--color-accent);
+  outline: 0;
+  box-shadow: var(--focus-ring);
+}
+
+:where(input, select) {
+  min-height: var(--input-height);
+}
+
+:where(textarea) {
+  min-height: 112px;
+}
+
+:where(.modal, .modal__dialog, .modal-content) {
+  color: var(--color-text);
+}
+
+:where(.modal) {
+  z-index: var(--z-overlay);
+}
+
+:where(.modal.is-open) {
+  display: flex;
+}
+
+:where(.modal__dialog, .modal-content) {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-soft);
+}
+
+:where(.alert, .form-message) {
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-small);
+}
+
+:where(.alert--error, .form-message.is-error) {
+  border: 1px solid rgba(142, 15, 19, 0.22);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-dark);
+}
+
+@media (max-width: 640px) {
+  :where(.btn, .button, [class*="__btn"]) {
+    min-height: var(--button-height-mobile);
+  }
+
+  :where(input, select) {
+    min-height: var(--input-height-mobile);
+  }
+}
+
+/* Cross-page product shell guard for pages that do not load the tab standard. */
+body[data-page="install"],
+body[data-page="app"] {
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+body[data-page="install"] .site-header {
+  min-height: 39px;
+  border-bottom: 1px solid var(--color-line);
+  background: color-mix(in srgb, var(--color-surface) 96%, transparent);
+  color: var(--color-text);
+  box-shadow: none;
+  backdrop-filter: blur(14px);
+}
+
+body[data-page="install"] .header__inner {
+  min-height: 39px;
+}
+
+body[data-page="install"] :is(.logo, .nav a) {
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+body[data-page="install"] .logo {
+  font-family: var(--font-display) !important;
+  font-size: 1.62rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+body[data-page="install"] .logo span {
+  color: var(--color-text);
+}
+
+body[data-page="install"] .logo b {
+  display: inline-block;
+  color: var(--color-accent);
+  font-family: var(--font-sans);
+  font-size: 0.9em;
+  font-weight: 900;
+  letter-spacing: -0.015em;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "zero" 1, "tnum" 1;
+}
+
+body[data-page="install"] .nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 39px;
+  padding-block: 0;
+  color: var(--color-text);
+  font-size: 0.68rem;
+  font-weight: var(--weight-bold);
+}
+
+body[data-page="install"] :is(.header__cta, .btn--primary) {
+  min-height: 27px;
+  border: 1px solid var(--color-accent);
+  border-radius: 2px;
+  background: var(--color-accent);
+  color: var(--color-surface);
+  box-shadow: none;
+}
+
+body[data-page="install"] .header__cta {
+  min-width: 119px;
+  padding: 0;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+  font-weight: 800;
+}
+
+body[data-page="install"] .install-hero h1 {
+  max-width: 760px;
+  font-family: var(--font-display);
+  font-size: var(--font-size-page-title);
+  line-height: var(--line-height-heading);
+  letter-spacing: -0.03em;
+}
+
+body[data-page="install"] :is(.install-qr-card, .install-step-card, .install-honest-card) {
+  border: var(--card-border);
+  border-radius: var(--card-radius);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+body[data-page="install"] .footer {
+  border-top: 1px solid var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-muted);
+}
+
+body[data-page="install"] .footer :is(.logo, .footer__links a, .footer-credit) {
+  color: var(--color-muted);
+}
+
+body[data-page="install"] .footer .logo b {
+  color: var(--color-accent);
+}
+
+body[data-page="app"] .app-panel,
+body[data-page="app"] .app-action-grid a {
+  border-radius: var(--card-radius);
+}
+
+@media (max-width: 820px) {
+  body[data-page="install"] .site-header,
+  body[data-page="install"] .header__inner {
+    min-height: 64px;
+  }
+
+  body[data-page="install"] .install-hero h1 {
+    font-size: var(--font-size-page-title-mobile);
+  }
+}
+
+body[data-page="install"],
+body[data-page="app"] {
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 12% 12%, var(--color-accent-soft), transparent 30%),
+    linear-gradient(180deg, #fbf8f2 0%, var(--color-bg) 100%);
+  color: var(--color-text);
+}
+
+body[data-page="install"] .install-page {
+  padding: var(--space-2xl) 0 var(--space-3xl);
+}
+
+body[data-page="install"] .install-hero,
+body[data-page="install"] .install-section {
+  padding: var(--space-2xl) 0;
+}
+
+body[data-page="install"] .install-hero__grid,
+body[data-page="install"] .install-benefits-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.44fr);
+  gap: var(--space-2xl);
+  align-items: center;
+}
+
+body[data-page="install"] .install-kicker,
+body[data-page="install"] .install-section__head span,
+body[data-page="install"] .install-honest-card span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--color-accent);
+  font-size: 0.78rem;
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body[data-page="install"] .install-kicker span {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+body[data-page="install"] h1,
+body[data-page="install"] h2,
+body[data-page="app"] h1 {
+  margin: 0;
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0;
+  line-height: var(--line-height-heading);
+}
+
+body[data-page="install"] h1 {
+  max-width: 760px;
+  margin-top: var(--space-md);
+  font-size: clamp(3.1rem, 7vw, 6.5rem);
+}
+
+body[data-page="install"] h2 {
+  font-size: clamp(2rem, 3.4vw, 3.8rem);
+}
+
+body[data-page="install"] .install-hero__copy > p:not(.install-kicker),
+body[data-page="install"] .install-section__head + p,
+body[data-page="install"] .install-qr-card p,
+body[data-page="install"] .install-honest-card p,
+body[data-page="app"] .app-panel > p,
+body[data-page="app"] .app-note {
+  color: var(--color-muted);
+  line-height: 1.68;
+}
+
+body[data-page="install"] .install-hero__copy > p:not(.install-kicker) {
+  max-width: 680px;
+  font-size: clamp(1.05rem, 1.6vw, 1.22rem);
+}
+
+body[data-page="install"] .install-actions,
+body[data-page="cabinet"] .mobile-access-card,
+.mobile-access-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+body[data-page="install"] .install-qr-card,
+body[data-page="install"] .install-instructions article,
+body[data-page="install"] .install-benefits-grid > article,
+body[data-page="install"] .install-honest-card,
+body[data-page="app"] .app-panel,
+body[data-page="app"] .app-action-grid a,
+.mobile-access-card,
+body[data-page="contacts"] .contact-install-card {
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+body[data-page="install"] .install-qr-card,
+body[data-page="install"] .install-benefits-grid > article,
+body[data-page="install"] .install-honest-card,
+body[data-page="app"] .app-panel,
+.mobile-access-card,
+body[data-page="contacts"] .contact-install-card {
+  padding: var(--space-xl);
+}
+
+body[data-page="install"] .install-qr {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-xs);
+  width: 174px;
+  aspect-ratio: 1;
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+}
+
+body[data-page="install"] .install-qr span {
+  border-radius: var(--radius-xs);
+  background:
+    linear-gradient(135deg, var(--color-accent) 0 34%, transparent 34% 58%, var(--color-text) 58% 100%);
+  opacity: 0.86;
+}
+
+body[data-page="install"] .install-instructions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-lg);
+  margin-top: var(--space-xl);
+}
+
+body[data-page="install"] .install-instructions article {
+  padding: var(--space-lg);
+}
+
+body[data-page="install"] .install-instructions span {
+  color: var(--color-accent);
+  font-weight: var(--weight-bold);
+}
+
+body[data-page="install"] .install-instructions h3,
+body[data-page="install"] .install-qr-card strong,
+body[data-page="app"] .app-action-grid strong {
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0;
+}
+
+body[data-page="install"] .install-check-list {
+  display: grid;
+  gap: var(--space-sm);
+  margin: var(--space-lg) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="install"] .install-step-list {
+  display: grid;
+  gap: var(--space-xs);
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  color: var(--color-muted);
+  line-height: 1.55;
+  list-style: none;
+}
+
+body[data-page="install"] .install-step-list li {
+  position: relative;
+  padding-left: 20px;
+}
+
+body[data-page="install"] .install-step-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.62em;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  opacity: 0.82;
+}
+
+body[data-page="install"] .install-check-list li {
+  position: relative;
+  padding-left: 28px;
+}
+
+body[data-page="install"] .install-check-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius-pill);
+}
+
+body[data-page="app"] .app-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-lg);
+}
+
+body[data-page="app"] .app-panel {
+  width: min(100%, 560px);
+}
+
+body[data-page="app"] .app-logo {
+  display: inline-flex;
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: var(--weight-bold);
+  text-decoration: none;
+}
+
+body[data-page="app"] .app-logo span {
+  color: var(--color-accent);
+}
+
+body[data-page="app"] .app-kicker {
+  margin-top: var(--space-xl);
+  color: var(--color-accent);
+  font-size: 0.78rem;
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body[data-page="app"] h1 {
+  margin-top: var(--space-xs);
+  font-size: clamp(3.4rem, 16vw, 6rem);
+}
+
+body[data-page="app"] .app-action-grid {
+  display: grid;
+  gap: var(--space-sm);
+  margin-top: var(--space-xl);
+}
+
+body[data-page="app"] .app-action-grid a {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-md);
+  padding: var(--space-md);
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+body[data-page="app"] .app-action-grid button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-md);
+  width: 100%;
+  padding: var(--space-md);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+  text-align: left;
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+}
+
+body[data-page="app"] .app-action-grid span {
+  grid-row: span 2;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: var(--weight-bold);
+}
+
+body[data-page="app"] .app-action-grid small {
+  color: var(--color-muted);
+}
+
+.form-honeypot {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+body[data-page="app"] .app-note {
+  margin-top: var(--space-xl);
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-line);
+}
+
+body[data-page="app"] .app-support-link {
+  margin-top: var(--space-md);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.92rem;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+body[data-page="app"] .app-support-link:hover,
+body[data-page="app"] .app-support-link:focus-visible {
+  color: var(--color-accent);
+}
+
+.mobile-access-card {
+  justify-content: space-between;
+}
+
+.mobile-access-card h2,
+body[data-page="contacts"] .contact-install-card h2 {
+  margin: var(--space-xs) 0;
+}
+
+.mobile-access-card p,
+body[data-page="contacts"] .contact-install-card p {
+  margin: 0;
+  color: var(--color-muted);
+}
+
+body[data-page="contacts"] .contact-install-card {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+@media (max-width: 920px) {
+  body[data-page="install"] .install-hero__grid,
+  body[data-page="install"] .install-benefits-grid,
+  body[data-page="install"] .install-instructions {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="install"] h1 {
+    font-size: clamp(3rem, 14vw, 5rem);
+  }
+
+  .mobile-access-card {
+    align-items: stretch;
+  }
+}
+
+/* Wave 10.1: mobile viewport guard for shared pages and app/install shells. */
+@media (max-width: 767px), (hover: none) and (pointer: coarse) and (max-width: 1180px) {
+  :where(.container) {
+    width: min(100% - 32px, var(--container-wide));
+    max-width: 100%;
+  }
+
+  :where(.site-header, .page-shell, .page-main, main, section, article, aside, form) {
+    max-width: 100%;
+  }
+
+  :where(.header__inner) {
+    min-height: 64px;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  :where(.header__cta) {
+    display: none;
+  }
+
+  :where(.menu-toggle) {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  :where(.nav) {
+    position: fixed;
+    top: 70px;
+    left: 16px;
+    right: 16px;
+    z-index: calc(var(--z-header) + 10);
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-soft);
+  }
+
+  :where(.nav.is-open) {
+    display: flex;
+  }
+
+  :where(.nav a) {
+    min-height: 44px;
+    justify-content: flex-start;
+    padding: 0 12px;
+    border-bottom: 1px solid rgba(142, 15, 19, 0.12);
+    font-size: 0.95rem;
+  }
+
+  :where(.nav a:last-child) {
+    border-bottom: 0;
+  }
+
+  :where(.footer__inner) {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  :where(.footer__links) {
+    justify-content: center;
+  }
+
+  :where(.modal) {
+    padding: 12px;
+    overflow-x: hidden;
+  }
+
+  :where(.modal__dialog, .modal-content) {
+    width: calc(100vw - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-x: hidden;
+  }
+
+  :where(.modal__dialog--demo-2) {
+    width: calc(100vw - 24px);
+    height: min(92dvh, 780px);
+  }
+
+  body[data-page="install"] .install-page,
+  body[data-page="install"] .install-hero,
+  body[data-page="install"] .install-section {
+    padding-block: var(--space-xl);
+  }
+
+  body[data-page="install"] .install-hero__grid,
+  body[data-page="install"] .install-benefits-grid,
+  body[data-page="install"] .install-instructions,
+  body[data-page="app"] .app-action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="install"] h1,
+  body[data-page="app"] h1 {
+    font-size: clamp(2.35rem, 12vw, 3.6rem);
+    overflow-wrap: anywhere;
+  }
+
+  body[data-page="app"] .app-shell {
+    min-height: 100dvh;
+    padding: 16px;
+  }
+}
+
+/* Final install title guard after legacy responsive rules. */
+body[data-page="install"] .install-hero h1 {
+  font-size: var(--font-size-page-title);
+  line-height: var(--line-height-heading);
+  letter-spacing: -0.03em;
+}
+
+@media (max-width: 820px) {
+  body[data-page="install"] .install-hero h1 {
+    font-size: var(--font-size-page-title-mobile);
+  }
+}

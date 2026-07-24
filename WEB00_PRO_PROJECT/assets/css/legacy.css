@@ -1,0 +1,44 @@
+/**
+ * WEB00 legacy layer.
+ * Quarantine for old dark/neon styles kept only during migration.
+ * Target product style is light premium WEB00.
+ */
+
+/*
+  This file is intentionally not linked from production light premium pages.
+  It documents dark/neon primitives that still exist inside styles.css and
+  must be removed only after page-specific dependencies are audited.
+*/
+
+:where(.web00-legacy-dark) {
+  --legacy-bg: #050812;
+  --legacy-bg-2: #07111f;
+  --legacy-bg-3: #0b1020;
+  --legacy-surface: rgba(12, 18, 32, 0.74);
+  --legacy-surface-strong: rgba(17, 24, 39, 0.92);
+  --legacy-text: #f8fafc;
+  --legacy-muted: #94a3b8;
+  --legacy-red: #f3132f;
+  --legacy-blue: #3b82f6;
+  --legacy-violet: #8b2cff;
+  --legacy-violet-2: #8b5cf6;
+  --legacy-glow-red: 0 0 44px rgba(243, 19, 47, 0.22);
+  --legacy-glow-violet: 0 0 52px rgba(139, 44, 255, 0.2);
+  background:
+    radial-gradient(circle at 14% 8%, rgba(243, 19, 47, 0.17), transparent 25rem),
+    radial-gradient(circle at 86% 18%, rgba(139, 44, 255, 0.2), transparent 28rem),
+    radial-gradient(circle at 65% 70%, rgba(59, 130, 246, 0.11), transparent 30rem),
+    linear-gradient(180deg, var(--legacy-bg), var(--legacy-bg-2) 48%, var(--legacy-bg));
+  color: var(--legacy-text);
+}
+
+:where(.web00-legacy-dark-card) {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--legacy-surface);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.42);
+}
+
+:where(.web00-legacy-neon-accent) {
+  background: linear-gradient(135deg, var(--legacy-red), var(--legacy-violet));
+  box-shadow: var(--legacy-glow-red), var(--legacy-glow-violet);
+}

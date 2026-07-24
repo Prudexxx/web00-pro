@@ -1,0 +1,84 @@
+name: Deploy WEB00 to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy static WEB00
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare static site
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf _site
+          mkdir -p _site
+
+          shopt -s nullglob
+
+          cp -v *.html _site/
+
+          if [ -f manifest.webmanifest ]; then
+            cp -v manifest.webmanifest _site/
+          fi
+
+          if [ -f sw.js ]; then
+            cp -v sw.js _site/
+          fi
+
+          if [ -f robots.txt ]; then
+            cp -v robots.txt _site/
+          fi
+
+          if [ -f sitemap.xml ]; then
+            cp -v sitemap.xml _site/
+          fi
+
+          if [ -d assets ]; then
+            mkdir -p _site/assets
+            cp -R assets/* _site/assets/
+          fi
+
+          touch _site/.nojekyll
+
+          echo "WEB00 static site prepared"
+          find _site -maxdepth 3 -type f | sort | sed 's#^# - #'
+
+          test -f _site/index.html
+          test -f _site/assets/img/matryoshka-hero-720.webp
+          test -f _site/assets/img/matryoshka-hero-1200.webp
+          test -f _site/assets/img/matryoshka-hero-1600.webp
+          test -f _site/assets/img/matryoshka-clean-final.png
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

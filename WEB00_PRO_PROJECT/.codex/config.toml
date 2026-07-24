@@ -1,0 +1,53 @@
+# WEB00 Pro Codex permissions.
+# Uses permission profiles only.
+
+default_permissions = "web00-read-only"
+web_search = "disabled"
+
+[permissions.web00-read-only]
+description = "WEB00 default read-only profile. Safe for normal audits and planning."
+
+[permissions.web00-read-only.filesystem]
+":minimal" = "read"
+glob_scan_max_depth = 6
+
+[permissions.web00-read-only.filesystem.":workspace_roots"]
+"." = "read"
+"**/*.env" = "deny"
+"**/.env.*" = "deny"
+"**/*secret*" = "deny"
+"**/*token*" = "deny"
+"**/*credential*" = "deny"
+"**/*private-key*" = "deny"
+
+[permissions.web00-read-only.network]
+enabled = false
+
+[permissions.web00-audit-read-only]
+description = "Read-only profile for evidence-first audits, security checks, and reviews."
+extends = "web00-read-only"
+
+[permissions.web00-audit-read-only.network]
+enabled = false
+
+[permissions.web00-docs-only]
+description = "Docs-only profile for future approved foundation and documentation updates."
+
+[permissions.web00-docs-only.filesystem]
+":minimal" = "read"
+glob_scan_max_depth = 6
+
+[permissions.web00-docs-only.filesystem.":workspace_roots"]
+"." = "read"
+"AGENTS.md" = "write"
+"docs" = "write"
+".agents" = "write"
+"**/*.env" = "deny"
+"**/.env.*" = "deny"
+"**/*secret*" = "deny"
+"**/*token*" = "deny"
+"**/*credential*" = "deny"
+"**/*private-key*" = "deny"
+
+[permissions.web00-docs-only.network]
+enabled = false

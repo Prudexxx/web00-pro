@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Превью сайта кровельных работ</title>
+  <desc id="desc">Темный сайт строительных услуг с расчетом, портфолио и заявкой на замер.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#050812"/><stop offset=".58" stop-color="#0b1020"/><stop offset="1" stop-color="#172136"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset=".48" stop-color="#ef233c"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="30"/></filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="1060" cy="180" r="180" fill="#3b82f6" opacity=".22" filter="url(#glow)"/>
+  <circle cx="230" cy="620" r="180" fill="#ef233c" opacity=".18" filter="url(#glow)"/>
+  <rect x="88" y="72" width="1104" height="576" rx="36" fill="#0d1424" stroke="#fff" stroke-opacity=".12"/>
+  <path d="M182 416l246-194 246 194h-78v138H260V416z" fill="#111827" stroke="#fff" stroke-opacity=".12" stroke-width="2"/>
+  <path d="M158 410l270-220 270 220h-104L428 278 262 410z" fill="url(#accent)"/>
+  <rect x="326" y="430" width="208" height="124" rx="18" fill="#050812" stroke="#fff" stroke-opacity=".1"/>
+  <rect x="720" y="140" width="360" height="416" rx="30" fill="#101827" stroke="#fff" stroke-opacity=".1"/>
+  <text x="756" y="212" fill="#fff" font-family="Arial, sans-serif" font-size="42" font-weight="800">Услуга кровли</text>
+  <text x="758" y="254" fill="#94a3b8" font-family="Arial, sans-serif" font-size="23">Кровля, фасады, замер</text>
+  <rect x="758" y="300" width="174" height="48" rx="24" fill="url(#accent)"/>
+  <text x="798" y="331" fill="#fff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Заказать замер</text>
+  <rect x="758" y="392" width="270" height="18" rx="9" fill="#fff" opacity=".14"/>
+  <rect x="758" y="434" width="220" height="18" rx="9" fill="#fff" opacity=".1"/>
+  <g fill="#fff" opacity=".16">
+    <rect x="160" y="132" width="94" height="16" rx="8"/><rect x="282" y="132" width="70" height="16" rx="8"/><rect x="380" y="132" width="88" height="16" rx="8"/>
+  </g>
+</svg>

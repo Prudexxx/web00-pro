@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Массаж — demo</title>
+    <link rel="stylesheet" href="../demo.css">
+    <style>
+      :root { --accent: #db2777; --accent-2: #8b5cf6; }
+
+      .spa-scene {
+        min-height: 330px;
+        display: grid;
+        align-content: center;
+        justify-items: center;
+        gap: 18px;
+        border-radius: 24px;
+        padding: 26px;
+        background:
+          radial-gradient(circle at 28% 26%, rgba(251, 207, 232, 0.75), transparent 9rem),
+          radial-gradient(circle at 78% 18%, rgba(196, 181, 253, 0.56), transparent 10rem),
+          linear-gradient(135deg, #fff7fb, #f5f3ff);
+      }
+
+      .booking-strip {
+        width: min(360px, 100%);
+        display: grid;
+        gap: 10px;
+      }
+
+      .booking-slot {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        border: 1px solid rgba(219, 39, 119, 0.16);
+        border-radius: 16px;
+        padding: 12px 14px;
+        background: rgba(255, 255, 255, 0.76);
+        box-shadow: 0 16px 38px rgba(219, 39, 119, 0.12);
+      }
+    </style>
+  </head>
+  <body class="site-frame">
+    <header class="demo-header">
+      <div class="demo-container demo-nav">
+        <a class="brand" href="#"><span class="brand-mark">M</span>Массаж</a>
+        <nav class="nav-links">
+          <a href="#services">Услуги</a>
+          <a href="#booking">Запись</a>
+          <a href="#reviews">Отзывы</a>
+          <a href="#promo">Акции</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="demo-container demo-hero">
+        <div class="hero-copy">
+          <span class="kicker">Салон и частный специалист</span>
+          <h1>Онлайн-запись на массаж без лишней переписки</h1>
+          <p class="lead">Демо сайта для специалиста: услуги, свободные окна, акции, отзывы и форма записи, которая сразу собирает нужные данные.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#booking">Записаться</a>
+            <a class="btn" href="#services">Выбрать программу</a>
+          </div>
+          <div class="trust-row">
+            <span>Подбор программы</span>
+            <span>Свободные окна</span>
+            <span>Отзывы клиентов</span>
+          </div>
+        </div>
+
+        <div class="hero-card">
+          <div class="browser-bar"><span></span><span></span><span></span></div>
+          <div class="spa-scene">
+            <div class="massage-icon"><i></i><i></i><i></i></div>
+            <div class="booking-strip">
+              <div class="booking-slot"><span>Сегодня</span><b>18:00</b></div>
+              <div class="booking-slot"><span>Завтра</span><b>12:30</b></div>
+              <div class="booking-slot"><span>Суббота</span><b>15:00</b></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="services">
+        <div class="section-head">
+          <h2>Программы массажа</h2>
+          <p class="lead">Карточки показывают формат, длительность и цену, чтобы клиент быстрее выбрал услугу.</p>
+        </div>
+        <div class="grid grid-3">
+          <article class="catalog-card">
+            <div class="card-media"><div class="massage-icon"><i></i><i></i><i></i></div></div>
+            <h3>Классический</h3>
+            <p>Снятие мышечного напряжения, восстановление тонуса и лёгкости.</p>
+            <strong class="price">60 минут · от 2 500 ₽</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="massage-icon"><i></i><i></i><i></i></div></div>
+            <h3>Спортивный</h3>
+            <p>Глубокая работа после нагрузок, тренировок и активного графика.</p>
+            <strong class="price">75 минут · от 3 200 ₽</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="massage-icon"><i></i><i></i><i></i></div></div>
+            <h3>Антистресс</h3>
+            <p>Мягкая техника, спокойная атмосфера и восстановление сна.</p>
+            <strong class="price">60 минут · от 2 900 ₽</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="booking">
+        <div class="split-section">
+          <article class="premium-panel">
+            <h2>Запись в 3 шага</h2>
+            <div class="timeline">
+              <div class="timeline-step"><span>01</span><div><h3>Выбор услуги</h3><p>Клиент выбирает программу и удобную длительность.</p></div></div>
+              <div class="timeline-step"><span>02</span><div><h3>Контакт</h3><p>Оставляет телефон или Telegram для подтверждения записи.</p></div></div>
+              <div class="timeline-step"><span>03</span><div><h3>Подтверждение</h3><p>Специалист получает заявку и фиксирует время.</p></div></div>
+            </div>
+          </article>
+          <form class="form-card">
+            <h2>Записаться</h2>
+            <div class="form-grid">
+              <label>Имя<input placeholder="Анна"></label>
+              <label>Телефон<input placeholder="+7 999 123-45-67"></label>
+              <label>Услуга<select><option>Классический массаж</option><option>Спортивный массаж</option><option>Антистресс</option></select></label>
+              <label>Дата<input placeholder="Удобный день"></label>
+              <label class="wide">Комментарий<textarea placeholder="Пожелания, противопоказания, удобное время"></textarea></label>
+              <button class="btn btn-primary wide" type="button">Отправить заявку</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="reviews">
+        <div class="section-head">
+          <h2>Отзывы и доверие</h2>
+          <p class="lead">Сайт помогает показать атмосферу и убрать сомнения перед первым визитом.</p>
+        </div>
+        <div class="grid grid-3">
+          <article class="card"><h3>Елена</h3><p>После курса стало легче спине. Удобно записываться через сайт.</p></article>
+          <article class="card"><h3>Марина</h3><p>Понравился спокойный кабинет и понятная консультация перед сеансом.</p></article>
+          <article class="card" id="promo"><h3>Первый визит</h3><p>Подбор программы и рекомендации после сеанса в подарок.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><div class="demo-container">Demo WEB00 Pro · Массаж</div></footer>
+  </body>
+</html>

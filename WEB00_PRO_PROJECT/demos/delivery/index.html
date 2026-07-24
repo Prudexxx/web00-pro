@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Доставка и продажа дров — demo</title>
+    <link rel="stylesheet" href="../demo.css">
+    <style>
+      :root { --accent: #b45309; --accent-2: #ef233c; }
+
+      .delivery-scene {
+        min-height: 330px;
+        display: grid;
+        grid-template-columns: 1fr 0.9fr;
+        gap: 20px;
+        align-items: center;
+        border-radius: 24px;
+        padding: 24px;
+        background:
+          radial-gradient(circle at 30% 28%, rgba(245, 158, 11, 0.22), transparent 10rem),
+          linear-gradient(135deg, #fff7ed, #ffffff);
+      }
+
+      .route-card {
+        display: grid;
+        gap: 12px;
+        border: 1px solid rgba(180, 83, 9, 0.15);
+        border-radius: 18px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.82);
+        box-shadow: 0 18px 45px rgba(120, 53, 15, 0.14);
+      }
+    </style>
+  </head>
+  <body class="site-frame">
+    <header class="demo-header">
+      <div class="demo-container demo-nav">
+        <a class="brand" href="#"><span class="brand-mark">D</span>Доставка и продажа дров</a>
+        <nav class="nav-links">
+          <a href="#catalog">Каталог</a>
+          <a href="#delivery">Доставка</a>
+          <a href="#benefits">Преимущества</a>
+          <a href="#order">Заказ</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="demo-container demo-hero">
+        <div class="hero-copy">
+          <span class="kicker">Сезонный товар и доставка</span>
+          <h1>Дрова с доставкой: понятный каталог и быстрый заказ</h1>
+          <p class="lead">Демо сайта для продажи дров, угля, воды или локальных товаров с доставкой: клиент выбирает объём, адрес и получает расчёт.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#catalog">Выбрать дрова</a>
+            <a class="btn" href="#order">Быстрый заказ</a>
+          </div>
+          <div class="trust-row">
+            <span>Берёза и смешанные</span>
+            <span>Доставка по району</span>
+            <span>Оплата при получении</span>
+          </div>
+        </div>
+
+        <div class="hero-card">
+          <div class="browser-bar"><span></span><span></span><span></span></div>
+          <div class="delivery-scene">
+            <div class="wood-stack"><i></i><i></i><i></i><i></i></div>
+            <div class="route-card">
+              <b>Заказ сегодня</b>
+              <div class="order-row"><span>Объём</span><strong>5 м³</strong></div>
+              <div class="order-row"><span>Доставка</span><strong>до 19:00</strong></div>
+              <div class="order-row"><span>Адрес</span><strong>12 км</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="catalog">
+        <div class="section-head">
+          <h2>Каталог дров</h2>
+          <p class="lead">Карточки показывают тип, влажность, фасовку и цену от. Это сокращает количество уточняющих вопросов.</p>
+        </div>
+        <div class="grid grid-4">
+          <article class="catalog-card">
+            <div class="card-media"><div class="wood-stack"><i></i><i></i><i></i><i></i></div></div>
+            <h3>Берёзовые колотые</h3>
+            <p>Популярный вариант для печей, каминов и бань.</p>
+            <strong class="price">от 2 400 ₽/м³</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="wood-stack"><i></i><i></i><i></i><i></i></div></div>
+            <h3>Смешанные</h3>
+            <p>Практичный формат для отопления на сезон.</p>
+            <strong class="price">от 1 900 ₽/м³</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="wood-stack"><i></i><i></i><i></i><i></i></div></div>
+            <h3>Дрова в сетках</h3>
+            <p>Удобно для дачи, мангала и разовых поездок.</p>
+            <strong class="price">от 180 ₽/сетка</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="wood-stack"><i></i><i></i><i></i><i></i></div></div>
+            <h3>Индивидуальный объём</h3>
+            <p>Подбор по расстоянию, месту разгрузки и сезону.</p>
+            <strong class="price">по расчёту</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="delivery">
+        <div class="split-section">
+          <article class="premium-panel">
+            <h2>Зона доставки</h2>
+            <p class="lead">Город, СНТ и ближайшие посёлки. Стоимость зависит от расстояния и объёма.</p>
+            <div class="map-zone"></div>
+            <div class="chips"><span class="chip">Город</span><span class="chip">До 15 км</span><span class="chip">До 40 км</span><span class="chip">По договорённости</span></div>
+          </article>
+          <article class="premium-panel" id="benefits">
+            <h2>Что удобно владельцу</h2>
+            <ul class="feature-list">
+              <li>Клиент сам выбирает товар и объём</li>
+              <li>Адрес и контакт приходят в одной заявке</li>
+              <li>Можно быстро посчитать доставку</li>
+              <li>Сайт подходит для сезонной рекламы</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="order">
+        <form class="form-card">
+          <h2>Оформить заказ</h2>
+          <p class="lead">Оставьте данные. Менеджер подтвердит наличие, доставку и итоговую стоимость.</p>
+          <div class="form-grid">
+            <label>Имя<input placeholder="Сергей"></label>
+            <label>Телефон<input placeholder="+7 999 123-45-67"></label>
+            <label>Товар<select><option>Берёзовые колотые</option><option>Смешанные</option><option>Дрова в сетках</option><option>Индивидуальный объём</option></select></label>
+            <label>Объём<input placeholder="5 м³"></label>
+            <label class="wide">Адрес<textarea placeholder="Населённый пункт, улица, место разгрузки"></textarea></label>
+            <button class="btn btn-primary wide" type="button">Отправить заказ</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <footer class="footer"><div class="demo-container">Demo WEB00 Pro · Доставка и продажа дров</div></footer>
+  </body>
+</html>

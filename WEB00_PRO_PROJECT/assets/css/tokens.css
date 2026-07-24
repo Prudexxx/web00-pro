@@ -1,0 +1,162 @@
+/**
+ * WEB00 Pro design tokens.
+ * Target: light premium launch-platform.
+ * This file contains variables only: no page-specific selectors.
+ */
+
+:root {
+  /* Colors */
+  --color-bg: #f7f2ea;
+  --color-surface: #ffffff;
+  --color-surface-soft: #fbf7f1;
+  --color-text: #17120f;
+  --color-muted: #6f655d;
+  --color-line: rgba(142, 15, 19, 0.16);
+  --color-accent: #8E0F13;
+  --color-accent-dark: #641014;
+  --color-accent-soft: rgba(142, 15, 19, 0.08);
+  --color-gold-soft: #c8a76a;
+  --color-focus: rgba(142, 15, 19, 0.38);
+
+  /* Typography */
+  --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
+  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  --font-size-body: 16px;
+  --font-size-small: 14px;
+  --font-size-label: 13px;
+  --font-size-ui: 14px;
+  --font-size-page-title: clamp(2rem, 2.25vw, 2.5rem);
+  --font-size-page-title-mobile: clamp(1.75rem, 7.2vw, 2rem);
+  --line-height-body: 1.55;
+  --line-height-heading: 1.08;
+  --line-height-copy: 1.55;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Layout */
+  --container: 1160px;
+  --container-wide: 1280px;
+  --gutter-mobile: 24px;
+  --gutter-tablet: 32px;
+  --gutter-desktop: 40px;
+
+  /* Spacing */
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 72px;
+  --space-section: 88px;
+  --space-section-lg: 112px;
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* Shared component contracts */
+  --card-radius: var(--radius-md);
+  --card-border: 1px solid var(--color-line);
+  --field-radius: var(--radius-sm);
+
+  /* Shadows */
+  --shadow-card: 0 14px 34px rgba(44, 35, 28, 0.07);
+  --shadow-soft: 0 18px 50px rgba(44, 35, 28, 0.08);
+  --shadow-device: 0 24px 70px rgba(31, 27, 24, 0.16);
+
+  /* Z-index */
+  --z-header: 50;
+  --z-overlay: 100;
+  --z-modal: 110;
+  --z-toast: 120;
+
+  /* Buttons */
+  --button-height: 48px;
+  --button-height-mobile: 52px;
+  --button-padding-x: 24px;
+  --button-radius: var(--radius-sm);
+
+  /* Inputs */
+  --input-height: 48px;
+  --input-height-mobile: 52px;
+  --input-radius: var(--radius-sm);
+  --input-padding-x: 14px;
+
+  /* Motion */
+  --motion-fast: 140ms ease;
+  --motion-normal: 220ms ease;
+  --motion-slow: 360ms ease;
+
+  /* Accessibility */
+  --focus-ring-color: var(--color-focus);
+  --focus-ring: 0 0 0 3px var(--focus-ring-color);
+
+  /* Compatibility aliases for existing WEB00 layers. */
+  --web00-color-paper: var(--color-bg);
+  --web00-color-surface: var(--color-surface);
+  --web00-color-surface-soft: var(--color-surface-soft);
+  --web00-color-ink: var(--color-text);
+  --web00-color-text: var(--color-text);
+  --web00-color-muted: var(--color-muted);
+  --web00-color-line: var(--color-line);
+  --web00-color-line-strong: rgba(142, 15, 19, 0.24);
+  --web00-color-accent: var(--color-accent);
+  --web00-color-accent-hover: #a31318;
+  --web00-color-accent-soft: var(--color-accent-soft);
+  --web00-color-focus: var(--focus-ring-color);
+  --web00-font-serif: var(--font-display);
+  --web00-font-sans: var(--font-sans);
+  --web00-font-body-size: var(--font-size-body);
+  --web00-line-body: var(--line-height-body);
+  --web00-line-heading: var(--line-height-heading);
+  --web00-weight-regular: var(--weight-regular);
+  --web00-weight-medium: var(--weight-medium);
+  --web00-weight-semibold: var(--weight-semibold);
+  --web00-weight-bold: var(--weight-bold);
+  --web00-space-2xs: var(--space-2xs);
+  --web00-space-xs: var(--space-xs);
+  --web00-space-sm: var(--space-sm);
+  --web00-space-md: var(--space-md);
+  --web00-space-lg: var(--space-lg);
+  --web00-space-xl: var(--space-xl);
+  --web00-space-2xl: var(--space-2xl);
+  --web00-space-3xl: var(--space-3xl);
+  --web00-space-section: var(--space-section);
+  --web00-container: var(--container);
+  --web00-container-wide: var(--container-wide);
+  --web00-gutter-mobile: var(--gutter-mobile);
+  --web00-gutter-desktop: var(--gutter-desktop);
+  --web00-radius-xs: var(--radius-xs);
+  --web00-radius-sm: var(--radius-sm);
+  --web00-radius-md: var(--radius-md);
+  --web00-radius-lg: var(--radius-lg);
+  --web00-radius-button: var(--button-radius);
+  --web00-radius-pill: var(--radius-pill);
+  --web00-border-subtle: 1px solid var(--color-line);
+  --web00-border-strong: 1px solid rgba(142, 15, 19, 0.24);
+  --web00-shadow-card: var(--shadow-card);
+  --web00-shadow-soft: var(--shadow-soft);
+  --web00-shadow-device: var(--shadow-device);
+  --web00-button-height: var(--button-height);
+  --web00-button-height-mobile: var(--button-height-mobile);
+  --web00-button-padding-x: var(--button-padding-x);
+  --web00-button-border: 1px solid var(--color-accent);
+  --web00-button-bg-primary: var(--color-accent);
+  --web00-button-color-primary: #ffffff;
+  --web00-button-bg-secondary: transparent;
+  --web00-button-color-secondary: var(--color-accent);
+  --web00-z-header: var(--z-header);
+  --web00-z-overlay: var(--z-overlay);
+  --web00-z-modal: var(--z-modal);
+  --web00-z-toast: var(--z-toast);
+}
+
+/* Breakpoints: 360, 390, 430, 768, 1024, 1160, 1280, 1440, 1920. */

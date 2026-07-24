@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Превью Telegram-бота для заявок</title>
+  <desc id="desc">Темная схема автоматизации: сайт, заявка, Telegram, таблица и запуск.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#050812"/><stop offset=".62" stop-color="#0b1020"/><stop offset="1" stop-color="#1e1b4b"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset=".45" stop-color="#8b5cf6"/><stop offset="1" stop-color="#ef233c"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="30"/></filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="1020" cy="150" r="190" fill="#8b5cf6" opacity=".26" filter="url(#glow)"/>
+  <circle cx="230" cy="610" r="190" fill="#3b82f6" opacity=".2" filter="url(#glow)"/>
+  <rect x="88" y="72" width="1104" height="576" rx="36" fill="#0d1424" stroke="#fff" stroke-opacity=".12"/>
+  <text x="148" y="156" fill="#fff" font-family="Arial, sans-serif" font-size="42" font-weight="800">Telegram-бот для заявок</text>
+  <text x="150" y="198" fill="#94a3b8" font-family="Arial, sans-serif" font-size="24">Клиент оставляет заявку, владелец получает уведомление</text>
+  <g transform="translate(150 280)">
+    <rect width="190" height="160" rx="30" fill="#101827" stroke="#fff" stroke-opacity=".12"/>
+    <text x="58" y="76" fill="#fff" font-family="Arial, sans-serif" font-size="24" font-weight="800">Сайт</text>
+    <rect x="44" y="104" width="102" height="16" rx="8" fill="#fff" opacity=".16"/>
+  </g>
+  <path d="M365 360h100" stroke="url(#accent)" stroke-width="6" stroke-linecap="round"/><path d="M454 342l28 18-28 18" fill="none" stroke="#8b5cf6" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(500 280)">
+    <rect width="190" height="160" rx="30" fill="#101827" stroke="#fff" stroke-opacity=".12"/>
+    <text x="52" y="76" fill="#fff" font-family="Arial, sans-serif" font-size="24" font-weight="800">Заявка</text>
+    <rect x="44" y="104" width="102" height="16" rx="8" fill="#ef233c" opacity=".76"/>
+  </g>
+  <path d="M715 360h100" stroke="url(#accent)" stroke-width="6" stroke-linecap="round"/><path d="M804 342l28 18-28 18" fill="none" stroke="#8b5cf6" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(850 248)">
+    <rect width="250" height="224" rx="34" fill="#101827" stroke="#fff" stroke-opacity=".12"/>
+    <circle cx="78" cy="84" r="38" fill="#3b82f6"/>
+    <path d="M58 84l50-26-18 56-14-20z" fill="#fff"/>
+    <text x="128" y="78" fill="#fff" font-family="Arial, sans-serif" font-size="24" font-weight="800">Telegram</text>
+    <rect x="44" y="144" width="160" height="18" rx="9" fill="#fff" opacity=".16"/>
+    <rect x="44" y="178" width="118" height="18" rx="9" fill="#fff" opacity=".1"/>
+  </g>
+  <rect x="454" y="520" width="374" height="62" rx="31" fill="url(#accent)"/>
+  <text x="524" y="560" fill="#fff" font-family="Arial, sans-serif" font-size="24" font-weight="800">Система заявок готова</text>
+</svg>

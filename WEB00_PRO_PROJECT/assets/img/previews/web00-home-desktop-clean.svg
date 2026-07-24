@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 820" role="img" aria-label="WEB00 homepage preview">
+  <defs>
+    <style>
+      .serif{font-family:Georgia,'Times New Roman',serif}.sans{font-family:Arial,Helvetica,sans-serif}.dark{fill:#201d1a}.muted{fill:#6f6862}.red{fill:#9f1118}.line{stroke:#e8e2da;stroke-width:1}.soft{fill:#f8f5ef}.card{fill:#fff;stroke:#e5ded6;stroke-width:1}
+    </style>
+  </defs>
+  <rect width="1440" height="820" fill="#fffdfb"/>
+  <rect x="0" y="0" width="1440" height="68" fill="#fffdfb"/>
+  <line x1="0" y1="68" x2="1440" y2="68" class="line"/>
+  <text x="108" y="43" class="serif dark" font-size="30" font-weight="700">WEB</text>
+  <text x="175" y="43" class="serif red" font-size="30" font-weight="700">00</text>
+  <text x="560" y="40" class="sans dark" font-size="14" font-weight="700">Каталог</text>
+  <text x="680" y="40" class="sans dark" font-size="14" font-weight="700">Тарифы</text>
+  <text x="805" y="40" class="sans dark" font-size="14" font-weight="700">Как это работает</text>
+  <text x="1005" y="40" class="sans dark" font-size="14" font-weight="700">Кейсы</text>
+  <text x="1105" y="40" class="sans dark" font-size="14" font-weight="700">FAQ</text>
+  <rect x="1210" y="18" width="148" height="34" rx="3" fill="#9f1118"/>
+  <text x="1242" y="40" class="sans" fill="#fff" font-size="13" font-weight="700">Выбрать сайт</text>
+
+  <g transform="translate(108 118)">
+    <rect x="0" y="0" width="328" height="32" rx="8" fill="#fff" stroke="#eaded8"/>
+    <text x="28" y="21" class="sans red" font-size="14" font-weight="700">Премиум-платформа готовых сайтов для бизнеса</text>
+    <path d="M15 10l2 5h5l-4 3 2 5-5-3-5 3 2-5-4-3h5z" fill="none" stroke="#9f1118" stroke-width="1.3"/>
+    <text x="0" y="96" class="serif dark" font-size="62" font-weight="700">Готовый сайт для бизнеса —</text>
+    <text x="0" y="158" class="serif dark" font-size="62" font-weight="700">запуск без хаоса</text>
+    <text x="0" y="205" class="sans muted" font-size="20">Выберите шаблон, заполните анкету проекта — и мы запустим ваш сайт под ключ.</text>
+    <text x="0" y="235" class="sans muted" font-size="20">Быстро, прозрачно и с поддержкой на каждом этапе.</text>
+    <rect x="0" y="278" width="180" height="48" rx="3" fill="#9f1118"/>
+    <text x="44" y="308" class="sans" fill="#fff" font-size="15" font-weight="700">Выбрать шаблон</text>
+    <rect x="205" y="278" width="180" height="48" rx="3" fill="#fff" stroke="#9f1118"/>
+    <circle cx="242" cy="302" r="11" fill="#fff" stroke="#9f1118"/>
+    <path d="M239 296l9 6-9 6z" fill="#9f1118"/>
+    <text x="265" y="308" class="sans red" font-size="15" font-weight="700">Смотреть демо</text>
+  </g>
+
+  <g transform="translate(0 504)">
+    <rect x="0" y="0" width="1440" height="80" fill="#fffdfb"/>
+    <line x1="0" y1="0" x2="1440" y2="0" class="line"/>
+    <line x1="360" y1="0" x2="360" y2="80" class="line"/>
+    <line x1="720" y1="0" x2="720" y2="80" class="line"/>
+    <line x1="1080" y1="0" x2="1080" y2="80" class="line"/>
+    <circle cx="98" cy="40" r="18" fill="none" stroke="#9f1118" stroke-width="3"/>
+    <text x="150" y="35" class="sans dark" font-size="17" font-weight="700">Запуск от 48 часов</text>
+    <text x="150" y="57" class="sans muted" font-size="13">Быстрый старт без потери качества</text>
+    <path d="M465 55a25 25 0 0 1 50 0" fill="none" stroke="#9f1118" stroke-width="4"/>
+    <text x="560" y="35" class="sans dark" font-size="17" font-weight="700">Performance 90+</text>
+    <text x="560" y="57" class="sans muted" font-size="13">Высокая скорость и стабильность</text>
+    <circle cx="825" cy="34" r="18" fill="none" stroke="#9f1118" stroke-width="3"/>
+    <line x1="839" y1="49" x2="857" y2="67" stroke="#9f1118" stroke-width="3"/>
+    <text x="900" y="35" class="sans dark" font-size="17" font-weight="700">SEO-ready</text>
+    <text x="900" y="57" class="sans muted" font-size="13">Готовность к поисковому продвижению</text>
+    <path d="M1165 46v-9a21 21 0 0 1 42 0v9" fill="none" stroke="#9f1118" stroke-width="4"/>
+    <text x="1240" y="35" class="sans dark" font-size="17" font-weight="700">Поддержка и сопровождение</text>
+    <text x="1240" y="57" class="sans muted" font-size="13">Мы рядом после запуска</text>
+  </g>
+
+  <g transform="translate(108 620)">
+    <text x="520" y="0" class="serif dark" font-size="32" font-weight="700">Как это работает</text>
+    <circle cx="45" cy="55" r="26" class="soft" stroke="#e5ded6"/>
+    <text x="36" y="65" class="serif red" font-size="24" font-weight="700">1</text>
+    <text x="96" y="48" class="sans dark" font-size="17" font-weight="700">Выбрать</text>
+    <text x="96" y="70" class="sans muted" font-size="13">Из каталога готовых решений под вашу нишу.</text>
+    <line x1="360" y1="55" x2="465" y2="55" stroke="#d8d0c8"/>
+    <circle cx="540" cy="55" r="26" class="soft" stroke="#e5ded6"/>
+    <text x="531" y="65" class="serif red" font-size="24" font-weight="700">2</text>
+    <text x="592" y="48" class="sans dark" font-size="17" font-weight="700">Проверить</text>
+    <text x="592" y="70" class="sans muted" font-size="13">Смотрите демо и уточняете детали.</text>
+    <line x1="860" y1="55" x2="965" y2="55" stroke="#d8d0c8"/>
+    <circle cx="1040" cy="55" r="26" class="soft" stroke="#e5ded6"/>
+    <text x="1031" y="65" class="serif red" font-size="24" font-weight="700">3</text>
+    <text x="1092" y="48" class="sans dark" font-size="17" font-weight="700">Запустить</text>
+    <text x="1092" y="70" class="sans muted" font-size="13">Запускаем сайт и остаёмся на связи.</text>
+  </g>
+
+  <g transform="translate(108 720)">
+    <text x="0" y="0" class="serif dark" font-size="28" font-weight="700">Популярные шаблоны</text>
+    <rect x="0" y="30" width="370" height="74" rx="6" class="card"/>
+    <rect x="396" y="30" width="370" height="74" rx="6" class="card"/>
+    <rect x="792" y="30" width="370" height="74" rx="6" class="card"/>
+  </g>
+</svg>

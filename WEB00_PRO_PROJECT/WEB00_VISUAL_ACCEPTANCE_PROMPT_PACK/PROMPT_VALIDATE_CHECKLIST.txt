@@ -1,0 +1,21 @@
+WEB00 PROMPT VALIDATE CHECKLIST
+
+Required literal sections:
+[ЦЕЛЬ]
+[КОНТЕКСТ]
+[ПЛАН]
+[ПРАВКИ]
+[ПРОВЕРКИ]
+[ЗАПРЕТЫ]
+[DoD]
+
+Expected task title:
+WEB00 Visual Acceptance Pack — Live/Desktop/Tablet/Mobile Visual Gate
+
+Critical restrictions:
+- no product code changes
+- no commit
+- no push
+- no deploy
+- no backend
+- evidence only under _qa/WEB00_VISUAL_ACCEPTANCE_PACK/

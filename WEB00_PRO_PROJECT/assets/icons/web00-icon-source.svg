@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">WEB00 app icon source</title>
+  <desc id="desc">Light premium WEB00 mark for PWA icons.</desc>
+  <rect width="512" height="512" rx="112" fill="#f7f2ea"/>
+  <rect x="38" y="38" width="436" height="436" rx="92" fill="#ffffff" stroke="rgba(142,15,19,0.18)" stroke-width="8"/>
+  <circle cx="384" cy="138" r="42" fill="rgba(142,15,19,0.10)"/>
+  <path d="M106 185l38 154 46-120 46 120 38-154" fill="none" stroke="#17120f" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="344" cy="268" r="58" fill="none" stroke="#8E0F13" stroke-width="24"/>
+  <circle cx="436" cy="268" r="58" fill="none" stroke="#8E0F13" stroke-width="24"/>
+  <path d="M102 386h308" stroke="#8E0F13" stroke-width="18" stroke-linecap="round"/>
+</svg>

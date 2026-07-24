@@ -1,0 +1,2331 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap");
+
+body[data-page="services"],
+body[data-page="how-it-works"],
+body[data-page="legal"] {
+  --public-bg: #f8f5ef;
+  --public-surface: #fffdf9;
+  --public-card: #ffffff;
+  --public-ink: #2f2723;
+  --public-muted: #766b63;
+  --public-soft: #efe8df;
+  --public-line: rgba(83, 65, 54, 0.15);
+  --public-accent: #a20f1c;
+  --public-accent-dark: #7f0d18;
+  --public-accent-soft: rgba(162, 15, 28, 0.08);
+  --public-shadow: 0 24px 70px rgba(62, 44, 31, 0.1);
+  --public-shadow-soft: 0 14px 38px rgba(62, 44, 31, 0.07);
+  margin: 0;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(162, 15, 28, 0.07), transparent 30%),
+    linear-gradient(180deg, #fbfaf7 0%, var(--public-bg) 46%, #f5efe7 100%);
+  color: var(--public-ink);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body[data-page="legal"] {
+  overflow-x: hidden;
+}
+
+body[data-page="services"] *,
+body[data-page="services"] *::before,
+body[data-page="services"] *::after,
+body[data-page="how-it-works"] *,
+body[data-page="how-it-works"] *::before,
+body[data-page="how-it-works"] *::after,
+body[data-page="legal"] *,
+body[data-page="legal"] *::before,
+body[data-page="legal"] *::after {
+  box-sizing: border-box;
+}
+
+body[data-page="services"] .container,
+body[data-page="how-it-works"] .container,
+body[data-page="legal"] .container {
+  width: min(100% - 48px, 1180px);
+  margin-inline: auto;
+}
+
+body[data-page="services"] .site-header,
+body[data-page="how-it-works"] .site-header,
+body[data-page="legal"] .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid var(--public-line);
+  background: rgba(255, 253, 249, 0.9);
+  box-shadow: 0 10px 32px rgba(62, 44, 31, 0.05);
+  backdrop-filter: blur(18px);
+}
+
+body[data-page="services"] .header__inner,
+body[data-page="how-it-works"] .header__inner,
+body[data-page="legal"] .header__inner {
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+body[data-page="services"] .logo,
+body[data-page="how-it-works"] .logo,
+body[data-page="legal"] .logo {
+  color: var(--public-ink);
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+}
+
+body[data-page="services"] .logo span,
+body[data-page="how-it-works"] .logo span,
+body[data-page="legal"] .logo span {
+  color: var(--public-ink);
+  text-shadow: none;
+}
+
+body[data-page="services"] .logo b,
+body[data-page="how-it-works"] .logo b,
+body[data-page="legal"] .logo b,
+body[data-page="services"] .logo span b,
+body[data-page="how-it-works"] .logo span b,
+body[data-page="legal"] .logo span b {
+  color: var(--public-accent);
+  text-shadow: none;
+}
+
+body[data-page="services"] .logo small,
+body[data-page="how-it-works"] .logo small,
+body[data-page="legal"] .logo small {
+  display: none;
+}
+
+body[data-page="services"] .nav,
+body[data-page="how-it-works"] .nav,
+body[data-page="legal"] .nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 34px;
+  margin-left: auto;
+}
+
+body[data-page="services"] .nav a,
+body[data-page="how-it-works"] .nav a,
+body[data-page="legal"] .nav a {
+  position: relative;
+  color: var(--public-muted);
+  font-size: 0.94rem;
+  font-weight: 650;
+  text-decoration: none;
+  transition: color 180ms ease;
+}
+
+body[data-page="services"] .nav a:hover,
+body[data-page="services"] .nav a:focus-visible,
+body[data-page="how-it-works"] .nav a:hover,
+body[data-page="how-it-works"] .nav a:focus-visible,
+body[data-page="legal"] .nav a:hover,
+body[data-page="legal"] .nav a:focus-visible {
+  color: var(--public-accent);
+}
+
+body[data-page="services"] .nav a.is-active,
+body[data-page="how-it-works"] .nav a.is-active,
+body[data-page="legal"] .nav a.is-active {
+  color: var(--public-ink);
+}
+
+body[data-page="services"] .nav a.is-active::after,
+body[data-page="how-it-works"] .nav a.is-active::after,
+body[data-page="legal"] .nav a.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -28px;
+  height: 2px;
+  background: var(--public-accent);
+}
+
+body[data-page="services"] .header__cta,
+body[data-page="how-it-works"] .header__cta,
+body[data-page="legal"] .header__cta {
+  margin-left: 10px;
+  min-height: 46px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--public-accent);
+  color: #fff;
+  box-shadow: 0 16px 32px rgba(162, 15, 28, 0.22);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+body[data-page="services"] .menu-toggle,
+body[data-page="how-it-works"] .menu-toggle {
+  border-color: var(--public-line);
+  background: #fff;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="services"] .menu-toggle span,
+body[data-page="how-it-works"] .menu-toggle span {
+  background: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="services"] .screen-section,
+body[data-page="how-it-works"] .screen-section {
+  min-height: auto;
+  padding: 92px 0 104px;
+}
+
+body[data-page="services"] .services-page,
+body[data-page="how-it-works"] .work-page {
+  background: transparent;
+}
+
+body[data-page="services"] .services-page > .container,
+body[data-page="how-it-works"] .work-page > .container {
+  display: block;
+}
+
+body[data-page="services"] .services-hero,
+body[data-page="how-it-works"] .work-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.94fr) minmax(420px, 1fr);
+  align-items: center;
+  gap: 56px;
+}
+
+body[data-page="services"] .services-hero__content,
+body[data-page="how-it-works"] .work-hero__content {
+  max-width: 610px;
+}
+
+body[data-page="services"] .ui-kicker,
+body[data-page="how-it-works"] .ui-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 22px;
+  padding: 9px 15px;
+  border: 1px solid var(--public-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--public-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+body[data-page="services"] .ui-kicker span,
+body[data-page="how-it-works"] .ui-kicker span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--public-accent);
+}
+
+body[data-page="services"] h1,
+body[data-page="how-it-works"] h1,
+body[data-page="legal"] h1,
+body[data-page="services"] h2,
+body[data-page="how-it-works"] h2,
+body[data-page="legal"] h2 {
+  color: var(--public-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  letter-spacing: -0.035em;
+}
+
+body[data-page="services"] h1,
+body[data-page="how-it-works"] h1 {
+  max-width: 720px;
+  margin: 0;
+  font-size: clamp(3.2rem, 5.2vw, 5.7rem);
+  line-height: 0.95;
+  font-weight: 700;
+}
+
+body[data-page="services"] h1 em,
+body[data-page="how-it-works"] h1 em {
+  color: var(--public-accent);
+  font-style: normal;
+}
+
+body[data-page="services"] .services-hero__content > p:not(.ui-kicker),
+body[data-page="how-it-works"] .work-hero__content > p:not(.ui-kicker) {
+  max-width: 650px;
+  margin: 24px 0 0;
+  color: var(--public-muted);
+  font-size: 1.1rem;
+  line-height: 1.75;
+}
+
+body[data-page="services"] .services-trust,
+body[data-page="how-it-works"] .work-trust {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+body[data-page="services"] .services-trust span,
+body[data-page="how-it-works"] .work-trust span {
+  padding: 10px 14px;
+  border: 1px solid var(--public-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--public-muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+body[data-page="services"] .services-actions,
+body[data-page="how-it-works"] .work-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+body[data-page="services"] .btn,
+body[data-page="how-it-works"] .btn,
+body[data-page="legal"] .btn {
+  min-height: 50px;
+  border-radius: 999px;
+  font-weight: 750;
+}
+
+body[data-page="services"] .btn--primary,
+body[data-page="how-it-works"] .btn--primary,
+body[data-page="legal"] .btn--primary {
+  border: 1px solid var(--public-accent);
+  background: var(--public-accent);
+  color: #fff;
+  box-shadow: 0 16px 34px rgba(162, 15, 28, 0.2);
+}
+
+body[data-page="services"] .btn--secondary,
+body[data-page="services"] .btn--ghost,
+body[data-page="how-it-works"] .btn--secondary,
+body[data-page="how-it-works"] .btn--ghost,
+body[data-page="legal"] .btn--secondary,
+body[data-page="legal"] .btn--ghost {
+  border: 1px solid var(--public-line);
+  background: #fff;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="services"] .glow-panel,
+body[data-page="how-it-works"] .glow-panel {
+  border: 1px solid var(--public-line);
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: var(--public-shadow);
+  backdrop-filter: blur(16px);
+}
+
+body[data-page="services"] .glow-panel::before,
+body[data-page="how-it-works"] .glow-panel::before {
+  content: none;
+}
+
+body[data-page="services"] .service-decision,
+body[data-page="how-it-works"] .work-flow-card {
+  border-radius: 34px;
+  padding: 28px;
+}
+
+body[data-page="services"] .service-decision__head,
+body[data-page="how-it-works"] .project-dashboard__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 22px;
+}
+
+body[data-page="services"] .service-decision__head h2,
+body[data-page="how-it-works"] .project-dashboard__head h2 {
+  margin: 0;
+  font-size: clamp(1.7rem, 2.3vw, 2.35rem);
+  line-height: 1.08;
+}
+
+body[data-page="services"] .service-decision__head span,
+body[data-page="how-it-works"] .project-dashboard__head span,
+body[data-page="how-it-works"] .project-dashboard__head b {
+  color: var(--public-accent);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+body[data-page="services"] .service-paths,
+body[data-page="services"] .service-paths--six {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+body[data-page="services"] .service-paths article,
+body[data-page="services"] .service-route-cards article,
+body[data-page="services"] .service-grid article,
+body[data-page="services"] .choice-grid article,
+body[data-page="how-it-works"] .work-core-steps li,
+body[data-page="how-it-works"] .work-steps li,
+body[data-page="how-it-works"] .work-summary article {
+  border: 1px solid var(--public-line);
+  border-radius: 24px;
+  background: var(--public-card);
+  color: var(--public-ink);
+  box-shadow: var(--public-shadow-soft);
+}
+
+body[data-page="services"] .service-paths article {
+  min-height: 186px;
+  padding: 20px;
+}
+
+body[data-page="services"] .service-paths h3,
+body[data-page="services"] .service-route-cards h2,
+body[data-page="services"] .service-grid h3,
+body[data-page="services"] .choice-grid strong,
+body[data-page="how-it-works"] .work-core-steps strong,
+body[data-page="how-it-works"] .work-steps strong,
+body[data-page="how-it-works"] .work-summary strong {
+  color: var(--public-ink);
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+body[data-page="services"] .service-paths p,
+body[data-page="services"] .service-route-cards p,
+body[data-page="services"] .service-grid p,
+body[data-page="services"] .choice-grid p,
+body[data-page="how-it-works"] .work-core-steps small,
+body[data-page="how-it-works"] .work-steps p,
+body[data-page="how-it-works"] .work-summary p {
+  color: var(--public-muted);
+  line-height: 1.6;
+}
+
+body[data-page="services"] .service-paths button,
+body[data-page="services"] .service-paths a,
+body[data-page="services"] .service-route-cards button,
+body[data-page="services"] .service-route-cards a,
+body[data-page="services"] .choice-grid button,
+body[data-page="services"] .choice-grid a,
+body[data-page="services"] .service-grid button,
+body[data-page="services"] .service-grid a {
+  color: var(--public-accent);
+}
+
+body[data-page="services"] .service-paths a,
+body[data-page="services"] .service-grid a {
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: auto;
+  border: 1px solid var(--public-line);
+  border-radius: 999px;
+  background: var(--public-accent-soft);
+  text-decoration: none;
+  font-size: 1.1rem;
+  font-weight: 900;
+  transition: transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
+}
+
+body[data-page="services"] .service-paths article:hover a,
+body[data-page="services"] .service-paths a:focus-visible,
+body[data-page="services"] .service-grid a:hover,
+body[data-page="services"] .service-grid a:focus-visible {
+  transform: translateX(3px);
+  border-color: rgba(142, 15, 19, 0.28);
+  background: rgba(142, 15, 19, 0.12);
+  outline: none;
+}
+
+body[data-page="services"] .service-paths__icon,
+body[data-page="services"] .service-route-cards__icon {
+  border-color: var(--public-line);
+  background: var(--public-accent-soft);
+  color: var(--public-accent);
+  box-shadow: none;
+}
+
+body[data-page="services"] .service-decision__note,
+body[data-page="how-it-works"] .project-notice,
+body[data-page="how-it-works"] .process-principle {
+  border: 1px solid var(--public-line);
+  border-radius: 20px;
+  background: var(--public-accent-soft);
+  color: var(--public-muted);
+}
+
+body[data-page="services"] .service-route-cards,
+body[data-page="services"] .services-block,
+body[data-page="services"] .choice-panel,
+body[data-page="services"] .question-cta,
+body[data-page="how-it-works"] .process-principle,
+body[data-page="how-it-works"] .work-steps,
+body[data-page="how-it-works"] .work-summary {
+  margin-top: 56px;
+}
+
+body[data-page="services"] .service-route-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+body[data-page="services"] .service-route-cards article {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  padding: 24px;
+}
+
+body[data-page="services"] .section-head,
+body[data-page="how-it-works"] .section-head {
+  max-width: 740px;
+}
+
+body[data-page="services"] .section-head h2 {
+  margin: 0;
+  font-size: clamp(2.4rem, 3.6vw, 4.2rem);
+}
+
+body[data-page="services"] .section-head p {
+  color: var(--public-muted);
+  line-height: 1.7;
+}
+
+body[data-page="services"] .service-grid {
+  gap: 18px;
+}
+
+body[data-page="services"] .service-card {
+  min-height: 260px;
+  padding: 24px;
+}
+
+body[data-page="services"] .choice-panel {
+  border-radius: 34px;
+  padding: 30px;
+}
+
+body[data-page="services"] .choice-panel h2 {
+  margin-top: 0;
+  font-size: clamp(2rem, 3vw, 3.2rem);
+}
+
+body[data-page="services"] .choice-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+body[data-page="services"] .choice-grid article {
+  padding: 22px;
+}
+
+body[data-page="services"] .choice-grid span,
+body[data-page="how-it-works"] .work-core-steps span,
+body[data-page="how-it-works"] .work-steps span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--public-accent);
+  color: #fff;
+  font-weight: 800;
+}
+
+body[data-page="services"] .question-cta {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 16px;
+  align-items: center;
+  border-radius: 30px;
+  padding: 28px;
+  background: #fff;
+}
+
+body[data-page="services"] .question-cta h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.8rem, 2.6vw, 3rem);
+}
+
+body[data-page="services"] .question-cta p {
+  margin: 0;
+  color: var(--public-muted);
+}
+
+body[data-page="how-it-works"] .work-core-steps,
+body[data-page="how-it-works"] .work-steps {
+  list-style: none;
+  padding: 0;
+}
+
+body[data-page="how-it-works"] .work-core-steps {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 0;
+}
+
+body[data-page="how-it-works"] .work-core-steps li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 14px;
+  align-items: center;
+  min-height: auto;
+  padding: 16px;
+}
+
+body[data-page="how-it-works"] .work-core-steps small {
+  grid-column: 2;
+  display: block;
+  margin: 0;
+  color: var(--public-muted);
+}
+
+body[data-page="how-it-works"] .process-principle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 18px 22px;
+}
+
+body[data-page="how-it-works"] .process-principle strong {
+  color: var(--public-accent);
+}
+
+body[data-page="how-it-works"] .process-principle span,
+body[data-page="how-it-works"] .project-notice strong {
+  color: var(--public-ink);
+}
+
+body[data-page="how-it-works"] .work-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+}
+
+body[data-page="how-it-works"] .work-steps li {
+  min-height: 230px;
+  padding: 22px;
+}
+
+body[data-page="how-it-works"] .work-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: stretch;
+  border: 1px solid var(--public-line);
+  border-radius: 34px;
+  padding: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--public-shadow-soft);
+}
+
+body[data-page="how-it-works"] .work-summary article {
+  min-height: auto;
+  padding: 24px;
+  background: var(--public-card);
+}
+
+body[data-page="how-it-works"] .summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  grid-column: 1 / -1;
+  min-height: auto;
+}
+
+body[data-page="how-it-works"] .work-summary--premium,
+body[data-page="how-it-works"] .work-summary--premium .summary-actions {
+  grid-template-columns: none;
+}
+
+body[data-page="how-it-works"] .work-steps strong {
+  margin: 0 0 8px;
+}
+
+body[data-page="services"] .side-contact,
+body[data-page="services"] .mobile-cta,
+body[data-page="how-it-works"] .side-contact,
+body[data-page="how-it-works"] .mobile-cta,
+body[data-page="legal"] .side-contact,
+body[data-page="legal"] .mobile-cta {
+  display: none;
+}
+
+body[data-page="services"] .footer [data-open-bug],
+body[data-page="how-it-works"] .footer [data-open-bug],
+body[data-page="legal"] .footer [data-open-bug] {
+  display: none;
+}
+
+body[data-page="services"] .footer,
+body[data-page="how-it-works"] .footer,
+body[data-page="legal"] .footer {
+  border-top: 1px solid var(--public-line);
+  background: #fff;
+  color: var(--public-muted);
+}
+
+body[data-page="services"] .footer__inner,
+body[data-page="how-it-works"] .footer__inner,
+body[data-page="legal"] .footer__inner {
+  min-height: 92px;
+}
+
+body[data-page="services"] .footer__links,
+body[data-page="how-it-works"] .footer__links,
+body[data-page="legal"] .footer__links {
+  gap: 18px;
+}
+
+body[data-page="services"] .footer__links a,
+body[data-page="how-it-works"] .footer__links a,
+body[data-page="legal"] .footer__links a {
+  color: var(--public-muted);
+  font-size: 0.9rem;
+}
+
+body[data-page="legal"] main.legal-page {
+  padding: 78px 0 100px;
+  background: transparent;
+}
+
+body[data-page="legal"] .section {
+  padding: 0;
+  background: transparent;
+}
+
+body[data-page="legal"] .legal-content {
+  max-width: 880px;
+  padding: 56px;
+  border: 1px solid var(--public-line);
+  border-radius: 34px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: var(--public-shadow);
+  overflow: hidden;
+}
+
+body[data-page="legal"] .legal-content .text-link {
+  display: inline-flex;
+  margin-bottom: 22px;
+  color: var(--public-accent);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+body[data-page="legal"] .legal-content h1 {
+  margin: 0 0 24px;
+  font-size: clamp(2.8rem, 5vw, 5rem);
+  line-height: 0.98;
+  overflow-wrap: anywhere;
+}
+
+body[data-page="legal"] .legal-content h2 {
+  margin: 36px 0 12px;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 1.1rem;
+  letter-spacing: -0.02em;
+}
+
+body[data-page="legal"] .legal-content p {
+  color: var(--public-muted);
+  font-size: 1rem;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+body[data-page="legal"] .legal-note {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid var(--public-line);
+}
+
+@media (max-width: 1120px) {
+  body[data-page="services"] .services-hero,
+  body[data-page="how-it-works"] .work-hero {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="services"] .service-decision,
+  body[data-page="how-it-works"] .work-flow-card {
+    max-width: 760px;
+  }
+
+  body[data-page="services"] .service-route-cards,
+  body[data-page="how-it-works"] .work-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-page="services"] .choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  body[data-page="services"] .header__inner,
+  body[data-page="how-it-works"] .header__inner {
+    min-height: 70px;
+  }
+
+  body[data-page="services"] .nav,
+  body[data-page="how-it-works"] .nav {
+    position: fixed;
+    top: 70px;
+    left: 16px;
+    right: 16px;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 16px;
+    border: 1px solid var(--public-line);
+    border-radius: 22px;
+    background: #fff;
+    box-shadow: var(--public-shadow);
+  }
+
+  body[data-page="services"] .nav.is-open,
+  body[data-page="how-it-works"] .nav.is-open {
+    display: flex;
+  }
+
+  body[data-page="services"] .nav a,
+  body[data-page="how-it-works"] .nav a {
+    padding: 12px 14px;
+    border-radius: 14px;
+  }
+
+  body[data-page="services"] .nav a.is-active::after,
+  body[data-page="how-it-works"] .nav a.is-active::after {
+    content: none;
+  }
+
+  body[data-page="services"] .header__cta,
+  body[data-page="how-it-works"] .header__cta {
+    display: none;
+  }
+
+  body[data-page="legal"] .header__inner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 18px;
+    padding: 18px 0;
+  }
+
+  body[data-page="legal"] .nav {
+    position: static;
+    inset: auto;
+    width: 100%;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    max-height: none;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 14px;
+    margin-left: 0;
+  }
+
+  body[data-page="legal"] .nav a {
+    padding: 8px 0;
+  }
+
+  body[data-page="legal"] .header__cta {
+    width: auto;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  body[data-page="services"] .container,
+  body[data-page="how-it-works"] .container,
+  body[data-page="legal"] .container {
+    width: min(100% - 28px, 1180px);
+  }
+
+  body[data-page="services"] .screen-section,
+  body[data-page="how-it-works"] .screen-section {
+    padding: 54px 0 74px;
+  }
+
+  body[data-page="services"] h1,
+  body[data-page="how-it-works"] h1 {
+    font-size: clamp(2.72rem, 13vw, 4.3rem);
+  }
+
+  body[data-page="services"] .services-actions,
+  body[data-page="how-it-works"] .work-actions,
+  body[data-page="services"] .question-cta,
+  body[data-page="how-it-works"] .summary-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="services"] .service-paths,
+  body[data-page="services"] .service-paths--six,
+  body[data-page="services"] .service-route-cards,
+  body[data-page="services"] .choice-grid,
+  body[data-page="how-it-works"] .work-steps,
+  body[data-page="how-it-works"] .work-summary {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="services"] .service-route-cards article {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="services"] .service-decision,
+  body[data-page="how-it-works"] .work-flow-card,
+  body[data-page="services"] .choice-panel,
+  body[data-page="services"] .question-cta,
+  body[data-page="legal"] .legal-content {
+    padding: 22px;
+    border-radius: 26px;
+  }
+
+  body[data-page="legal"] main.legal-page {
+    padding: 48px 0 72px;
+  }
+
+  body[data-page="legal"] .legal-content h1 {
+    font-size: clamp(2.1rem, 10.5vw, 3rem);
+    line-height: 1.02;
+  }
+
+  body[data-page="services"] .footer__inner,
+  body[data-page="how-it-works"] .footer__inner,
+  body[data-page="legal"] .footer__inner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 28px 0;
+  }
+}
+
+body[data-page="faq"],
+body[data-page="contacts"] {
+  --public-bg: #f8f5ef;
+  --public-surface: #fffdf9;
+  --public-card: #ffffff;
+  --public-ink: #2f2723;
+  --public-muted: #766b63;
+  --public-soft: #efe8df;
+  --public-line: rgba(83, 65, 54, 0.15);
+  --public-accent: #a20f1c;
+  --public-accent-dark: #7f0d18;
+  --public-accent-soft: rgba(162, 15, 28, 0.08);
+  --public-shadow: 0 24px 70px rgba(62, 44, 31, 0.1);
+  --public-shadow-soft: 0 14px 38px rgba(62, 44, 31, 0.07);
+  margin: 0;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(162, 15, 28, 0.07), transparent 30%),
+    linear-gradient(180deg, #fbfaf7 0%, var(--public-bg) 46%, #f5efe7 100%);
+  color: var(--public-ink);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body[data-page="faq"] *,
+body[data-page="faq"] *::before,
+body[data-page="faq"] *::after,
+body[data-page="contacts"] *,
+body[data-page="contacts"] *::before,
+body[data-page="contacts"] *::after {
+  box-sizing: border-box;
+}
+
+body[data-page="faq"] .container,
+body[data-page="contacts"] .container {
+  width: min(100% - 48px, 1180px);
+  margin-inline: auto;
+}
+
+body[data-page="faq"] .site-header,
+body[data-page="contacts"] .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid var(--public-line);
+  background: rgba(255, 253, 249, 0.9);
+  box-shadow: 0 10px 32px rgba(62, 44, 31, 0.05);
+  backdrop-filter: blur(18px);
+}
+
+body[data-page="faq"] .header__inner,
+body[data-page="contacts"] .header__inner {
+  min-height: 78px;
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+body[data-page="faq"] .logo,
+body[data-page="contacts"] .logo {
+  color: var(--public-ink);
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+}
+
+body[data-page="faq"] .logo span,
+body[data-page="contacts"] .logo span {
+  color: var(--public-ink);
+  text-shadow: none;
+}
+
+body[data-page="faq"] .logo b,
+body[data-page="contacts"] .logo b {
+  color: var(--public-accent);
+  text-shadow: none;
+}
+
+body[data-page="faq"] .logo small,
+body[data-page="contacts"] .logo small {
+  display: none;
+}
+
+body[data-page="faq"] .nav,
+body[data-page="contacts"] .nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 34px;
+  margin-left: auto;
+}
+
+body[data-page="faq"] .nav a,
+body[data-page="contacts"] .nav a {
+  position: relative;
+  color: var(--public-muted);
+  font-size: 0.94rem;
+  font-weight: 650;
+  text-decoration: none;
+  transition: color 180ms ease;
+}
+
+body[data-page="faq"] .nav a:hover,
+body[data-page="faq"] .nav a:focus-visible,
+body[data-page="contacts"] .nav a:hover,
+body[data-page="contacts"] .nav a:focus-visible {
+  color: var(--public-accent);
+}
+
+body[data-page="faq"] .nav a.is-active,
+body[data-page="contacts"] .nav a.is-active {
+  color: var(--public-ink);
+}
+
+body[data-page="faq"] .nav a.is-active::after,
+body[data-page="contacts"] .nav a.is-active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -28px;
+  height: 2px;
+  background: var(--public-accent);
+}
+
+body[data-page="faq"] .header__cta,
+body[data-page="contacts"] .header__cta {
+  margin-left: 10px;
+  min-height: 46px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--public-accent);
+  color: #fff;
+  box-shadow: 0 16px 32px rgba(162, 15, 28, 0.22);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+body[data-page="faq"] .menu-toggle,
+body[data-page="contacts"] .menu-toggle {
+  border-color: var(--public-line);
+  background: #fff;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="faq"] .menu-toggle span,
+body[data-page="contacts"] .menu-toggle span,
+body[data-page="legal"] .menu-toggle span {
+  background: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="faq"] .screen-section,
+body[data-page="contacts"] .screen-section {
+  min-height: auto;
+  padding: 92px 0 104px;
+  background: transparent;
+}
+
+body[data-page="faq"] .faq-page,
+body[data-page="contacts"] .contacts-page {
+  background: transparent;
+}
+
+body[data-page="faq"] .faq-page > .container,
+body[data-page="contacts"] .contacts-page > .container {
+  display: block;
+}
+
+body[data-page="faq"] h1,
+body[data-page="faq"] h2,
+body[data-page="contacts"] h1,
+body[data-page="contacts"] h2 {
+  color: var(--public-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  letter-spacing: -0.035em;
+}
+
+body[data-page="faq"] .ui-kicker,
+body[data-page="contacts"] .ui-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 22px;
+  padding: 9px 15px;
+  border: 1px solid var(--public-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--public-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+body[data-page="faq"] .ui-kicker span,
+body[data-page="contacts"] .ui-kicker span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--public-accent);
+}
+
+body[data-page="faq"] .btn,
+body[data-page="contacts"] .btn {
+  min-height: 50px;
+  border-radius: 999px;
+  font-weight: 750;
+}
+
+body[data-page="faq"] .btn--primary,
+body[data-page="contacts"] .btn--primary {
+  border: 1px solid var(--public-accent);
+  background: var(--public-accent);
+  color: #fff;
+  box-shadow: 0 16px 34px rgba(162, 15, 28, 0.2);
+}
+
+body[data-page="faq"] .btn--secondary,
+body[data-page="faq"] .btn--ghost,
+body[data-page="contacts"] .btn--secondary,
+body[data-page="contacts"] .btn--ghost {
+  border: 1px solid var(--public-line);
+  background: #fff;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="faq"] .glow-panel,
+body[data-page="contacts"] .glow-panel {
+  border: 1px solid var(--public-line);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--public-shadow);
+  backdrop-filter: blur(16px);
+}
+
+body[data-page="faq"] .glow-panel::before,
+body[data-page="contacts"] .glow-panel::before {
+  content: none;
+}
+
+body[data-page="faq"] .faq-hero,
+body[data-page="contacts"] .contacts-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 0.94fr) minmax(420px, 1fr);
+  align-items: center;
+  gap: 56px;
+}
+
+body[data-page="faq"] .faq-hero__content,
+body[data-page="contacts"] .contacts-hero__content {
+  max-width: 640px;
+}
+
+body[data-page="faq"] h1,
+body[data-page="contacts"] h1 {
+  max-width: 720px;
+  margin: 0;
+  font-size: clamp(3.4rem, 5.7vw, 6.2rem);
+  line-height: 0.95;
+  font-weight: 700;
+}
+
+body[data-page="faq"] h1 em,
+body[data-page="contacts"] h1 em {
+  color: var(--public-accent);
+  font-style: normal;
+}
+
+body[data-page="faq"] .faq-hero__content > p:not(.ui-kicker),
+body[data-page="contacts"] .contacts-hero__content > p:not(.ui-kicker) {
+  max-width: 650px;
+  margin: 24px 0 0;
+  color: var(--public-muted);
+  font-size: 1.1rem;
+  line-height: 1.75;
+}
+
+body[data-page="faq"] .faq-trust,
+body[data-page="contacts"] .contacts-trust {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 28px;
+}
+
+body[data-page="faq"] .faq-trust span,
+body[data-page="contacts"] .contacts-trust span {
+  padding: 10px 14px;
+  border: 1px solid var(--public-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--public-muted);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+body[data-page="faq"] .faq-actions,
+body[data-page="contacts"] .contacts-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 32px;
+}
+
+body[data-page="faq"] .faq-panel,
+body[data-page="contacts"] .contact-hub {
+  border-radius: 34px;
+  padding: 30px;
+}
+
+body[data-page="faq"] .faq-panel > span,
+body[data-page="contacts"] .contact-hub__head span,
+body[data-page="contacts"] .contact-card-head span,
+body[data-page="contacts"] .contact-mini-label {
+  color: var(--public-accent);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+body[data-page="faq"] .faq-panel ul {
+  display: grid;
+  gap: 12px;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="faq"] .faq-panel li {
+  position: relative;
+  padding: 16px 18px 16px 46px;
+  border: 1px solid var(--public-line);
+  border-radius: 20px;
+  background: var(--public-card);
+  color: var(--public-ink);
+  font-weight: 750;
+  box-shadow: var(--public-shadow-soft);
+}
+
+body[data-page="faq"] .faq-panel li::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--public-accent);
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: #fff;
+  box-shadow: 0 0 0 5px rgba(162, 15, 28, 0.08);
+}
+
+body[data-page="faq"] .faq-quick {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 62px;
+}
+
+body[data-page="faq"] .faq-quick article,
+body[data-page="faq"] .faq-item,
+body[data-page="faq"] .faq-sidebar,
+body[data-page="faq"] .faq-final-cta,
+body[data-page="contacts"] .contact-channel,
+body[data-page="contacts"] .contact-form-card,
+body[data-page="contacts"] .contact-status-card,
+body[data-page="contacts"] .contact-error-card,
+body[data-page="contacts"] .contact-schedule-card {
+  border: 1px solid var(--public-line);
+  border-radius: 26px;
+  background: var(--public-card);
+  color: var(--public-ink);
+  box-shadow: var(--public-shadow-soft);
+}
+
+body[data-page="faq"] .faq-quick article {
+  min-height: 190px;
+  padding: 24px;
+}
+
+body[data-page="faq"] .faq-quick strong,
+body[data-page="faq"] .faq-sidebar h2,
+body[data-page="faq"] .faq-sidebar__card strong,
+body[data-page="contacts"] .contact-hub__head strong,
+body[data-page="contacts"] .contact-card-head h2,
+body[data-page="contacts"] .contact-next h2,
+body[data-page="contacts"] .contact-channel strong,
+body[data-page="contacts"] .contact-next strong,
+body[data-page="contacts"] .contact-schedule-card strong,
+body[data-page="contacts"] .contact-error-card h2 {
+  color: var(--public-ink);
+  font-family: Inter, system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+body[data-page="faq"] .faq-quick p,
+body[data-page="faq"] .faq-sidebar__card p,
+body[data-page="faq"] .faq-answer p,
+body[data-page="contacts"] .contact-card-head p,
+body[data-page="contacts"] .contact-channel small,
+body[data-page="contacts"] .contact-next small,
+body[data-page="contacts"] .contact-schedule-card small,
+body[data-page="contacts"] .message-form small,
+body[data-page="contacts"] .contact-error-card p {
+  color: var(--public-muted);
+  line-height: 1.65;
+}
+
+body[data-page="faq"] .faq-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.34fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  margin-top: 56px;
+}
+
+body[data-page="faq"] .faq-sidebar {
+  position: sticky;
+  top: 108px;
+  padding: 24px;
+}
+
+body[data-page="faq"] .faq-sidebar h2 {
+  margin: 0 0 18px;
+  font-size: 1.25rem;
+}
+
+body[data-page="faq"] .faq-cats {
+  display: grid;
+  gap: 10px;
+}
+
+body[data-page="faq"] .filter-btn {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--public-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--public-muted);
+  box-shadow: none;
+  font-weight: 750;
+}
+
+body[data-page="faq"] .filter-btn.is-active {
+  border-color: var(--public-accent);
+  background: var(--public-accent);
+  color: #fff;
+}
+
+body[data-page="faq"] .faq-sidebar__card {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--public-line);
+  border-radius: 22px;
+  background: var(--public-accent-soft);
+}
+
+body[data-page="faq"] .faq-grid {
+  display: grid;
+  gap: 14px;
+}
+
+body[data-page="faq"] .faq-item {
+  overflow: hidden;
+}
+
+body[data-page="faq"] .faq-question {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 24px;
+  border: 0;
+  background: transparent;
+  color: var(--public-ink);
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+}
+
+body[data-page="faq"] .faq-question span {
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--public-accent);
+  color: #fff;
+  font-size: 0.9rem;
+}
+
+body[data-page="faq"] .faq-answer {
+  display: none;
+  border-top: 1px solid var(--public-line);
+  background: rgba(248, 245, 239, 0.45);
+}
+
+body[data-page="faq"] .faq-question[aria-expanded="true"] + .faq-answer {
+  display: block;
+}
+
+body[data-page="faq"] .faq-answer p {
+  margin: 0;
+  padding: 20px 24px 24px 74px;
+}
+
+body[data-page="faq"] .faq-final-cta {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 16px;
+  margin-top: 56px;
+  padding: 28px;
+  box-shadow: var(--public-shadow-soft);
+}
+
+body[data-page="faq"] .faq-final-cta h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.8rem, 2.6vw, 3rem);
+}
+
+body[data-page="faq"] .faq-final-cta p {
+  margin: 0;
+  color: var(--public-muted);
+}
+
+body[data-page="contacts"] .contact-hub__head,
+body[data-page="contacts"] .contact-card-head {
+  gap: 6px;
+}
+
+body[data-page="contacts"] .contact-hub__head strong {
+  display: block;
+  margin-top: 8px;
+  font-size: clamp(1.7rem, 2.4vw, 2.5rem);
+}
+
+body[data-page="contacts"] .contact-channel-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+
+body[data-page="contacts"] .contact-channel {
+  min-height: 160px;
+  display: grid;
+  gap: 8px;
+  padding: 20px;
+  text-decoration: none;
+  transition: transform 180ms ease, border-color 180ms ease;
+}
+
+body[data-page="contacts"] .contact-channel:hover,
+body[data-page="contacts"] .contact-channel:focus-visible {
+  transform: translateY(-2px);
+  border-color: rgba(162, 15, 28, 0.34);
+}
+
+body[data-page="contacts"] .contact-channel__icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--public-line);
+  border-radius: 18px;
+  background: var(--public-accent-soft);
+  color: var(--public-accent);
+}
+
+body[data-page="contacts"] .contact-channel__icon svg {
+  width: 25px;
+  height: 25px;
+  fill: currentColor;
+}
+
+body[data-page="contacts"] .contact-next {
+  margin-top: 24px;
+  padding: 22px;
+  border: 1px solid var(--public-line);
+  border-radius: 24px;
+  background: #fff;
+}
+
+body[data-page="contacts"] .contact-next h2 {
+  margin: 0 0 16px;
+  font-size: 1.35rem;
+}
+
+body[data-page="contacts"] .contact-next ol {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="contacts"] .contact-next li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+body[data-page="contacts"] .contact-next li > span {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--public-accent);
+  color: #fff;
+  font-weight: 800;
+}
+
+body[data-page="contacts"] .contact-next p {
+  margin: 0;
+}
+
+body[data-page="contacts"] .contact-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.48fr);
+  gap: 24px;
+  margin-top: 62px;
+  align-items: start;
+}
+
+body[data-page="contacts"] .contact-form-card,
+body[data-page="contacts"] .contact-status-card,
+body[data-page="contacts"] .contact-error-card,
+body[data-page="contacts"] .contact-schedule-card {
+  padding: 28px;
+}
+
+body[data-page="contacts"] .contact-card-head h2 {
+  margin: 8px 0 10px;
+  font-size: clamp(1.55rem, 2vw, 2.15rem);
+}
+
+body[data-page="contacts"] .contact-card-head p {
+  margin: 0 0 20px;
+}
+
+body[data-page="contacts"] .message-form,
+body[data-page="contacts"] .status-lookup {
+  display: grid;
+  gap: 16px;
+}
+
+body[data-page="contacts"] .message-form label,
+body[data-page="contacts"] .status-lookup label,
+body[data-page="contacts"] .consent-line {
+  display: grid;
+  gap: 8px;
+}
+
+body[data-page="contacts"] .consent-line {
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  color: var(--public-muted);
+  line-height: 1.45;
+}
+
+body[data-page="contacts"] .consent-line input {
+  width: 18px;
+  height: 18px;
+  margin-top: 0.2em;
+}
+
+body[data-page="contacts"] .form-message {
+  margin: 0;
+  color: var(--public-muted);
+  line-height: 1.55;
+}
+
+body[data-page="contacts"] .form-message.is-success {
+  color: #315f3f;
+}
+
+body[data-page="contacts"] .form-message.is-error {
+  color: var(--public-accent);
+}
+
+body[data-page="contacts"] .field-label {
+  color: var(--public-ink);
+  font-weight: 750;
+}
+
+body[data-page="contacts"] .field-label b {
+  color: var(--public-accent);
+}
+
+body[data-page="contacts"] input,
+body[data-page="contacts"] select,
+body[data-page="contacts"] textarea {
+  width: 100%;
+  border: 1px solid var(--public-line);
+  border-radius: 18px;
+  background: #fff;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="contacts"] input:focus,
+body[data-page="contacts"] select:focus,
+body[data-page="contacts"] textarea:focus {
+  border-color: rgba(162, 15, 28, 0.45);
+  box-shadow: 0 0 0 4px rgba(162, 15, 28, 0.08);
+}
+
+body[data-page="contacts"] .contact-status-column,
+body[data-page="contacts"] .contact-schedule-card {
+  display: grid;
+  gap: 18px;
+}
+
+body[data-page="contacts"] .contact-schedule-card > div {
+  padding: 18px;
+  border: 1px solid var(--public-line);
+  border-radius: 22px;
+  background: rgba(248, 245, 239, 0.54);
+}
+
+body[data-page="contacts"] .contact-error-link {
+  display: none;
+}
+
+body[data-page="contacts"] .contact-error-card--quiet {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: none;
+}
+
+body[data-page="contacts"] .contact-error-card--quiet .contact-card-head span,
+body[data-page="contacts"] .contact-error-card--quiet .contact-card-head h2 {
+  color: var(--public-muted);
+}
+
+body[data-page="contacts"] .contact-error-card--quiet .contact-card-head h2 {
+  font-size: clamp(1.25rem, 1.6vw, 1.55rem);
+}
+
+body[data-page="contacts"] .contact-error-card__action {
+  border-color: rgba(109, 94, 82, 0.22);
+  background: transparent;
+  color: var(--public-muted);
+  box-shadow: none;
+}
+
+body[data-page="contacts"] .contact-error-card__action:hover,
+body[data-page="contacts"] .contact-error-card__action:focus-visible {
+  border-color: rgba(162, 15, 28, 0.24);
+  background: rgba(162, 15, 28, 0.04);
+  color: var(--public-accent);
+}
+
+body[data-page="faq"] .side-contact,
+body[data-page="faq"] .mobile-cta,
+body[data-page="contacts"] .side-contact,
+body[data-page="contacts"] .mobile-cta {
+  display: none;
+}
+
+body[data-page="faq"] .footer [data-open-bug],
+body[data-page="contacts"] .footer [data-open-bug] {
+  display: none;
+}
+
+body[data-page="faq"] .footer,
+body[data-page="contacts"] .footer {
+  border-top: 1px solid var(--public-line);
+  background: #fff;
+  color: var(--public-muted);
+}
+
+body[data-page="faq"] .footer__inner,
+body[data-page="contacts"] .footer__inner {
+  min-height: 92px;
+}
+
+body[data-page="faq"] .footer__links,
+body[data-page="contacts"] .footer__links {
+  gap: 18px;
+}
+
+body[data-page="faq"] .footer__links a,
+body[data-page="contacts"] .footer__links a {
+  color: var(--public-muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 1120px) {
+  body[data-page="faq"] .faq-hero,
+  body[data-page="contacts"] .contacts-hero,
+  body[data-page="contacts"] .contact-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="faq"] .faq-panel,
+  body[data-page="contacts"] .contact-hub {
+    max-width: 780px;
+  }
+
+  body[data-page="faq"] .faq-quick {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  body[data-page="faq"] .header__inner,
+  body[data-page="contacts"] .header__inner {
+    min-height: 70px;
+  }
+
+  body[data-page="faq"] .nav,
+  body[data-page="contacts"] .nav {
+    position: fixed;
+    top: 70px;
+    left: 16px;
+    right: 16px;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 16px;
+    border: 1px solid var(--public-line);
+    border-radius: 22px;
+    background: #fff;
+    box-shadow: var(--public-shadow);
+  }
+
+  body[data-page="faq"] .nav.is-open,
+  body[data-page="contacts"] .nav.is-open {
+    display: flex;
+  }
+
+  body[data-page="faq"] .nav a,
+  body[data-page="contacts"] .nav a {
+    padding: 12px 14px;
+    border-radius: 14px;
+  }
+
+  body[data-page="faq"] .nav a.is-active::after,
+  body[data-page="contacts"] .nav a.is-active::after {
+    content: none;
+  }
+
+  body[data-page="faq"] .header__cta,
+  body[data-page="contacts"] .header__cta {
+    display: none;
+  }
+}
+
+@media (max-width: 680px) {
+  body[data-page="faq"] .container,
+  body[data-page="contacts"] .container {
+    width: min(100% - 28px, 1180px);
+  }
+
+  body[data-page="faq"] .screen-section,
+  body[data-page="contacts"] .screen-section {
+    padding: 54px 0 74px;
+  }
+
+  body[data-page="faq"] h1,
+  body[data-page="contacts"] h1 {
+    font-size: clamp(2.75rem, 14vw, 4.2rem);
+  }
+
+  body[data-page="faq"] .faq-actions,
+  body[data-page="faq"] .faq-final-cta,
+  body[data-page="contacts"] .contacts-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="faq"] .faq-quick,
+  body[data-page="faq"] .faq-layout,
+  body[data-page="contacts"] .contact-channel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="faq"] .faq-sidebar {
+    position: static;
+  }
+
+  body[data-page="faq"] .faq-panel,
+  body[data-page="faq"] .faq-sidebar,
+  body[data-page="faq"] .faq-final-cta,
+  body[data-page="contacts"] .contact-hub,
+  body[data-page="contacts"] .contact-form-card,
+  body[data-page="contacts"] .contact-status-card,
+  body[data-page="contacts"] .contact-schedule-card {
+    padding: 22px;
+    border-radius: 26px;
+  }
+
+  body[data-page="faq"] .faq-answer p {
+    padding: 18px 20px 22px;
+  }
+
+  body[data-page="faq"] .footer__inner,
+  body[data-page="contacts"] .footer__inner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 28px 0;
+  }
+}
+
+/* FE-PATCH-1: cases page and shared public mobile shell */
+body[data-page="cases"] {
+  --public-bg: #f8f5ef;
+  --public-surface: #fffdf9;
+  --public-card: #ffffff;
+  --public-ink: #2f2723;
+  --public-muted: #766b63;
+  --public-soft: #efe8df;
+  --public-line: rgba(83, 65, 54, 0.15);
+  --public-accent: #a20f1c;
+  --public-accent-dark: #7f0d18;
+  --public-accent-soft: rgba(162, 15, 28, 0.08);
+  --public-shadow: 0 24px 70px rgba(62, 44, 31, 0.1);
+  --public-shadow-soft: 0 14px 38px rgba(62, 44, 31, 0.07);
+  margin: 0;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(162, 15, 28, 0.07), transparent 30%),
+    linear-gradient(180deg, #fbfaf7 0%, var(--public-bg) 46%, #f5efe7 100%);
+  color: var(--public-ink);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body[data-page="cases"] *,
+body[data-page="cases"] *::before,
+body[data-page="cases"] *::after {
+  box-sizing: border-box;
+}
+
+body[data-page="cases"] .container {
+  width: min(100% - 48px, 1180px);
+  margin-inline: auto;
+}
+
+body[data-page="cases"] .site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  border-bottom: 1px solid var(--public-line);
+  background: rgba(255, 253, 249, 0.9);
+  box-shadow: 0 10px 32px rgba(62, 44, 31, 0.05);
+  backdrop-filter: blur(18px);
+}
+
+body[data-page="cases"] .header__inner {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+}
+
+body[data-page="cases"] .logo {
+  color: var(--public-ink);
+  font-size: 1.2rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  text-decoration: none;
+}
+
+body[data-page="cases"] .logo span {
+  color: var(--public-ink);
+  text-shadow: none;
+}
+
+body[data-page="cases"] .logo b {
+  color: var(--public-accent);
+  text-shadow: none;
+}
+
+body[data-page="cases"] .nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 34px;
+  margin-left: auto;
+}
+
+body[data-page="cases"] .nav a {
+  position: relative;
+  color: var(--public-muted);
+  font-size: 0.94rem;
+  font-weight: 650;
+  text-decoration: none;
+  transition: color 180ms ease;
+}
+
+body[data-page="cases"] .nav a:hover,
+body[data-page="cases"] .nav a:focus-visible,
+body[data-page="cases"] .nav a.is-active {
+  color: var(--public-ink);
+}
+
+body[data-page="cases"] .nav a.is-active::after {
+  background: var(--public-accent);
+}
+
+body[data-page="legal"] .menu-toggle,
+body[data-page="cases"] .menu-toggle {
+  border-color: var(--public-line);
+  background: #fff;
+  color: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="legal"] .menu-toggle span,
+body[data-page="cases"] .menu-toggle span {
+  background: var(--public-ink);
+  box-shadow: none;
+}
+
+body[data-page="cases"] .header__cta {
+  margin-left: 10px;
+  padding: 0 24px;
+  border: 0;
+  background: var(--public-accent);
+  color: #fff;
+  box-shadow: 0 16px 32px rgba(162, 15, 28, 0.2);
+  font-weight: 750;
+  text-decoration: none;
+}
+
+body[data-page="cases"] .screen-section {
+  min-height: auto;
+  padding: 92px 0 104px;
+}
+
+body[data-page="cases"] .cases-page {
+  background: transparent;
+}
+
+body[data-page="cases"] .cases-hero {
+  max-width: 760px;
+}
+
+body[data-page="cases"] h1,
+body[data-page="cases"] h2 {
+  color: var(--public-ink);
+  font-family: "Playfair Display", Georgia, serif;
+  letter-spacing: -0.035em;
+}
+
+body[data-page="cases"] h1 {
+  margin: 0;
+  font-size: clamp(3.4rem, 7vw, 6.5rem);
+  line-height: 0.94;
+}
+
+body[data-page="cases"] .cases-hero > p:last-child {
+  max-width: 620px;
+  margin: 22px 0 0;
+  color: var(--public-muted);
+  font-size: clamp(1rem, 1.5vw, 1.2rem);
+  line-height: 1.65;
+}
+
+body[data-page="cases"] .premium-public-card {
+  border: 1px solid var(--public-line);
+  border-radius: 28px;
+  background: var(--public-card);
+  box-shadow: var(--public-shadow-soft);
+}
+
+body[data-page="cases"] .cases-empty {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 32px;
+  align-items: end;
+  margin-top: 42px;
+  padding: 34px;
+}
+
+body[data-page="cases"] .cases-empty__eyebrow {
+  width: max-content;
+  margin: 0 0 14px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: var(--public-accent-soft);
+  color: var(--public-accent);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+body[data-page="cases"] .cases-empty h2 {
+  margin: 0;
+  font-size: clamp(2rem, 3.6vw, 3.6rem);
+  line-height: 1;
+}
+
+body[data-page="cases"] .cases-empty p:not(.cases-empty__eyebrow) {
+  max-width: 720px;
+  margin: 18px 0 0;
+  color: var(--public-muted);
+  line-height: 1.65;
+}
+
+body[data-page="cases"] .cases-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 210px;
+}
+
+body[data-page="cases"] .cases-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 22px;
+}
+
+body[data-page="cases"] .cases-flow article {
+  padding: 24px;
+}
+
+body[data-page="cases"] .cases-flow span {
+  color: var(--public-accent);
+  font-weight: 850;
+}
+
+body[data-page="cases"] .cases-flow h3 {
+  margin: 16px 0 10px;
+  color: var(--public-ink);
+  font-size: 1.18rem;
+}
+
+body[data-page="cases"] .cases-flow p {
+  margin: 0;
+  color: var(--public-muted);
+  line-height: 1.58;
+}
+
+body[data-page="cases"] .footer {
+  border-top: 1px solid var(--public-line);
+  background: #fff;
+  color: var(--public-muted);
+}
+
+body[data-page="cases"] .footer__inner {
+  min-height: 92px;
+}
+
+body[data-page="cases"] .footer__links {
+  gap: 18px;
+}
+
+body[data-page="cases"] .footer__links a {
+  color: var(--public-muted);
+  font-size: 0.9rem;
+}
+
+body[data-page="cases"] .side-contact,
+body[data-page="cases"] .mobile-cta {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  body[data-page="legal"] .header__inner {
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding: 0;
+  }
+
+  body[data-page="legal"] .nav,
+  body[data-page="cases"] .nav {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    display: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 16px;
+    border: 1px solid var(--public-line);
+    border-radius: 20px;
+    background: #fff;
+    box-shadow: var(--public-shadow);
+  }
+
+  body[data-page="legal"] .nav.is-open,
+  body[data-page="cases"] .nav.is-open {
+    display: flex;
+  }
+
+  body[data-page="legal"] .header__cta,
+  body[data-page="cases"] .header__cta {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  body[data-page="cases"] .container {
+    width: min(100% - 28px, 1180px);
+  }
+
+  body[data-page="cases"] .screen-section {
+    padding: 54px 0 74px;
+  }
+
+  body[data-page="cases"] h1 {
+    font-size: clamp(3rem, 18vw, 4.8rem);
+  }
+
+  body[data-page="cases"] .cases-empty,
+  body[data-page="cases"] .cases-flow {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="cases"] .cases-empty {
+    padding: 24px;
+    border-radius: 24px;
+  }
+
+  body[data-page="cases"] .cases-actions {
+    min-width: 0;
+  }
+
+  body[data-page="cases"] .footer__inner {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 28px 0;
+  }
+}
+
+/* Wave 10.1: real mobile guard for remaining public pages. */
+@media (max-width: 767px), (hover: none) and (pointer: coarse) and (max-width: 1180px) {
+  body[data-page="services"],
+  body[data-page="how-it-works"],
+  body[data-page="legal"],
+  body[data-page="faq"],
+  body[data-page="contacts"],
+  body[data-page="cases"] {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body[data-page="services"] .container,
+  body[data-page="how-it-works"] .container,
+  body[data-page="legal"] .container,
+  body[data-page="faq"] .container,
+  body[data-page="contacts"] .container,
+  body[data-page="cases"] .container {
+    width: min(100% - 32px, 680px) !important;
+    max-width: 100% !important;
+  }
+
+  body[data-page="services"] .header__inner,
+  body[data-page="how-it-works"] .header__inner,
+  body[data-page="legal"] .header__inner,
+  body[data-page="faq"] .header__inner,
+  body[data-page="contacts"] .header__inner,
+  body[data-page="cases"] .header__inner {
+    min-height: 64px !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 12px !important;
+  }
+
+  body[data-page="services"] .header__cta,
+  body[data-page="how-it-works"] .header__cta,
+  body[data-page="legal"] .header__cta,
+  body[data-page="faq"] .header__cta,
+  body[data-page="contacts"] .header__cta,
+  body[data-page="cases"] .header__cta {
+    display: none !important;
+  }
+
+  body[data-page="services"] .menu-toggle,
+  body[data-page="how-it-works"] .menu-toggle,
+  body[data-page="legal"] .menu-toggle,
+  body[data-page="faq"] .menu-toggle,
+  body[data-page="contacts"] .menu-toggle,
+  body[data-page="cases"] .menu-toggle {
+    display: inline-flex !important;
+  }
+
+  body[data-page="services"] .nav,
+  body[data-page="how-it-works"] .nav,
+  body[data-page="legal"] .nav,
+  body[data-page="faq"] .nav,
+  body[data-page="contacts"] .nav,
+  body[data-page="cases"] .nav {
+    position: fixed !important;
+    top: 70px !important;
+    left: 16px !important;
+    right: 16px !important;
+    z-index: 70;
+    display: none !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+    padding: 10px !important;
+  }
+
+  body[data-page="services"] .nav.is-open,
+  body[data-page="how-it-works"] .nav.is-open,
+  body[data-page="legal"] .nav.is-open,
+  body[data-page="faq"] .nav.is-open,
+  body[data-page="contacts"] .nav.is-open,
+  body[data-page="cases"] .nav.is-open {
+    display: flex !important;
+  }
+
+  body[data-page="services"] [class*="grid"],
+  body[data-page="how-it-works"] [class*="grid"],
+  body[data-page="faq"] [class*="grid"],
+  body[data-page="contacts"] [class*="grid"],
+  body[data-page="cases"] [class*="grid"],
+  body[data-page="services"] .service-route-cards article,
+  body[data-page="services"] .service-decision,
+  body[data-page="services"] .choice-panel,
+  body[data-page="services"] .question-cta,
+  body[data-page="how-it-works"] .work-flow-card,
+  body[data-page="legal"] .legal-content {
+    grid-template-columns: 1fr !important;
+    max-width: 100%;
+    min-width: 0 !important;
+  }
+
+  body[data-page="faq"] .faq-filter-row,
+  body[data-page="contacts"] .contact-actions,
+  body[data-page="cases"] .cases-actions {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    min-width: 0;
+  }
+
+  body[data-page="services"] .footer__inner,
+  body[data-page="how-it-works"] .footer__inner,
+  body[data-page="legal"] .footer__inner,
+  body[data-page="faq"] .footer__inner,
+  body[data-page="contacts"] .footer__inner,
+  body[data-page="cases"] .footer__inner {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    justify-items: center;
+    text-align: center;
+    gap: 18px;
+    width: 100%;
+  }
+
+  body[data-page="services"] .footer__links,
+  body[data-page="how-it-works"] .footer__links,
+  body[data-page="legal"] .footer__links,
+  body[data-page="faq"] .footer__links,
+  body[data-page="contacts"] .footer__links,
+  body[data-page="cases"] .footer__links {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    justify-items: center !important;
+    gap: 12px !important;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    text-align: center;
+  }
+
+  body[data-page="services"] .footer__links a,
+  body[data-page="how-it-works"] .footer__links a,
+  body[data-page="legal"] .footer__links a,
+  body[data-page="faq"] .footer__links a,
+  body[data-page="contacts"] .footer__links a,
+  body[data-page="cases"] .footer__links a {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    text-align: center;
+  }
+
+  body[data-page="services"] .footer-credit,
+  body[data-page="how-it-works"] .footer-credit,
+  body[data-page="legal"] .footer-credit,
+  body[data-page="faq"] .footer-credit,
+  body[data-page="contacts"] .footer-credit,
+  body[data-page="cases"] .footer-credit {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    text-align: center;
+    white-space: normal;
+  }
+}

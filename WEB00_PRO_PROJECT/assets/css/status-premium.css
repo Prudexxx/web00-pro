@@ -1,0 +1,1509 @@
+body[data-page="status"] {
+  --status-bg: #f7f3ec;
+  --status-card: #fffaf4;
+  --status-card-strong: #ffffff;
+  --status-ink: #302925;
+  --status-muted: #756a63;
+  --status-soft: #ebe2d8;
+  --status-line: rgba(61, 48, 42, 0.12);
+  --status-burgundy: #8f2434;
+  --status-burgundy-dark: #6f1c29;
+  --status-shadow: 0 24px 70px rgba(55, 38, 29, 0.1);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(143, 36, 52, 0.08), transparent 28%),
+    linear-gradient(180deg, #fbf8f2 0%, var(--status-bg) 100%);
+  color: var(--status-ink);
+}
+
+body[data-page="status"] .site-header {
+  border-bottom: 1px solid var(--status-line);
+  background: rgba(251, 248, 242, 0.88);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 30px rgba(55, 38, 29, 0.05);
+}
+
+body[data-page="status"] .logo,
+body[data-page="status"] .nav a {
+  color: var(--status-ink);
+}
+
+body[data-page="status"] .logo span,
+body[data-page="status"] .logo small {
+  color: var(--status-ink);
+}
+
+body[data-page="status"] .logo b {
+  color: var(--status-burgundy);
+}
+
+body[data-page="status"] .nav a {
+  font-weight: 650;
+}
+
+body[data-page="status"] .nav a:hover,
+body[data-page="status"] .nav a:focus-visible {
+  color: var(--status-burgundy);
+}
+
+body[data-page="status"] .header__cta,
+body[data-page="status"] .btn--primary {
+  border: 1px solid rgba(143, 36, 52, 0.22);
+  background: var(--status-burgundy);
+  color: #fff;
+  box-shadow: 0 16px 34px rgba(143, 36, 52, 0.2);
+}
+
+body[data-page="status"] .btn--secondary {
+  border: 1px solid var(--status-line);
+  background: #fff;
+  color: var(--status-ink);
+  box-shadow: none;
+}
+
+body[data-page="status"] .side-contact,
+body[data-page="status"] .mobile-cta,
+body[data-page="status"] .footer [data-open-bug] {
+  display: none;
+}
+
+body[data-page="status"] .status-page {
+  min-height: 72vh;
+  padding: 84px 0 96px;
+}
+
+body[data-page="status"] .status-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  color: var(--status-burgundy);
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body[data-page="status"] .status-kicker span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-burgundy);
+  box-shadow: 0 0 0 5px rgba(143, 36, 52, 0.1);
+}
+
+body[data-page="status"] .status-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 28px;
+  align-items: end;
+  margin-bottom: 28px;
+}
+
+body[data-page="status"] .status-hero h1,
+body[data-page="status"] .status-lookup-card h1,
+body[data-page="status"] .not-found-card h1 {
+  margin: 0;
+  max-width: 760px;
+  color: var(--status-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(3rem, 6vw, 5.8rem);
+  font-weight: 600;
+  letter-spacing: -0.055em;
+  line-height: 0.95;
+}
+
+body[data-page="status"] .status-hero p,
+body[data-page="status"] .status-lookup-card > p,
+body[data-page="status"] .not-found-card > p {
+  max-width: 680px;
+  margin: 18px 0 0;
+  color: var(--status-muted);
+  font-size: 1.08rem;
+  line-height: 1.65;
+}
+
+body[data-page="status"] .status-id {
+  display: inline-flex;
+  align-items: center;
+  min-height: 58px;
+  padding: 0 22px;
+  border: 1px solid rgba(143, 36, 52, 0.18);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--status-burgundy);
+  font-size: clamp(1.35rem, 2.3vw, 2.15rem);
+  letter-spacing: -0.02em;
+  box-shadow: 0 18px 42px rgba(55, 38, 29, 0.08);
+}
+
+body[data-page="status"] .status-cabinet,
+body[data-page="status"] .status-detail-grid,
+body[data-page="status"] .status-support-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 0.42fr);
+  gap: 22px;
+  align-items: start;
+}
+
+body[data-page="status"] .status-summary-card,
+body[data-page="status"] .status-next-card,
+body[data-page="status"] .status-timeline-card,
+body[data-page="status"] .status-passport-card,
+body[data-page="status"] .status-template-card,
+body[data-page="status"] .status-support-grid article,
+body[data-page="status"] .status-lookup-card,
+body[data-page="status"] .status-help-card {
+  border: 1px solid var(--status-line);
+  border-radius: 28px;
+  background: rgba(255, 250, 244, 0.9);
+  box-shadow: var(--status-shadow);
+}
+
+body[data-page="status"] .status-summary-card,
+body[data-page="status"] .status-timeline-card,
+body[data-page="status"] .status-passport-card,
+body[data-page="status"] .status-template-card,
+body[data-page="status"] .status-support-grid article {
+  padding: 24px;
+}
+
+body[data-page="status"] .status-help-actions,
+body[data-page="cabinet"] .cabinet-support-actions {
+  display: grid;
+  gap: 16px;
+}
+
+body[data-page="status"] .status-help-actions {
+  margin-top: 22px;
+  padding: 24px;
+}
+
+body[data-page="status"] .status-help-actions h2 {
+  margin: 8px 0 8px;
+  color: var(--status-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.8rem, 3vw, 2.8rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+body[data-page="status"] .status-help-actions p {
+  margin: 0;
+  color: var(--status-muted);
+  line-height: 1.6;
+}
+
+body[data-page="status"] .status-help-actions__buttons,
+body[data-page="cabinet"] .cabinet-support-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+body[data-page="cabinet"] .cabinet-muted-note {
+  margin-top: 16px;
+  color: var(--status-muted);
+  line-height: 1.55;
+}
+
+body[data-page="status"] .status-next-card,
+body[data-page="status"] .status-help-card {
+  padding: 22px;
+}
+
+body[data-page="status"] .status-summary-card__head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 22px;
+}
+
+body[data-page="status"] .status-dot {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: #e7ded5;
+  box-shadow: inset 0 0 0 12px rgba(143, 36, 52, 0.1);
+}
+
+body[data-page="status"] .status-dot--green {
+  background: #dcefe2;
+  box-shadow: inset 0 0 0 12px rgba(64, 144, 91, 0.12);
+}
+
+body[data-page="status"] .status-dot--gold {
+  background: #f1e4c9;
+  box-shadow: inset 0 0 0 12px rgba(166, 117, 37, 0.12);
+}
+
+body[data-page="status"] .status-dot--blue,
+body[data-page="status"] .status-dot--violet {
+  background: #eadde0;
+  box-shadow: inset 0 0 0 12px rgba(143, 36, 52, 0.12);
+}
+
+body[data-page="status"] .status-summary-card__head span:not(.status-dot),
+body[data-page="status"] .status-section-head span,
+body[data-page="status"] .status-next-card > span,
+body[data-page="status"] .status-support-grid article > span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--status-burgundy);
+  font-size: 0.75rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body[data-page="status"] .status-summary-card h2,
+body[data-page="status"] .status-section-head h2,
+body[data-page="status"] .status-next-card h3,
+body[data-page="status"] .status-support-grid h3,
+body[data-page="status"] .status-help-card h2 {
+  margin: 0;
+  color: var(--status-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+body[data-page="status"] .status-summary-card h2 {
+  font-size: clamp(1.8rem, 3vw, 2.75rem);
+}
+
+body[data-page="status"] .status-summary-card p,
+body[data-page="status"] .status-next-card p,
+body[data-page="status"] .status-template-card p,
+body[data-page="status"] .status-support-grid p,
+body[data-page="status"] .status-description p,
+body[data-page="status"] .status-help-card li {
+  color: var(--status-muted);
+  line-height: 1.6;
+}
+
+body[data-page="status"] .status-summary-grid,
+body[data-page="status"] .status-passport-grid,
+body[data-page="status"] .status-template-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+body[data-page="status"] .status-summary-grid article,
+body[data-page="status"] .status-passport-grid article,
+body[data-page="status"] .status-template-meta article {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--status-line);
+  border-radius: 18px;
+  background: #fff;
+}
+
+body[data-page="status"] .status-summary-grid span,
+body[data-page="status"] .status-passport-grid span,
+body[data-page="status"] .status-template-meta span,
+body[data-page="status"] .status-description span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--status-muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+body[data-page="status"] .status-summary-grid strong,
+body[data-page="status"] .status-passport-grid strong,
+body[data-page="status"] .status-template-meta strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--status-ink);
+  font-size: 1rem;
+}
+
+body[data-page="status"] .status-next-note {
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid rgba(143, 36, 52, 0.16);
+  border-radius: 18px;
+  background: #f7eee6;
+  color: var(--status-burgundy-dark);
+  line-height: 1.55;
+}
+
+body[data-page="status"] .status-timeline-card,
+body[data-page="status"] .status-detail-grid,
+body[data-page="status"] .status-support-grid {
+  margin-top: 22px;
+}
+
+body[data-page="status"] .status-section-head {
+  margin-bottom: 18px;
+}
+
+body[data-page="status"] .status-progress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="status"] .status-progress li {
+  min-height: 118px;
+  padding: 16px;
+  border: 1px solid var(--status-line);
+  border-radius: 20px;
+  background: #fff;
+  color: var(--status-muted);
+}
+
+body[data-page="status"] .status-progress li.is-done,
+body[data-page="status"] .status-progress li.is-active {
+  border-color: rgba(143, 36, 52, 0.24);
+  background: #fff8f4;
+  color: var(--status-ink);
+}
+
+body[data-page="status"] .status-progress li.is-active {
+  box-shadow: inset 0 0 0 1px rgba(143, 36, 52, 0.14);
+}
+
+body[data-page="status"] .status-progress span {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #f0e6dc;
+  color: var(--status-burgundy);
+  font-weight: 850;
+}
+
+body[data-page="status"] .status-progress strong {
+  display: block;
+  margin-top: 16px;
+  color: inherit;
+  line-height: 1.25;
+}
+
+body[data-page="status"] .status-description {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid var(--status-line);
+  border-radius: 18px;
+  background: #fff;
+}
+
+body[data-page="status"] .status-template-card .solution-preview {
+  margin-bottom: 16px;
+  border: 1px solid var(--status-line);
+  border-radius: 18px;
+  background: #f1ebe3;
+  box-shadow: 0 18px 42px rgba(55, 38, 29, 0.08);
+}
+
+body[data-page="status"] .status-service-preview {
+  min-height: 180px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 20px;
+  border: 1px solid var(--status-line);
+  border-radius: 18px;
+  background: linear-gradient(135deg, #fff, #f3eadf);
+}
+
+body[data-page="status"] .status-service-preview strong {
+  color: var(--status-burgundy);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+}
+
+body[data-page="status"] .status-service-preview span {
+  color: var(--status-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.7rem;
+  line-height: 1.1;
+}
+
+body[data-page="status"] .status-history {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="status"] .status-history li {
+  padding: 12px 0 12px 18px;
+  border-left: 2px solid rgba(143, 36, 52, 0.2);
+}
+
+body[data-page="status"] .status-history strong,
+body[data-page="status"] .status-history small {
+  display: block;
+}
+
+body[data-page="status"] .status-history strong {
+  color: var(--status-ink);
+}
+
+body[data-page="status"] .status-history small {
+  margin-top: 4px;
+  color: var(--status-muted);
+  line-height: 1.45;
+}
+
+body[data-page="status"] .status-lookup-page,
+body[data-page="status"] .status-not-found-page {
+  min-height: min(680px, calc(100vh - 220px));
+  display: grid;
+  place-items: center;
+}
+
+body[data-page="status"] .status-lookup-card {
+  width: min(100%, 760px);
+  padding: clamp(28px, 5vw, 56px);
+}
+
+body[data-page="status"] .status-lookup-card form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+body[data-page="status"] .status-lookup-card label {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  color: var(--status-ink);
+  font-weight: 760;
+}
+
+body[data-page="status"] .status-lookup-card input {
+  min-height: 52px;
+  border: 1px solid var(--status-line);
+  border-radius: 16px;
+  background: #fff;
+  color: var(--status-ink);
+}
+
+body[data-page="status"] .status-form-message {
+  min-height: 22px;
+  margin: 12px 0 0;
+  color: var(--status-burgundy);
+}
+
+body[data-page="status"] .status-lookup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+body[data-page="status"] .status-not-found-page {
+  grid-template-columns: minmax(0, 760px) minmax(260px, 0.34fr);
+  gap: 22px;
+  align-items: center;
+}
+
+body[data-page="status"] .status-help-card ul {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding-left: 18px;
+}
+
+body[data-page="status"] .footer {
+  border-top: 1px solid var(--status-line);
+  background: #f3eee7;
+  color: var(--status-muted);
+}
+
+body[data-page="status"] .footer a,
+body[data-page="status"] .footer .logo {
+  color: var(--status-muted);
+}
+
+body[data-page="cabinet"] {
+  --cabinet-bg: #f7f3ec;
+  --cabinet-surface: #fffdf9;
+  --cabinet-card: #ffffff;
+  --cabinet-ink: #302925;
+  --cabinet-muted: #756a63;
+  --cabinet-line: rgba(61, 48, 42, 0.12);
+  --cabinet-accent: #8e0f13;
+  --cabinet-accent-dark: #641014;
+  --cabinet-accent-soft: rgba(142, 15, 19, 0.08);
+  --cabinet-shadow: 0 16px 44px rgba(55, 38, 29, 0.08);
+  margin: 0;
+  overflow-x: hidden;
+  background: linear-gradient(180deg, #fbf8f2 0%, var(--cabinet-bg) 100%);
+  color: var(--cabinet-ink);
+}
+
+body[data-page="cabinet"] .site-header {
+  border-bottom: 1px solid var(--cabinet-line);
+  background: rgba(255, 253, 249, 0.96);
+  backdrop-filter: blur(18px);
+  color: var(--cabinet-ink);
+}
+
+body[data-page="cabinet"] .logo,
+body[data-page="cabinet"] .nav a {
+  color: var(--cabinet-ink);
+}
+
+body[data-page="cabinet"] .logo span {
+  color: var(--cabinet-ink);
+}
+
+body[data-page="cabinet"] .logo b {
+  color: var(--cabinet-accent);
+}
+
+body[data-page="cabinet"] .header__cta,
+body[data-page="cabinet"] .btn--primary {
+  border-color: var(--cabinet-accent);
+  background: var(--cabinet-accent);
+  color: #fff;
+}
+
+body[data-page="cabinet"] .btn--secondary {
+  border-color: var(--cabinet-line);
+  background: #fff;
+  color: var(--cabinet-ink);
+}
+
+body[data-page="cabinet"] .cabinet-support-link,
+body[data-page="status"] .status-help-actions__quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--cabinet-muted, var(--status-muted));
+  box-shadow: none;
+}
+
+body[data-page="cabinet"] .cabinet-support-link:hover,
+body[data-page="cabinet"] .cabinet-support-link:focus-visible,
+body[data-page="status"] .status-help-actions__quiet:hover,
+body[data-page="status"] .status-help-actions__quiet:focus-visible {
+  border-color: var(--cabinet-line, var(--status-line));
+  background: rgba(142, 15, 19, 0.05);
+  color: var(--cabinet-accent-dark, var(--status-accent));
+}
+
+body[data-page="cabinet"] .cabinet-page {
+  padding: 34px 0 70px;
+}
+
+body[data-page="cabinet"] .cabinet-hero__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 28px;
+  align-items: end;
+}
+
+body[data-page="cabinet"] .cabinet-kicker,
+body[data-page="cabinet"] .cabinet-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--cabinet-accent);
+  font-size: 0.72rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body[data-page="cabinet"] .cabinet-kicker span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--cabinet-accent);
+}
+
+body[data-page="cabinet"] h1,
+body[data-page="cabinet"] h2 {
+  margin: 0;
+  color: var(--cabinet-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+
+body[data-page="cabinet"] h1 {
+  max-width: 720px;
+  margin-top: 12px;
+  font-size: clamp(3rem, 6vw, 5.4rem);
+  line-height: 0.94;
+}
+
+body[data-page="cabinet"] .cabinet-hero p {
+  max-width: 700px;
+  margin: 16px 0 0;
+  color: var(--cabinet-muted);
+  font-size: 1.02rem;
+  line-height: 1.62;
+}
+
+body[data-page="cabinet"] .cabinet-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+body[data-page="cabinet"] .cabinet-workspace {
+  padding-top: 28px;
+}
+
+body[data-page="cabinet"] .cabinet-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.42fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+body[data-page="cabinet"] .cabinet-card {
+  padding: 20px;
+  border: 1px solid var(--cabinet-line);
+  border-radius: 18px;
+  background: var(--cabinet-card);
+  box-shadow: var(--cabinet-shadow);
+}
+
+body[data-page="cabinet"] .cabinet-card--wide,
+body[data-page="cabinet"] .cabinet-card--security {
+  grid-column: 1 / -1;
+}
+
+body[data-page="cabinet"] .cabinet-card h2 {
+  margin-top: 8px;
+  font-size: clamp(1.45rem, 2.2vw, 2.2rem);
+  line-height: 1.05;
+}
+
+body[data-page="cabinet"] .cabinet-project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 12px 0 18px;
+  color: var(--cabinet-muted);
+}
+
+body[data-page="cabinet"] .cabinet-project-meta strong {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--cabinet-accent-soft);
+  color: var(--cabinet-accent-dark);
+  font-size: 0.76rem;
+}
+
+body[data-page="cabinet"] .cabinet-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid var(--cabinet-line);
+}
+
+body[data-page="cabinet"] .cabinet-facts div {
+  padding: 12px 12px 0 0;
+  border-right: 1px solid var(--cabinet-line);
+}
+
+body[data-page="cabinet"] .cabinet-facts div:last-child {
+  border-right: 0;
+}
+
+body[data-page="cabinet"] .cabinet-facts dt {
+  margin-bottom: 4px;
+  color: var(--cabinet-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+body[data-page="cabinet"] .cabinet-facts dd {
+  margin: 0;
+  color: var(--cabinet-ink);
+  font-weight: 700;
+}
+
+body[data-page="cabinet"] .cabinet-card p,
+body[data-page="cabinet"] .cabinet-card small,
+body[data-page="cabinet"] .cabinet-history small {
+  color: var(--cabinet-muted);
+  line-height: 1.55;
+}
+
+body[data-page="cabinet"] .cabinet-action-list,
+body[data-page="cabinet"] .cabinet-list,
+body[data-page="cabinet"] .cabinet-history {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="cabinet"] .cabinet-action-list button {
+  min-height: 40px;
+  border: 1px solid var(--cabinet-line);
+  border-radius: 10px;
+  background: var(--cabinet-surface);
+  color: var(--cabinet-ink);
+  font: inherit;
+  font-weight: 750;
+  text-align: left;
+}
+
+body[data-page="cabinet"] .cabinet-progress {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="cabinet"] .cabinet-progress li {
+  min-height: 112px;
+  padding: 14px;
+  border: 1px solid var(--cabinet-line);
+  border-radius: 14px;
+  background: var(--cabinet-surface);
+}
+
+body[data-page="cabinet"] .cabinet-progress li.is-active {
+  border-color: rgba(142, 15, 19, 0.26);
+  background: var(--cabinet-accent-soft);
+}
+
+body[data-page="cabinet"] .cabinet-progress span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--cabinet-accent);
+  font-weight: 850;
+}
+
+body[data-page="cabinet"] .cabinet-progress strong,
+body[data-page="cabinet"] .cabinet-history strong {
+  display: block;
+  margin-top: 12px;
+  color: var(--cabinet-ink);
+  line-height: 1.25;
+}
+
+body[data-page="cabinet"] .cabinet-list li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--cabinet-muted);
+  line-height: 1.5;
+}
+
+body[data-page="cabinet"] .cabinet-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--cabinet-accent);
+  border-radius: 999px;
+}
+
+body[data-page="cabinet"] .footer {
+  border-top: 1px solid var(--cabinet-line);
+  background: #f3eee7;
+}
+
+@media (max-width: 900px) {
+  body[data-page="cabinet"] .cabinet-hero__grid,
+  body[data-page="cabinet"] .cabinet-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="cabinet"] .cabinet-progress {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-page="cabinet"] .cabinet-facts {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="cabinet"] .cabinet-facts div {
+    border-right: 0;
+    border-bottom: 1px solid var(--cabinet-line);
+    padding: 12px 0;
+  }
+
+  body[data-page="cabinet"] .cabinet-facts div:last-child {
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  body[data-page="cabinet"] .cabinet-page {
+    padding: 26px 0 56px;
+  }
+
+  body[data-page="cabinet"] h1 {
+    font-size: clamp(2.5rem, 15vw, 4rem);
+  }
+
+  body[data-page="cabinet"] .cabinet-hero__actions,
+  body[data-page="cabinet"] .cabinet-hero__actions .btn,
+  body[data-page="cabinet"] .cabinet-progress {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1180px) {
+  body[data-page="status"] .status-cabinet,
+  body[data-page="status"] .status-detail-grid,
+  body[data-page="status"] .status-support-grid,
+  body[data-page="status"] .status-not-found-page {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-progress {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  body[data-page="status"] .status-page {
+    padding: 42px 0 72px;
+  }
+
+  body[data-page="status"] .status-hero {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  body[data-page="status"] .status-hero h1,
+  body[data-page="status"] .status-lookup-card h1,
+  body[data-page="status"] .not-found-card h1 {
+    font-size: clamp(2.45rem, 13vw, 3.65rem);
+  }
+
+  body[data-page="status"] .status-id {
+    justify-content: center;
+    width: 100%;
+    min-height: 50px;
+    font-size: 1.2rem;
+  }
+
+  body[data-page="status"] .status-summary-card,
+  body[data-page="status"] .status-next-card,
+  body[data-page="status"] .status-timeline-card,
+  body[data-page="status"] .status-passport-card,
+  body[data-page="status"] .status-template-card,
+  body[data-page="status"] .status-support-grid article,
+  body[data-page="status"] .status-lookup-card,
+  body[data-page="status"] .status-help-card {
+    border-radius: 22px;
+    padding: 18px;
+  }
+
+  body[data-page="status"] .status-summary-card__head,
+  body[data-page="status"] .status-summary-grid,
+  body[data-page="status"] .status-passport-grid,
+  body[data-page="status"] .status-template-meta,
+  body[data-page="status"] .status-lookup-card form {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-progress {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-progress li {
+    min-height: auto;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 12px;
+    align-items: center;
+  }
+
+  body[data-page="status"] .status-progress strong {
+    margin-top: 0;
+  }
+
+  body[data-page="status"] .status-lookup-actions,
+  body[data-page="status"] .status-lookup-actions .btn {
+    width: 100%;
+  }
+}
+
+/* FE-PATCH-3: client cabinet dashboard reconciliation */
+body[data-page="status"] {
+  --status-card-radius: 14px;
+  --status-card-shadow: 0 12px 32px rgba(48, 41, 37, 0.055);
+}
+
+body[data-page="status"] .status-page {
+  padding: 22px 0 34px;
+}
+
+body[data-page="status"] .status-hero--cabinet {
+  align-items: start;
+  margin-bottom: 14px;
+  padding-top: 4px;
+}
+
+body[data-page="status"] .status-hero--cabinet h1 {
+  max-width: 620px;
+  font-size: clamp(2.2rem, 3.65vw, 3.4rem);
+  letter-spacing: -0.045em;
+}
+
+body[data-page="status"] .status-hero--cabinet p:not(.status-kicker) {
+  max-width: 640px;
+  margin-top: 8px;
+  font-size: 0.96rem;
+  line-height: 1.5;
+}
+
+body[data-page="status"] .status-hero--cabinet .btn {
+  align-self: start;
+  min-height: 38px;
+  padding-inline: 18px;
+}
+
+body[data-page="status"] .status-card {
+  border: 1px solid var(--status-line);
+  border-radius: var(--status-card-radius);
+  background: rgba(255, 253, 249, 0.96);
+  box-shadow: var(--status-card-shadow);
+}
+
+body[data-page="status"] .status-dashboard {
+  display: grid;
+  gap: 14px;
+}
+
+body[data-page="status"] .status-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.34fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+body[data-page="status"] .status-dashboard-grid + .status-dashboard-grid,
+body[data-page="status"] .status-timeline-card,
+body[data-page="status"] .status-meta-strip {
+  margin-top: 0;
+}
+
+body[data-page="status"] .status-project-card {
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 168px;
+  padding: 16px;
+}
+
+body[data-page="status"] .status-project-card__preview {
+  min-width: 0;
+}
+
+body[data-page="status"] .status-project-card__preview .solution-preview {
+  height: 84px;
+  margin: 0;
+  border: 1px solid var(--status-line);
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+body[data-page="status"] .status-project-card__preview .solution-preview img {
+  object-position: center top;
+}
+
+body[data-page="status"] .status-project-card__body {
+  min-width: 0;
+}
+
+body[data-page="status"] .status-card-label,
+body[data-page="status"] .status-section-head span {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--status-burgundy);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+body[data-page="status"] .status-project-card h2,
+body[data-page="status"] .status-action-card h3,
+body[data-page="status"] .status-section-head h2,
+body[data-page="status"] .status-passport-card h3 {
+  margin: 0;
+  color: var(--status-ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+}
+
+body[data-page="status"] .status-project-card h2 {
+  font-size: clamp(1.5rem, 2.35vw, 2.25rem);
+}
+
+body[data-page="status"] .status-action-card h3 {
+  font-size: clamp(1.24rem, 1.75vw, 1.65rem);
+}
+
+body[data-page="status"] .status-section-head h2 {
+  font-size: clamp(1.22rem, 1.6vw, 1.55rem);
+}
+
+body[data-page="status"] .status-project-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 12px;
+  color: var(--status-muted);
+  font-size: 0.88rem;
+}
+
+body[data-page="status"] .status-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #f5eadf;
+  color: var(--status-burgundy-dark);
+  font-size: 0.73rem;
+  font-weight: 850;
+}
+
+body[data-page="status"] .status-badge--green {
+  background: #edf7ee;
+  color: #2f7d4a;
+}
+
+body[data-page="status"] .status-badge--gold {
+  background: #fff4d9;
+  color: #8f641b;
+}
+
+body[data-page="status"] .status-badge--blue,
+body[data-page="status"] .status-badge--violet {
+  background: #f6ecef;
+  color: var(--status-burgundy);
+}
+
+body[data-page="status"] .status-summary-grid--compact {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--status-line);
+}
+
+body[data-page="status"] .status-summary-grid--compact article {
+  padding: 10px 12px 0 0;
+  border: 0;
+  border-right: 1px solid var(--status-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+body[data-page="status"] .status-summary-grid--compact article:last-child {
+  border-right: 0;
+}
+
+body[data-page="status"] .status-summary-grid--compact span,
+body[data-page="status"] .status-summary-grid--compact strong {
+  font-size: 0.82rem;
+}
+
+body[data-page="status"] .status-action-card {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  padding: 16px;
+}
+
+body[data-page="status"] .status-action-card p,
+body[data-page="status"] .status-action-card small {
+  margin: 0;
+  color: var(--status-muted);
+  line-height: 1.5;
+}
+
+body[data-page="status"] .status-action-card .btn {
+  width: fit-content;
+  min-height: 38px;
+  margin-top: 6px;
+  border-radius: 10px;
+}
+
+body[data-page="status"] .status-timeline-card {
+  padding: 16px;
+}
+
+body[data-page="status"] .status-progress--cabinet {
+  position: relative;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+}
+
+body[data-page="status"] .status-progress--cabinet li {
+  min-height: 98px;
+  padding: 10px;
+  border-radius: 11px;
+  background: #fff;
+}
+
+body[data-page="status"] .status-progress--cabinet span {
+  width: 24px;
+  height: 24px;
+  font-size: 0.76rem;
+}
+
+body[data-page="status"] .status-progress--cabinet strong {
+  margin-top: 10px;
+  font-size: 0.74rem;
+}
+
+body[data-page="status"] .status-progress--cabinet small {
+  display: block;
+  margin-top: 5px;
+  color: var(--status-muted);
+  font-size: 0.63rem;
+  line-height: 1.35;
+}
+
+body[data-page="status"] .status-dashboard-grid--details {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.34fr);
+}
+
+body[data-page="status"] .status-passport-card,
+body[data-page="status"] .status-integrations-card,
+body[data-page="status"] .status-support-card,
+body[data-page="status"] .status-history-card,
+body[data-page="status"] .status-notifications-card {
+  padding: 16px;
+}
+
+body[data-page="status"] .status-passport-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 0.54fr) minmax(280px, 0.46fr);
+  gap: 16px;
+}
+
+body[data-page="status"] .status-passport-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  border-right: 1px solid var(--status-line);
+  padding-right: 16px;
+}
+
+body[data-page="status"] .status-passport-grid article {
+  padding: 7px 0 10px;
+  border: 0;
+  border-bottom: 1px solid var(--status-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+body[data-page="status"] .status-passport-card h3 {
+  margin-bottom: 10px;
+  font-size: 1.05rem;
+}
+
+body[data-page="status"] .status-check-list,
+body[data-page="status"] .status-support-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+body[data-page="status"] .status-check-list li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--status-muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+body[data-page="status"] .status-check-list li::before {
+  content: "";
+  position: absolute;
+  top: 0.55em;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  border: 1px solid var(--status-burgundy);
+  border-radius: 50%;
+}
+
+body[data-page="status"] .status-support-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--status-line);
+  color: var(--status-muted);
+  font-size: 0.86rem;
+}
+
+body[data-page="status"] .status-support-list li:last-child {
+  border-bottom: 0;
+}
+
+body[data-page="status"] .status-support-list strong {
+  color: #4d8b57;
+  font-size: 0.72rem;
+  text-align: right;
+}
+
+body[data-page="status"] .status-dashboard-grid--support {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.5fr) minmax(260px, 0.5fr);
+}
+
+body[data-page="status"] .status-history {
+  gap: 0;
+}
+
+body[data-page="status"] .status-history li {
+  padding: 10px 0 10px 18px;
+}
+
+body[data-page="status"] .status-meta-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 12px 16px;
+}
+
+body[data-page="status"] .status-meta-strip article {
+  padding: 0 16px;
+  border: 0;
+  border-right: 1px solid var(--status-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+body[data-page="status"] .status-meta-strip article:last-child {
+  border-right: 0;
+}
+
+body[data-page="status"] .status-description {
+  margin-top: 10px;
+  border-radius: 12px;
+}
+
+@media (max-width: 900px) {
+  body[data-page="status"] .status-dashboard-grid,
+  body[data-page="status"] .status-dashboard-grid--details,
+  body[data-page="status"] .status-dashboard-grid--support,
+  body[data-page="status"] .status-passport-layout {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-summary-grid--compact,
+  body[data-page="status"] .status-meta-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body[data-page="status"] .status-progress--cabinet {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  body[data-page="status"] .status-project-card {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-project-card__preview .solution-preview {
+    width: min(100%, 360px);
+    height: auto;
+  }
+
+  body[data-page="status"] .status-passport-grid {
+    border-right: 0;
+    padding-right: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  body[data-page="status"] .status-page {
+    padding: 22px 0 54px;
+  }
+
+  body[data-page="status"] .status-hero--cabinet h1 {
+    font-size: clamp(2.15rem, 11vw, 3rem);
+    line-height: 1;
+  }
+
+  body[data-page="status"] .status-project-card {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  body[data-page="status"] .status-project-card__preview .solution-preview {
+    height: auto;
+  }
+
+  body[data-page="status"] .status-summary-grid--compact,
+  body[data-page="status"] .status-passport-grid,
+  body[data-page="status"] .status-meta-strip {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-summary-grid--compact article,
+  body[data-page="status"] .status-meta-strip article {
+    border-right: 0;
+    border-bottom: 1px solid var(--status-line);
+    padding: 10px 0;
+  }
+
+  body[data-page="status"] .status-summary-grid--compact article:last-child,
+  body[data-page="status"] .status-meta-strip article:last-child {
+    border-bottom: 0;
+  }
+
+  body[data-page="status"] .status-progress--cabinet {
+    grid-template-columns: 1fr;
+  }
+
+  body[data-page="status"] .status-progress--cabinet li {
+    min-height: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  body[data-page="status"] .status-progress--cabinet strong,
+  body[data-page="status"] .status-progress--cabinet small {
+    margin-top: 0;
+  }
+
+  body[data-page="status"] .status-action-card .btn,
+  body[data-page="status"] .status-hero--cabinet .btn {
+    width: 100%;
+  }
+}
+
+/* Wave 10.1: real mobile guard for status/cabinet screens. */
+@media (max-width: 767px), (hover: none) and (pointer: coarse) and (max-width: 1180px) {
+  body[data-page="status"],
+  body[data-page="cabinet"] {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  body[data-page="status"] .container,
+  body[data-page="cabinet"] .container {
+    width: min(100% - 32px, 680px) !important;
+    max-width: 100% !important;
+  }
+
+  body[data-page="status"] .header__inner,
+  body[data-page="cabinet"] .header__inner {
+    min-height: 64px !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    gap: 12px !important;
+  }
+
+  body[data-page="status"] .header__cta,
+  body[data-page="cabinet"] .header__cta {
+    display: none !important;
+  }
+
+  body[data-page="status"] .menu-toggle,
+  body[data-page="cabinet"] .menu-toggle {
+    display: inline-flex !important;
+    border-color: var(--cabinet-line, var(--status-line)) !important;
+    background: #fffdf9 !important;
+    color: var(--cabinet-ink, var(--status-ink)) !important;
+  }
+
+  body[data-page="cabinet"] .site-header {
+    background: #fffdf9 !important;
+  }
+
+  body[data-page="cabinet"] .logo,
+  body[data-page="cabinet"] .logo span {
+    color: var(--cabinet-ink) !important;
+  }
+
+  body[data-page="cabinet"] .logo b {
+    color: var(--cabinet-accent) !important;
+  }
+
+  body[data-page="cabinet"] .menu-toggle span {
+    background: var(--cabinet-ink) !important;
+  }
+
+  body[data-page="status"] .nav,
+  body[data-page="cabinet"] .nav {
+    position: fixed !important;
+    top: 70px !important;
+    left: 16px !important;
+    right: 16px !important;
+    z-index: 70;
+    display: none !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+    padding: 10px !important;
+  }
+
+  body[data-page="status"] .nav.is-open,
+  body[data-page="cabinet"] .nav.is-open {
+    display: flex !important;
+  }
+
+  body[data-page="status"] .status-cabinet,
+  body[data-page="status"] .status-detail-grid,
+  body[data-page="status"] .status-support-grid,
+  body[data-page="status"] .status-not-found-page,
+  body[data-page="status"] .status-hero,
+  body[data-page="status"] .status-progress,
+  body[data-page="status"] .status-progress--cabinet,
+  body[data-page="status"] .status-summary-card__head,
+  body[data-page="status"] .status-summary-grid,
+  body[data-page="status"] .status-summary-grid--compact,
+  body[data-page="status"] .status-passport-grid,
+  body[data-page="status"] .status-template-meta,
+  body[data-page="status"] .status-meta-strip,
+  body[data-page="status"] .status-lookup-card form,
+  body[data-page="cabinet"] .cabinet-hero__grid,
+  body[data-page="cabinet"] .cabinet-grid,
+  body[data-page="cabinet"] .cabinet-progress,
+  body[data-page="cabinet"] .cabinet-facts {
+    grid-template-columns: 1fr !important;
+    min-width: 0 !important;
+  }
+
+  body[data-page="status"] .status-summary-card,
+  body[data-page="status"] .status-next-card,
+  body[data-page="status"] .status-timeline-card,
+  body[data-page="status"] .status-passport-card,
+  body[data-page="status"] .status-template-card,
+  body[data-page="status"] .status-support-grid article,
+  body[data-page="status"] .status-lookup-card,
+  body[data-page="status"] .status-help-card,
+  body[data-page="cabinet"] .cabinet-card,
+  body[data-page="cabinet"] .mobile-access-card {
+    max-width: 100%;
+  }
+}

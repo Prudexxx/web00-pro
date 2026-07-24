@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 430 900" role="img" aria-label="WEB00 mobile homepage preview">
+  <defs>
+    <style>
+      .serif{font-family:Georgia,'Times New Roman',serif}.sans{font-family:Arial,Helvetica,sans-serif}.dark{fill:#201d1a}.muted{fill:#6f6862}.red{fill:#9f1118}.line{stroke:#e8e2da;stroke-width:1}.soft{fill:#f8f5ef}
+    </style>
+  </defs>
+  <rect width="430" height="900" fill="#fffdfb"/>
+  <rect x="0" y="0" width="430" height="76" fill="#fffdfb"/>
+  <line x1="0" y1="76" x2="430" y2="76" class="line"/>
+  <text x="24" y="48" class="serif dark" font-size="34" font-weight="700">WEB</text>
+  <text x="99" y="48" class="serif red" font-size="34" font-weight="700">00</text>
+  <rect x="355" y="20" width="48" height="40" rx="12" fill="#fff" stroke="#e5ded6"/>
+  <line x1="369" y1="32" x2="389" y2="32" stroke="#201d1a" stroke-width="2"/>
+  <line x1="369" y1="40" x2="389" y2="40" stroke="#201d1a" stroke-width="2"/>
+  <line x1="369" y1="48" x2="389" y2="48" stroke="#201d1a" stroke-width="2"/>
+
+  <g transform="translate(24 120)">
+    <rect x="0" y="0" width="308" height="32" rx="8" fill="#fff" stroke="#eaded8"/>
+    <text x="28" y="21" class="sans red" font-size="13" font-weight="700">Премиум-платформа готовых сайтов</text>
+    <path d="M15 10l2 5h5l-4 3 2 5-5-3-5 3 2-5-4-3h5z" fill="none" stroke="#9f1118" stroke-width="1.3"/>
+    <text x="0" y="88" class="serif dark" font-size="34" font-weight="700">Готовый сайт для бизнеса —</text>
+    <text x="0" y="128" class="serif dark" font-size="34" font-weight="700">запуск без хаоса</text>
+    <text x="0" y="177" class="sans muted" font-size="18">Выберите шаблон, заполните анкету</text>
+    <text x="0" y="204" class="sans muted" font-size="18">проекта — и мы запустим сайт.</text>
+    <rect x="0" y="240" width="176" height="54" rx="4" fill="#9f1118"/>
+    <text x="42" y="274" class="sans" fill="#fff" font-size="15" font-weight="700">Выбрать сайт</text>
+    <rect x="188" y="240" width="160" height="54" rx="4" fill="#fff" stroke="#9f1118"/>
+    <text x="226" y="274" class="sans red" font-size="15" font-weight="700">Демо</text>
+  </g>
+
+  <g transform="translate(0 440)">
+    <line x1="0" y1="0" x2="430" y2="0" class="line"/>
+    <line x1="24" y1="96" x2="406" y2="96" class="line"/>
+    <line x1="24" y1="192" x2="406" y2="192" class="line"/>
+    <line x1="24" y1="288" x2="406" y2="288" class="line"/>
+    <circle cx="72" cy="48" r="20" fill="none" stroke="#9f1118" stroke-width="3"/>
+    <text x="122" y="43" class="sans dark" font-size="18" font-weight="700">Запуск от 48 часов</text>
+    <text x="122" y="68" class="sans muted" font-size="14">Быстрый старт без потери качества</text>
+    <path d="M52 155a22 22 0 0 1 44 0" fill="none" stroke="#9f1118" stroke-width="4"/>
+    <text x="122" y="139" class="sans dark" font-size="18" font-weight="700">Performance 90+</text>
+    <text x="122" y="164" class="sans muted" font-size="14">Скорость и стабильность</text>
+    <circle cx="72" cy="240" r="21" fill="none" stroke="#9f1118" stroke-width="3"/>
+    <line x1="88" y1="256" x2="106" y2="274" stroke="#9f1118" stroke-width="3"/>
+    <text x="122" y="235" class="sans dark" font-size="18" font-weight="700">SEO-ready</text>
+    <text x="122" y="260" class="sans muted" font-size="14">Готовность к продвижению</text>
+    <path d="M52 350v-12a20 20 0 0 1 40 0v12" fill="none" stroke="#9f1118" stroke-width="4"/>
+    <text x="122" y="331" class="sans dark" font-size="18" font-weight="700">Поддержка</text>
+    <text x="122" y="356" class="sans muted" font-size="14">Мы рядом после запуска</text>
+  </g>
+
+  <g transform="translate(24 800)">
+    <text x="86" y="0" class="serif dark" font-size="30" font-weight="700">Как это работает</text>
+    <circle cx="36" cy="58" r="28" class="soft" stroke="#e5ded6"/>
+    <text x="27" y="68" class="serif red" font-size="24" font-weight="700">1</text>
+    <text x="90" y="50" class="sans dark" font-size="18" font-weight="700">Выбрать</text>
+    <text x="90" y="74" class="sans muted" font-size="14">Каталог под вашу нишу.</text>
+  </g>
+</svg>

@@ -1,0 +1,53 @@
+{
+  "name": "WEB00",
+  "short_name": "WEB00",
+  "description": "Готовые сайты для бизнеса, статус проекта и поддержка.",
+  "start_url": "app.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f2ea",
+  "theme_color": "#8E0F13",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "assets/icons/web00-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/web00-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icons/web00-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Мой проект",
+      "short_name": "Проект",
+      "url": "cabinet.html"
+    },
+    {
+      "name": "Статус",
+      "short_name": "Статус",
+      "url": "status.html"
+    },
+    {
+      "name": "Каталог",
+      "short_name": "Каталог",
+      "url": "solutions.html"
+    },
+    {
+      "name": "Анкета",
+      "short_name": "Анкета",
+      "url": "brief.html"
+    }
+  ]
+}

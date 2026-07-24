@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WEB00 - быстрый доступ</title>
+    <meta name="description" content="Мобильная оболочка WEB00 для быстрого доступа к проекту, статусу, анкете, каталогу и поддержке.">
+    <link rel="canonical" href="https://web00.pro/app.html">
+    <meta name="theme-color" content="#8E0F13">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="assets/css/tokens.css">
+    <link rel="stylesheet" href="assets/css/base.css">
+    <link rel="stylesheet" href="assets/css/styles.css">
+    <link rel="stylesheet" href="assets/css/shell.css">
+    <link rel="stylesheet" href="assets/css/components.css">
+    <script defer src="assets/js/data.js?v=multi-page-1"></script>
+    <script defer src="assets/js/main.js?v=multi-page-1"></script>
+  </head>
+  <body data-page="app">
+    <main class="app-shell" aria-labelledby="app-title">
+      <section class="app-panel">
+        <a class="app-logo" href="index.html" aria-label="WEB00 на главную">WEB<span>00</span></a>
+        <p class="app-kicker">WEB00 · быстрый доступ</p>
+        <h1 id="app-title">WEB00</h1>
+        <p>Быстрый доступ к проекту, статусу и поддержке.</p>
+        <div class="app-action-grid" aria-label="Разделы WEB00">
+          <a href="cabinet.html"><span>01</span><strong>Мой проект</strong><small>Открыть раздел проекта</small></a>
+          <a href="status.html"><span>02</span><strong>Статус проекта</strong><small>Ввести номер проекта</small></a>
+          <a href="brief.html"><span>03</span><strong>Анкета на запуск сайта</strong><small>Начать запуск</small></a>
+          <a href="solutions.html"><span>04</span><strong>Каталог сайтов</strong><small>Выбрать готовый сайт</small></a>
+          <a href="contacts.html"><span>05</span><strong>Поддержка</strong><small>Связаться с WEB00</small></a>
+          <a href="install.html"><span>06</span><strong>Установить на телефон</strong><small>Добавить WEB00 на главный экран</small></a>
+        </div>
+        <p class="app-note">Вход и уведомления будут подключены позже. Сейчас это безопасная веб-оболочка.</p>
+        <button class="app-support-link" type="button" data-open-bug>Описать проблему</button>
+      </section>
+    </main>
+    <div class="modal" data-modal="bug" aria-hidden="true">
+      <div class="modal__overlay" data-close-modal></div>
+      <div class="modal__dialog modal__dialog--wide glow-panel" role="dialog" aria-modal="true" aria-labelledby="bug-title">
+        <button class="modal__close" type="button" data-close-modal aria-label="Закрыть">×</button>
+        <div data-bug-modal-content></div>
+      </div>
+    </div>
+  </body>
+</html>

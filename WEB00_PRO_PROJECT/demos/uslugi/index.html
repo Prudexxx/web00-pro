@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Услуга муж на час — demo</title>
+    <link rel="stylesheet" href="../demo.css">
+    <style>
+      :root { --accent: #2563eb; --accent-2: #14b8a6; }
+
+      .service-desk {
+        min-height: 330px;
+        display: grid;
+        grid-template-columns: 1fr 0.9fr;
+        gap: 18px;
+        align-items: end;
+        border-radius: 24px;
+        padding: 24px;
+        background:
+          radial-gradient(circle at 80% 18%, rgba(20, 184, 166, 0.28), transparent 10rem),
+          linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(255, 255, 255, 0.9));
+      }
+
+      .service-ticket {
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 18px;
+        padding: 16px;
+        background: rgba(255, 255, 255, 0.8);
+        box-shadow: 0 18px 48px rgba(15, 23, 42, 0.14);
+      }
+
+      .tool-board {
+        display: grid;
+        gap: 10px;
+      }
+    </style>
+  </head>
+  <body class="site-frame">
+    <header class="demo-header">
+      <div class="demo-container demo-nav">
+        <a class="brand" href="#"><span class="brand-mark">U</span>Услуга муж на час</a>
+        <nav class="nav-links">
+          <a href="#works">Работы</a>
+          <a href="#prices">Форматы</a>
+          <a href="#benefits">Преимущества</a>
+          <a href="#lead">Заявка</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="demo-container demo-hero">
+        <div class="hero-copy">
+          <span class="kicker">Мастер на дом</span>
+          <h1>Сайт для заявок на бытовой ремонт и мелкие работы</h1>
+          <p class="lead">Готовая структура для частного мастера или небольшой команды: перечень работ, цены от, доверие, быстрый расчёт и заявка.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#lead">Вызвать мастера</a>
+            <a class="btn" href="#works">Смотреть работы</a>
+          </div>
+          <div class="trust-row">
+            <span>Выезд по району</span>
+            <span>Оплата после работы</span>
+            <span>Заявка за минуту</span>
+          </div>
+        </div>
+
+        <div class="hero-card">
+          <div class="browser-bar"><span></span><span></span><span></span></div>
+          <div class="service-desk">
+            <div class="tool-kit"><i></i><i></i><i></i></div>
+            <div class="tool-board">
+              <div class="service-ticket"><b>Новая заявка</b><p>Повесить полку, собрать шкаф, заменить розетку.</p></div>
+              <div class="service-ticket"><b>Срок</b><p>Сегодня после 18:00</p></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="works">
+        <div class="section-head">
+          <h2>Популярные работы</h2>
+          <p class="lead">Клиент видит конкретные задачи и понимает, что мастер работает с его проблемой.</p>
+        </div>
+        <div class="grid grid-4">
+          <article class="catalog-card">
+            <div class="card-media"><div class="tool-kit"><i></i><i></i><i></i></div></div>
+            <h3>Сборка мебели</h3>
+            <p>Шкафы, столы, кровати, кухонные модули и крепления.</p>
+            <strong class="price">от 1 500 ₽</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="tool-kit"><i></i><i></i><i></i></div></div>
+            <h3>Мелкая электрика</h3>
+            <p>Розетки, выключатели, светильники, диагностика.</p>
+            <strong class="price">от 900 ₽</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="tool-kit"><i></i><i></i><i></i></div></div>
+            <h3>Сантехника</h3>
+            <p>Смесители, сифоны, протечки и подключение техники.</p>
+            <strong class="price">от 1 200 ₽</strong>
+          </article>
+          <article class="catalog-card">
+            <div class="card-media"><div class="tool-kit"><i></i><i></i><i></i></div></div>
+            <h3>Крепёж и монтаж</h3>
+            <p>Полки, карнизы, зеркала, телевизоры и декор.</p>
+            <strong class="price">от 800 ₽</strong>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="prices">
+        <div class="price-grid">
+          <article class="price-card"><h3>Разовая задача</h3><strong>от 800 ₽</strong><p>Для небольших работ на 1-2 часа.</p></article>
+          <article class="price-card"><h3>Полдня</h3><strong>от 3 500 ₽</strong><p>Несколько задач за один выезд.</p></article>
+          <article class="price-card"><h3>Под ключ</h3><strong>по расчёту</strong><p>Ремонт, сборка и монтаж в одном заказе.</p></article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="benefits">
+        <div class="split-section">
+          <article class="premium-panel">
+            <h2>Почему удобно через сайт</h2>
+            <ul class="feature-list">
+              <li>Клиент выбирает тип работы без длинного объяснения</li>
+              <li>Заявка сразу содержит адрес, контакт и время</li>
+              <li>Цены от помогают отсеять случайные обращения</li>
+              <li>Форма подходит для рекламы и соцсетей</li>
+            </ul>
+          </article>
+          <form class="form-card" id="lead">
+            <h2>Оставить заявку</h2>
+            <div class="form-grid">
+              <label>Имя<input placeholder="Иван"></label>
+              <label>Телефон<input placeholder="+7 999 123-45-67"></label>
+              <label>Что нужно сделать<select><option>Сборка мебели</option><option>Электрика</option><option>Сантехника</option><option>Другая задача</option></select></label>
+              <label>Когда удобно<input placeholder="Сегодня вечером"></label>
+              <label class="wide">Комментарий<textarea placeholder="Кратко опишите задачу"></textarea></label>
+              <button class="btn btn-primary wide" type="button">Отправить мастеру</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><div class="demo-container">Demo WEB00 Pro · Услуга муж на час</div></footer>
+  </body>
+</html>

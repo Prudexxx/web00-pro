@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Превью мини-магазина одежды</title>
+  <desc id="desc">Темный fashion storefront с коллекциями, карточками товаров и кнопкой заказа.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#050812"/><stop offset=".55" stop-color="#111827"/><stop offset="1" stop-color="#2d132f"/></linearGradient>
+    <linearGradient id="pink" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff2d55"/><stop offset=".55" stop-color="#8b5cf6"/><stop offset="1" stop-color="#3b82f6"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="28"/></filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="210" cy="160" r="170" fill="#ff2d55" opacity=".22" filter="url(#glow)"/>
+  <circle cx="1040" cy="610" r="210" fill="#8b5cf6" opacity=".26" filter="url(#glow)"/>
+  <rect x="86" y="70" width="1108" height="580" rx="36" fill="#0b1020" stroke="#fff" stroke-opacity=".12"/>
+  <rect x="126" y="112" width="1028" height="54" rx="18" fill="#050812"/>
+  <text x="158" y="146" fill="#fff" font-family="Arial, sans-serif" font-size="24" font-weight="800">STYLE DROP</text>
+  <rect x="900" y="125" width="82" height="20" rx="10" fill="#fff" opacity=".12"/><rect x="1000" y="125" width="96" height="20" rx="10" fill="url(#pink)"/>
+  <text x="140" y="248" fill="#fff" font-family="Arial, sans-serif" font-size="54" font-weight="800">Новая коллекция</text>
+  <text x="144" y="296" fill="#94a3b8" font-family="Arial, sans-serif" font-size="24">Мини-магазин с заказом из соцсетей</text>
+  <rect x="144" y="338" width="188" height="48" rx="24" fill="url(#pink)"/>
+  <text x="188" y="369" fill="#fff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Выбрать образ</text>
+  <g transform="translate(520 210)">
+    <rect width="180" height="320" rx="28" fill="#141c2d" stroke="#fff" stroke-opacity=".1"/>
+    <path d="M72 58h36l34 52-28 28v130H66V138l-28-28z" fill="#f472b6" opacity=".86"/>
+    <rect x="34" y="258" width="112" height="16" rx="8" fill="#fff" opacity=".18"/>
+    <rect x="34" y="288" width="82" height="36" rx="18" fill="#ef233c"/>
+  </g>
+  <g transform="translate(740 210)">
+    <rect width="180" height="320" rx="28" fill="#141c2d" stroke="#fff" stroke-opacity=".1"/>
+    <path d="M58 70h64l20 54-28 18v122H66V142l-28-18z" fill="#60a5fa" opacity=".84"/>
+    <rect x="34" y="258" width="112" height="16" rx="8" fill="#fff" opacity=".18"/>
+    <rect x="34" y="288" width="82" height="36" rx="18" fill="#ef233c"/>
+  </g>
+  <g transform="translate(960 210)">
+    <rect width="180" height="320" rx="28" fill="#141c2d" stroke="#fff" stroke-opacity=".1"/>
+    <path d="M76 58h28l30 70-24 20v116H70V148l-24-20z" fill="#c4b5fd" opacity=".86"/>
+    <rect x="34" y="258" width="112" height="16" rx="8" fill="#fff" opacity=".18"/>
+    <rect x="34" y="288" width="82" height="36" rx="18" fill="#ef233c"/>
+  </g>
+</svg>

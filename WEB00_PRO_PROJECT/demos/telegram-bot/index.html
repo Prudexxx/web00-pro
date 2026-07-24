@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Telegram-бот для заявок — demo</title>
+    <link rel="stylesheet" href="../demo.css">
+    <style>
+      :root { --accent: #3b82f6; --accent-2: #8b5cf6; }
+
+      .bot-hero {
+        grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
+      }
+
+      .bot-demo-stage {
+        min-height: 460px;
+        display: grid;
+        grid-template-columns: minmax(0, 0.92fr) minmax(250px, 0.78fr);
+        gap: 18px;
+        align-items: stretch;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 28px;
+        padding: 18px;
+        background:
+          radial-gradient(circle at 78% 12%, rgba(139, 92, 246, 0.28), transparent 12rem),
+          radial-gradient(circle at 12% 88%, rgba(59, 130, 246, 0.2), transparent 14rem),
+          linear-gradient(145deg, rgba(15, 23, 42, 0.96), rgba(5, 8, 18, 0.98));
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+      }
+
+      .phone-shell {
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 30px;
+        background: #0b1020;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 22px 56px rgba(0, 0, 0, 0.28);
+      }
+
+      .phone-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 16px;
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.28), rgba(139, 92, 246, 0.18));
+      }
+
+      .bot-profile {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .bot-profile span {
+        width: 42px;
+        height: 42px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+        color: #fff;
+        font-weight: 900;
+      }
+
+      .bot-status {
+        color: #93c5fd;
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      .chat-feed {
+        display: grid;
+        gap: 12px;
+        padding: 18px;
+      }
+
+      .bot-message,
+      .client-message {
+        width: fit-content;
+        max-width: 86%;
+        border-radius: 19px;
+        padding: 12px 14px;
+        line-height: 1.45;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+      }
+
+      .bot-message {
+        background: rgba(255, 255, 255, 0.08);
+        color: #dbeafe;
+      }
+
+      .client-message {
+        justify-self: end;
+        background: linear-gradient(135deg, #2563eb, #3b82f6);
+        color: #fff;
+      }
+
+      .bot-keyboard {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        padding: 0 18px 18px;
+      }
+
+      .bot-keyboard span,
+      .scenario-chip {
+        min-height: 38px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(59, 130, 246, 0.24);
+        border-radius: 12px;
+        padding: 9px 11px;
+        background: rgba(59, 130, 246, 0.14);
+        color: #bfdbfe;
+        font-weight: 900;
+      }
+
+      .bot-keyboard span:first-child {
+        grid-column: 1 / -1;
+        background: linear-gradient(135deg, #ef233c, #8b5cf6);
+        color: #fff;
+      }
+
+      .owner-ticket {
+        display: grid;
+        align-content: start;
+        gap: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 24px;
+        padding: 18px;
+        background:
+          radial-gradient(circle at 100% 0, rgba(239, 35, 60, 0.18), transparent 10rem),
+          rgba(255, 255, 255, 0.06);
+      }
+
+      .ticket-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: start;
+      }
+
+      .ticket-badge {
+        border-radius: 999px;
+        padding: 7px 10px;
+        background: rgba(34, 197, 94, 0.14);
+        color: #86efac;
+        font-size: 0.78rem;
+        font-weight: 900;
+      }
+
+      .ticket-row {
+        display: grid;
+        gap: 4px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        padding-bottom: 12px;
+      }
+
+      .ticket-row span {
+        color: #94a3b8;
+        font-size: 0.82rem;
+        font-weight: 800;
+      }
+
+      .ticket-row b {
+        color: #f8fafc;
+      }
+
+      .bot-flow {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .flow-node {
+        position: relative;
+        min-height: 180px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 24px;
+        padding: 20px;
+        background:
+          radial-gradient(circle at 85% 16%, rgba(139, 92, 246, 0.18), transparent 8rem),
+          rgba(255, 255, 255, 0.06);
+        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.24);
+      }
+
+      .flow-node:not(:last-child)::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        right: -24px;
+        width: 32px;
+        height: 2px;
+        background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+      }
+
+      .scenario-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .scenario-card {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 22px;
+        padding: 18px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .bot-cta {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        align-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 28px;
+        padding: 24px;
+        background:
+          radial-gradient(circle at 8% 10%, rgba(239, 35, 60, 0.18), transparent 12rem),
+          linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(139, 92, 246, 0.1));
+      }
+
+      @media (max-width: 900px) {
+        .bot-hero,
+        .bot-demo-stage,
+        .bot-flow,
+        .scenario-grid,
+        .bot-cta {
+          grid-template-columns: 1fr;
+        }
+
+        .flow-node::after {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body class="dark-demo site-frame">
+    <header class="demo-header">
+      <div class="demo-container demo-nav">
+        <a class="brand" href="#"><span class="brand-mark">B</span>Telegram-бот для заявок</a>
+        <nav class="nav-links">
+          <a href="#chat">Чат</a>
+          <a href="#owner">Заявка</a>
+          <a href="#flow">Схема</a>
+          <a href="#cta">CTA</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="demo-container demo-hero bot-hero" id="chat">
+        <div class="hero-copy">
+          <span class="kicker">Автоматизация заявок</span>
+          <h1>Telegram-бот принимает заявки без ручной переписки</h1>
+          <p class="lead">Демо показывает, как клиент проходит короткий сценарий, оставляет контакт, а владелец получает готовую карточку заявки.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#cta">Хочу такого бота</a>
+            <a class="btn" href="#owner">Посмотреть заявку</a>
+          </div>
+          <div class="trust-row">
+            <span>Кнопки вместо хаоса</span>
+            <span>Контакт в заявке</span>
+            <span>Уведомление владельцу</span>
+          </div>
+        </div>
+
+        <div class="bot-demo-stage">
+          <div class="phone-shell">
+            <div class="phone-top">
+              <div class="bot-profile">
+                <span>WB</span>
+                <div><b>WEB00 Bot</b><br><small class="bot-status">online · отвечает сразу</small></div>
+              </div>
+              <b class="bot-status">Telegram</b>
+            </div>
+            <div class="chat-feed">
+              <div class="bot-message">Здравствуйте! Я помогу быстро оставить заявку. Что хотите сделать?</div>
+              <div class="client-message">Нужен сайт для бизнеса</div>
+              <div class="bot-message">Выберите действие:</div>
+            </div>
+            <div class="bot-keyboard">
+              <span>Оставить заявку</span>
+              <span>Узнать цену</span>
+              <span>Связаться</span>
+            </div>
+            <div class="chat-feed">
+              <div class="client-message">Оставить заявку</div>
+              <div class="bot-message">Напишите имя, услугу и контакт. Я передам данные владельцу.</div>
+              <div class="client-message">Алексей, сайт под ключ, +7 999 123-45-67</div>
+            </div>
+          </div>
+
+          <aside class="owner-ticket" id="owner">
+            <div class="ticket-head">
+              <div>
+                <span class="kicker">Заявка владельцу</span>
+                <h2>Новая заявка</h2>
+              </div>
+              <span class="ticket-badge">Новая</span>
+            </div>
+            <div class="ticket-row"><span>Имя</span><b>Алексей</b></div>
+            <div class="ticket-row"><span>Услуга</span><b>сайт под ключ</b></div>
+            <div class="ticket-row"><span>Контакт</span><b>+7 999 123-45-67</b></div>
+            <div class="ticket-row"><span>Источник</span><b>Telegram-бот</b></div>
+            <div class="bot-buttons"><span>Взять в работу</span><span>Написать клиенту</span></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="demo-container section">
+        <div class="section-head">
+          <h2>Сценарии кнопок</h2>
+          <p class="lead">Бот ведёт клиента по понятному пути и собирает одинаковую структуру данных.</p>
+        </div>
+        <div class="scenario-grid">
+          <article class="scenario-card">
+            <span class="scenario-chip">Оставить заявку</span>
+            <h3>Сбор данных</h3>
+            <p>Имя, услуга, контакт, комментарий и удобное время связи.</p>
+          </article>
+          <article class="scenario-card">
+            <span class="scenario-chip">Узнать цену</span>
+            <h3>Квалификация</h3>
+            <p>Бот уточняет тип задачи и помогает оценить стартовый бюджет.</p>
+          </article>
+          <article class="scenario-card">
+            <span class="scenario-chip">Связаться</span>
+            <h3>Быстрый контакт</h3>
+            <p>Клиент может сразу перейти к владельцу, если нужна консультация.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="flow">
+        <div class="section-head">
+          <h2>Клиент → бот → уведомление владельцу</h2>
+          <p class="lead">Схема показывает, что Telegram-бот — это не чат ради чата, а система обработки заявок.</p>
+        </div>
+        <div class="bot-flow">
+          <article class="flow-node">
+            <h3>Клиент</h3>
+            <p>Выбирает кнопку, отвечает на короткие вопросы и оставляет контакт.</p>
+          </article>
+          <article class="flow-node">
+            <h3>Бот</h3>
+            <p>Собирает данные, формирует заявку и не даёт потерять важные детали.</p>
+          </article>
+          <article class="flow-node">
+            <h3>Владелец</h3>
+            <p>Получает уведомление с именем, услугой и контактом клиента.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="demo-container section" id="cta">
+        <div class="bot-cta">
+          <div>
+            <h2>Хочу такого бота</h2>
+            <p class="lead">Такой сценарий можно адаптировать под сайт, услуги, каталог, запись, доставку или консультации.</p>
+          </div>
+          <a class="btn btn-primary" href="#chat">Хочу такого бота</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><div class="demo-container">Demo WEB00 Pro · Telegram-бот для заявок</div></footer>
+  </body>
+</html>
