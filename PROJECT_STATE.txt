@@ -1,0 +1,82 @@
+WEB00 Pro handoff state - 2026-07-24
+
+HEAD:
+391ba7948f031b37590f155503bdb696fbbd2323
+
+BRANCH:
+main
+
+STATUS:
+## main...origin/main
+ M .codex/config.toml
+ M assets/css/components.css
+ M assets/css/home.css
+ M assets/css/shell.css
+ M assets/css/styles.css
+ M assets/css/tokens.css
+ M assets/css/web00-tabs-standard.css
+ M index.html
+?? .codex/config.toml.backup-20260710-051234
+?? SKILL.md
+?? WEB00_VISUAL_ACCEPTANCE_PROMPT_PACK/
+?? _release/
+?? "assets/img/ChatGPT Image 6 \320\270\321\216\320\273. 2026 \320\263., 14_19_35.png"
+?? assets/img/matryoshka-source-final.webp
+?? docs/WEB00_BACKEND_ADMIN_PHASE_0_START_PLAN.md
+?? docs/WEB00_BATCH_2_3_4_ACCEPTANCE_REVIEW.md
+?? docs/WEB00_CROSS_PAGE_DESIGN_SYSTEM_UNIFICATION_REPORT.md
+?? docs/WEB00_DESIGN_FINALITY_AUDIT_REPORT.md
+?? docs/WEB00_DESIGN_FINALITY_DECISION.md
+?? docs/WEB00_DESIGN_FINALITY_EXECUTION_PROMPT_DRAFT.md
+?? docs/WEB00_DESIGN_POLISH_OPPORTUNITY_MAP.md
+?? docs/WEB00_DESIGN_VIDEO_QA_READINESS_CHECKLIST.md
+?? docs/WEB00_FRONTEND_LOCAL_FINAL_CERTIFICATE.md
+?? docs/WEB00_FRONTEND_LOCAL_FINAL_CLOSEOUT.md
+?? docs/WEB00_FRONTEND_PUBLIC_RC1_CERTIFICATE.md
+?? docs/WEB00_FRONTEND_TO_BACKEND_HANDOFF.md
+?? docs/WEB00_HERO_H1_ALIGN_TO_MATRYOSHKA_REPORT.md
+?? docs/WEB00_HERO_H1_PROPORTION_FIX_REPORT.md
+?? docs/WEB00_HERO_H1_TYPOGRAPHY_RESTORE_REPORT.md
+?? docs/WEB00_LIVE_RC1_CLOSEOUT_REPORT.md
+?? docs/WEB00_MATRESHKA_IMPLEMENTATION_PROMPT_DRAFT.md
+?? docs/WEB00_MATRESHKA_IMPLEMENTATION_V1_REPORT.md
+?? docs/WEB00_MATRESHKA_MOCKUP_AUDIT.md
+?? docs/WEB00_MATRYOSHKA_ASSET_RECONCILIATION_REPORT.md
+?? docs/WEB00_MATRYOSHKA_H1_ALIGNMENT_FIX_REPORT.md
+?? docs/WEB00_MATRYOSHKA_LIVE_POST_PUSH_ACCEPTANCE.md
+?? docs/WEB00_MATRYOSHKA_REGEN_V2_REPORT.md
+?? docs/WEB00_MATRYOSHKA_SOURCE_FINAL_APPLY_REPORT.md
+?? docs/WEB00_NEXT_PHASE_BACKEND_ADMIN_ROADMAP.md
+?? docs/WEB00_OWNER_ACCEPTANCE_PACK.md
+?? docs/WEB00_RC1_RELEASE_NOTES.md
+?? docs/WEB00_SUPERCODEX_MEMORY_JOURNAL.md
+
+LAST 20 COMMITS:
+391ba79 fix: accept WEB00 matryoshka hero assets
+1f8a97c fix: polish WEB00 homepage final copy and cards
+c47d5af fix: polish WEB00 desktop home bugbase batch 1
+f594d86 ci: deploy WEB00 via GitHub Pages Actions
+d2e8091 fix: close WEB00 video QA P1 blockers
+c2e625f fix: close WEB00 design P1 gates
+2ce3825 feat: integrate responsive matryoshka hero
+7f23272 feat: add responsive matryoshka hero
+2f13097 chore: add codex foundation guardrails
+3c50c8c fix: close Wave 10.1 mobile responsive guards
+840adbf fix: clean WEB00 public language gate
+126932f chore: establish WEB00 Pro 2.0 frontend RC1
+57808ab fix: polish WEB00 mobile frontend
+5d2c085 chore: finalize WEB00 frontend product polish
+b38f5d5 fix: rebuild WEB00 status dashboard
+c808e3b fix: align WEB00 home pricing and brief density
+1bed57f fix: stabilize WEB00 header footer nav and mobile controls
+7eb8bb7 chore: remove legacy footer text
+9667683 fix: add favicon links to public pages
+4d01bd4 chore: add WEB00 Pro footer credits
+
+REMOTES:
+origin	https://github.com/kattta222-cmd/web00-pro.git (fetch)
+origin	https://github.com/kattta222-cmd/web00-pro.git (push)
+
+RUNTIMES:
+v24.18.0
+Python 3.13.14
