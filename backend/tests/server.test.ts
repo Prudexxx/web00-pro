@@ -1,5 +1,10 @@
 import type { Server } from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import express from "express";
+import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createApp } from "../src/app.js";
 import type { AppEnv } from "../src/config/env.js";
 import { createShutdownHandler } from "../src/server.js";
 
@@ -86,5 +91,32 @@ describe("createShutdownHandler", () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(exit).not.toHaveBeenCalled();
+  });
+});
+
+describe("app/server auth integration boundary", () => {
+  it("mounts injected auth routes before the final 404 handler", async () => {
+    const authRoutes = express.Router();
+
+    authRoutes.get("/test", (_request, response) => {
+      response.json({ data: "auth" });
+    });
+
+    const app = createApp({ authRoutes, env: testEnv });
+
+    await request(app).get("/api/auth/test").expect(200);
+  });
+
+  it("keeps app.ts free from process.env reads", () => {
+    const source = readFileSync(join(process.cwd(), "src", "app.ts"), "utf8");
+
+    expect(source).not.toContain("process.env");
+  });
+
+  it("uses numeric trust proxy hops and never boolean true", () => {
+    const app = createApp({ env: testEnv, trustProxyHops: 2 });
+
+    expect(app.get("trust proxy")).toBe(2);
+    expect(app.get("trust proxy")).not.toBe(true);
   });
 });

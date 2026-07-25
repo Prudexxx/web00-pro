@@ -9,7 +9,15 @@ const mutableEnvKeys = [
   "SERVICE_NAME",
   "DATABASE_URL",
   "SHADOW_DATABASE_URL",
-  "TEST_DATABASE_URL"
+  "TEST_DATABASE_URL",
+  "JWT_ACCESS_SECRET_BASE64",
+  "JWT_ISSUER",
+  "JWT_AUDIENCE",
+  "ACCESS_TOKEN_TTL_SECONDS",
+  "REFRESH_TOKEN_TTL_SECONDS",
+  "AUTH_ORIGIN",
+  "AUTH_FINGERPRINT_SECRET_BASE64",
+  "TRUST_PROXY_HOPS"
 ] as const;
 const originalValues = new Map<string, string | undefined>();
 

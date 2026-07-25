@@ -1,3 +1,4 @@
+import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -40,6 +41,21 @@ describe("GET /api/health", () => {
     const response = await request(app).get("/api/health").expect(200);
 
     expect(response.header["x-request-id"]).toMatch(/^req_[0-9a-f-]{36}$/);
+  });
+
+  it("remains public when auth routes are mounted", async () => {
+    const router = express.Router();
+    const authRoutes = vi.fn();
+
+    router.use((_request, _response, next) => {
+      authRoutes();
+      next();
+    });
+    const app = createApp({ authRoutes: router, env: testEnv });
+
+    await request(app).get("/api/health").expect(200);
+
+    expect(authRoutes).not.toHaveBeenCalled();
   });
 
   it("preserves a valid request id header", async () => {
@@ -98,7 +114,7 @@ describe("GET /api/health", () => {
       service: "web00-backend",
       statusCode: 201
     });
-    if (entry === undefined || !("requestId" in entry)) {
+    if (entry === undefined || !("durationMs" in entry)) {
       throw new Error("Expected a request log entry.");
     }
 

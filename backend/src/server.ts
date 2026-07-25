@@ -1,7 +1,10 @@
 import { createServer, type Server } from "node:http";
+import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { createApp } from "./app.js";
+import type { AuthEnv } from "./config/auth-env.js";
+import { parseAuthEnv } from "./config/auth-env.js";
 import type { DatabaseEnv } from "./config/database-env.js";
 import { parseDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
@@ -9,6 +12,15 @@ import { parseEnv } from "./config/env.js";
 import { createPrismaClient } from "./db/prisma.js";
 import type { PrismaClient } from "./generated/prisma/client.js";
 import { createLogger, type AppLogger } from "./lib/logger.js";
+import { createAccessTokenService } from "./modules/auth/access-token.service.js";
+import { createAuthAuditService } from "./modules/auth/auth-audit.js";
+import { createAuthCookieService } from "./modules/auth/auth-cookie.js";
+import { createCredentialVerifier } from "./modules/auth/auth-credentials.service.js";
+import { createAuthRepository } from "./modules/auth/auth.repository.js";
+import { createAuthRouter } from "./modules/auth/auth.routes.js";
+import { createAuthService } from "./modules/auth/auth.service.js";
+import { createArgon2PasswordHasher } from "./modules/auth/password.service.js";
+import { createRefreshTokenService } from "./modules/auth/refresh-token.service.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
@@ -23,6 +35,7 @@ export interface ShutdownHandlerOptions {
 }
 
 export interface StartServerOptions {
+  authEnv: AuthEnv;
   createPrisma?: typeof createPrismaClient;
   databaseEnv: DatabaseEnv;
   env: AppEnv;
@@ -44,10 +57,43 @@ export function startServer(options: StartServerOptions): StartedServer {
   });
   const repository = createPrismaPublicCatalogRepository({ prisma });
   const publicCatalogService = createPublicCatalogService({ repository });
+  const authRepository = createAuthRepository({ prisma });
+  const authService = createAuthService({
+    accessTokenTtlSeconds: options.authEnv.ACCESS_TOKEN_TTL_SECONDS,
+    accessTokens: createAccessTokenService({
+      audience: options.authEnv.JWT_AUDIENCE,
+      issuer: options.authEnv.JWT_ISSUER,
+      secret: options.authEnv.JWT_ACCESS_SECRET,
+      ttlSeconds: options.authEnv.ACCESS_TOKEN_TTL_SECONDS
+    }),
+    audit: createAuthAuditService({
+      fingerprintSecret: options.authEnv.AUTH_FINGERPRINT_SECRET
+    }),
+    clock: options.now ?? (() => new Date()),
+    credentials: createCredentialVerifier({
+      hasher: createArgon2PasswordHasher(),
+      repository: authRepository
+    }),
+    environment: options.env.NODE_ENV,
+    logger,
+    randomUUID,
+    refreshTokenTtlSeconds: options.authEnv.REFRESH_TOKEN_TTL_SECONDS,
+    refreshTokens: createRefreshTokenService(),
+    repository: authRepository,
+    serviceName: options.env.SERVICE_NAME
+  });
+  const authRoutes = createAuthRouter({
+    authEnv: options.authEnv,
+    cookies: createAuthCookieService({ nodeEnv: options.env.NODE_ENV }),
+    nodeEnv: options.env.NODE_ENV,
+    service: authService
+  });
   const createAppOptions = {
+    authRoutes,
     env: options.env,
     logger,
-    publicCatalogService
+    publicCatalogService,
+    trustProxyHops: options.authEnv.TRUST_PROXY_HOPS
   };
   const app = createApp(
     options.now === undefined
@@ -173,8 +219,9 @@ async function handleServerClosed(
 export function main(): StartedServer {
   const env = parseEnv(process.env);
   const databaseEnv = parseDatabaseEnv(process.env);
+  const authEnv = parseAuthEnv(process.env);
 
-  return startServer({ databaseEnv, env });
+  return startServer({ authEnv, databaseEnv, env });
 }
 
 if (isDirectRun()) {

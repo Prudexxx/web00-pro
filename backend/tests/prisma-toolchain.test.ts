@@ -19,8 +19,12 @@ describe("Prisma toolchain contract", () => {
     expect(packageJson.dependencies).toMatchObject({
       "@prisma/client": expect.stringMatching(/^(\^)?7\./),
       "@prisma/adapter-pg": expect.stringMatching(/^(\^)?7\./),
+      argon2: "0.45.1",
+      cookie: "2.0.1",
       dotenv: expect.stringMatching(/^(\^)?17\./),
       express: "^5.2.1",
+      "express-rate-limit": "8.6.0",
+      jose: "6.2.3",
       pg: expect.stringMatching(/^\^8\./),
       zod: "^4.4.3"
     });
@@ -28,6 +32,11 @@ describe("Prisma toolchain contract", () => {
       "@types/pg": expect.stringMatching(/^\^8\./),
       prisma: expect.stringMatching(/^(\^)?7\./)
     });
+    expect(packageJson.dependencies).not.toHaveProperty("bcrypt");
+    expect(packageJson.dependencies).not.toHaveProperty("cookie-parser");
+    expect(packageJson.dependencies).not.toHaveProperty("express-session");
+    expect(packageJson.dependencies).not.toHaveProperty("jsonwebtoken");
+    expect(packageJson).not.toHaveProperty("overrides");
     expect(packageJson.scripts).toMatchObject({
       "db:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
       "db:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",

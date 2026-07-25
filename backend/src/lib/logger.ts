@@ -21,7 +21,17 @@ export interface LifecycleLogEntry {
   time: string;
 }
 
-export type AppLogEntry = LifecycleLogEntry | RequestLogEntry;
+export interface AuthSecurityLogEntry {
+  emailHash?: string;
+  environment: AppEnv["NODE_ENV"] | string;
+  event: "auth.login.failed";
+  level: "warn";
+  requestId: string;
+  service: string;
+  time: string;
+}
+
+export type AppLogEntry = AuthSecurityLogEntry | LifecycleLogEntry | RequestLogEntry;
 
 export interface AppLogger {
   log(entry: AppLogEntry): void;
