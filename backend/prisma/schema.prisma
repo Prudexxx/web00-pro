@@ -1,0 +1,141 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email           String           @unique(map: "users_email_key") @db.Text
+  passwordHash    String           @map("password_hash") @db.Text
+  role            String           @default("editor") @db.Text
+  active          Boolean          @default(true)
+  lastLoginAt     DateTime?        @map("last_login_at") @db.Timestamptz(6)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+  refreshSessions RefreshSession[]
+  auditLogs       AuditLog[]
+
+  @@index([active, role], map: "idx_users_active_role")
+  @@map("users")
+}
+
+model RefreshSession {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String          @map("user_id") @db.Uuid
+  tokenHash           String          @unique(map: "refresh_sessions_token_hash_key") @map("token_hash") @db.Text
+  familyId            String          @map("family_id") @db.Uuid
+  replacedBySessionId String?         @unique(map: "refresh_sessions_replaced_by_session_id_key") @map("replaced_by_session_id") @db.Uuid
+  revokedAt           DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  expiresAt           DateTime        @map("expires_at") @db.Timestamptz(6)
+  ipHash              String?         @map("ip_hash") @db.Text
+  userAgentHash       String?         @map("user_agent_hash") @db.Text
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBySession   RefreshSession? @relation("RefreshSessionReplacement", fields: [replacedBySessionId], references: [id], onDelete: SetNull)
+  replacementSource   RefreshSession? @relation("RefreshSessionReplacement")
+
+  @@index([userId, expiresAt], map: "idx_refresh_sessions_user_expires")
+  @@index([familyId, revokedAt], map: "idx_refresh_sessions_family_revoked")
+  @@map("refresh_sessions")
+}
+
+model Category {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug        String   @unique(map: "categories_slug_key") @db.Text
+  title       String   @db.Text
+  description String?  @db.Text
+  sortOrder   Int      @default(0) @map("sort_order")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sites       Site[]
+
+  @@index([active, sortOrder], map: "idx_categories_active_sort_order")
+  @@map("categories")
+}
+
+model Site {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug             String    @unique(map: "sites_slug_key") @db.Text
+  title            String    @db.Text
+  categoryId       String    @map("category_id") @db.Uuid
+  legacyTitle      String?   @map("legacy_title") @db.Text
+  shortDescription String    @map("short_description") @db.Text
+  fullDescription  String?   @map("full_description") @db.Text
+  features         String[]  @default([])
+  tags             String[]  @default([])
+  demoUrl          String?   @map("demo_url") @db.Text
+  siteUrl          String?   @map("site_url") @db.Text
+  previewImageUrl  String?   @map("preview_image_url") @db.Text
+  galleryImages    Json      @default("[]") @map("gallery_images") @db.JsonB
+  previewType      String?   @map("preview_type") @db.Text
+  demoMode         String?   @map("demo_mode") @db.Text
+  demoLocalUrl     String?   @map("demo_local_url") @db.Text
+  externalDemoUrl  String?   @map("external_demo_url") @db.Text
+  originalDemoUrl  String?   @map("original_demo_url") @db.Text
+  priceAmountCents Int?      @map("price_amount_cents")
+  priceLabel       String?   @map("price_label") @db.Text
+  developmentDays  Int?      @map("development_days")
+  deliveryLabel    String?   @map("delivery_label") @db.Text
+  status           String    @default("draft") @db.Text
+  active           Boolean   @default(true)
+  featured         Boolean   @default(false)
+  views            Int       @default(0)
+  sortOrder        Int       @default(0) @map("sort_order")
+  publishedAt      DateTime? @map("published_at") @db.Timestamptz(6)
+  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  category         Category  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@index([status, active, deletedAt], map: "idx_sites_status_active_deleted")
+  @@index([categoryId, status, active, deletedAt], map: "idx_sites_category_public")
+  @@index([featured, views, sortOrder, createdAt], map: "idx_sites_featured_order")
+  @@index([tags], type: Gin, map: "idx_sites_tags_gin")
+  @@index([features], type: Gin, map: "idx_sites_features_gin")
+  @@map("sites")
+}
+
+model AuditLog {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorUserId   String?  @map("actor_user_id") @db.Uuid
+  action        String   @db.Text
+  entityType    String   @map("entity_type") @db.Text
+  entityId      String?  @map("entity_id") @db.Uuid
+  beforeJson    Json?    @map("before_json") @db.JsonB
+  afterJson     Json?    @map("after_json") @db.JsonB
+  requestId     String   @map("request_id") @db.Text
+  ipHash        String?  @map("ip_hash") @db.Text
+  userAgentHash String?  @map("user_agent_hash") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  actorUser     User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId, createdAt], map: "idx_audit_logs_actor_created")
+  @@index([entityType, entityId], map: "idx_audit_logs_entity")
+  @@index([action, createdAt], map: "idx_audit_logs_action_created")
+  @@map("audit_logs")
+}
+
+model StorageCleanupJob {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  storagePath String    @map("storage_path") @db.Text
+  reason      String    @db.Text
+  entityType  String?   @map("entity_type") @db.Text
+  entityId    String?   @map("entity_id") @db.Uuid
+  status      String    @default("pending") @db.Text
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error") @db.Text
+  runAfter    DateTime  @default(now()) @map("run_after") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+
+  @@index([status, runAfter], map: "idx_storage_cleanup_jobs_status_run_after")
+  @@index([entityType, entityId], map: "idx_storage_cleanup_jobs_entity")
+  @@map("storage_cleanup_jobs")
+}

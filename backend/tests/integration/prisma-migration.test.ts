@@ -1,0 +1,435 @@
+import { randomUUID } from "node:crypto";
+import type { Client } from "pg";
+import { describe, expect, it } from "vitest";
+import { withTestClient } from "./test-database.js";
+
+const requiredTables = [
+  "users",
+  "refresh_sessions",
+  "categories",
+  "sites",
+  "audit_logs",
+  "storage_cleanup_jobs"
+];
+
+const requiredCheckConstraints = [
+  "users_role_check",
+  "users_email_lowercase_check",
+  "sites_status_check",
+  "sites_views_non_negative_check",
+  "sites_price_positive_check",
+  "sites_development_days_positive_check",
+  "sites_demo_mode_check",
+  "storage_cleanup_jobs_status_check",
+  "storage_cleanup_jobs_attempts_non_negative_check",
+  "audit_logs_entity_type_check"
+];
+
+describe("B2 PostgreSQL migration", () => {
+  it("creates the six approved B0 tables", async () => {
+    await withTestClient(async (client) => {
+      const result = await client.query<{ tablename: string }>(
+        `
+          SELECT tablename
+          FROM pg_tables
+          WHERE schemaname = 'public'
+            AND tablename = ANY($1::text[])
+          ORDER BY tablename
+        `,
+        [requiredTables]
+      );
+
+      expect(result.rows.map((row) => row.tablename)).toEqual([...requiredTables].sort());
+    });
+  });
+
+  it("creates approved CHECK constraints and indexes", async () => {
+    await withTestClient(async (client) => {
+      const constraints = await client.query<{ conname: string }>(
+        `
+          SELECT conname
+          FROM pg_constraint
+          WHERE conname = ANY($1::text[])
+          ORDER BY conname
+        `,
+        [requiredCheckConstraints]
+      );
+      const indexes = await client.query<{ indexname: string }>(
+        `
+          SELECT indexname
+          FROM pg_indexes
+          WHERE schemaname = 'public'
+            AND indexname = ANY($1::text[])
+          ORDER BY indexname
+        `,
+        [
+          [
+            "idx_sites_tags_gin",
+            "idx_sites_features_gin",
+            "idx_sites_status_active_deleted",
+            "idx_categories_active_sort_order"
+          ]
+        ]
+      );
+
+      expect(constraints.rows.map((row) => row.conname)).toEqual([...requiredCheckConstraints].sort());
+      expect(indexes.rows.map((row) => row.indexname)).toEqual([
+        "idx_categories_active_sort_order",
+        "idx_sites_features_gin",
+        "idx_sites_status_active_deleted",
+        "idx_sites_tags_gin"
+      ]);
+    });
+  });
+
+  it("enforces unique and check constraints", async () => {
+    await withTestClient(async (client) => {
+      const suffix = randomUUID();
+
+      await client.query("BEGIN");
+
+      try {
+        await client.query(
+          "INSERT INTO users (email, password_hash, role, updated_at) VALUES ($1, $2, $3, now())",
+          [`user-${suffix}@example.test`, "hash", "editor"]
+        );
+        await expect(
+          client.query("INSERT INTO users (email, password_hash, role, updated_at) VALUES ($1, $2, $3, now())", [
+            `user-${suffix}@example.test`,
+            "hash",
+            "editor"
+          ])
+        ).rejects.toThrow();
+
+        await client.query("ROLLBACK");
+        await client.query("BEGIN");
+
+        await expect(
+          client.query("INSERT INTO users (email, password_hash, role, updated_at) VALUES ($1, $2, $3, now())", [
+            `Mixed-${suffix}@example.test`,
+            "hash",
+            "editor"
+          ])
+        ).rejects.toThrow();
+
+        await client.query("ROLLBACK");
+        await client.query("BEGIN");
+
+        await expect(
+          client.query("INSERT INTO users (email, password_hash, role, updated_at) VALUES ($1, $2, $3, now())", [
+            `role-${suffix}@example.test`,
+            "hash",
+            "owner"
+          ])
+        ).rejects.toThrow();
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+    });
+  });
+
+  it("enforces catalog, session, cleanup, and audit guards", async () => {
+    await withTestClient(async (client) => {
+      const suffix = randomUUID();
+
+      await expectRejectedTransaction(
+        client,
+        async () => {
+          await client.query(
+            "INSERT INTO categories (slug, title, updated_at) VALUES ($1, $2, now())",
+            [`category-unique-${suffix}`, "Category"]
+          );
+        },
+        async () => {
+          await client.query(
+            "INSERT INTO categories (slug, title, updated_at) VALUES ($1, $2, now())",
+            [`category-unique-${suffix}`, "Category duplicate"]
+          );
+        }
+      );
+
+      await expectRejectedTransaction(
+        client,
+        async () => {
+          const categoryId = await createCategory(client, `site-unique-category-${suffix}`);
+
+          await client.query(
+            `
+              INSERT INTO sites (slug, title, category_id, short_description, updated_at)
+              VALUES ($1, $2, $3, $4, now())
+            `,
+            [`site-unique-${suffix}`, "Site", categoryId, "Description"]
+          );
+        },
+        async () => {
+          const categoryId = await selectCategoryId(client, `site-unique-category-${suffix}`);
+
+          await client.query(
+            `
+              INSERT INTO sites (slug, title, category_id, short_description, updated_at)
+              VALUES ($1, $2, $3, $4, now())
+            `,
+            [`site-unique-${suffix}`, "Site duplicate", categoryId, "Description"]
+          );
+        }
+      );
+
+      await expectRejectedTransaction(
+        client,
+        async () => {
+          const userId = await createUser(client, `token-unique-${suffix}@example.test`);
+
+          await client.query(
+            `
+              INSERT INTO refresh_sessions (user_id, token_hash, family_id, expires_at, updated_at)
+              VALUES ($1, $2, gen_random_uuid(), now() + interval '1 day', now())
+            `,
+            [userId, `refresh-token-${suffix}`]
+          );
+        },
+        async () => {
+          const userId = await selectUserId(client, `token-unique-${suffix}@example.test`);
+
+          await client.query(
+            `
+              INSERT INTO refresh_sessions (user_id, token_hash, family_id, expires_at, updated_at)
+              VALUES ($1, $2, gen_random_uuid(), now() + interval '1 day', now())
+            `,
+            [userId, `refresh-token-${suffix}`]
+          );
+        }
+      );
+
+      await expectInvalidSiteField(client, `negative-views-${suffix}`, "views", -1);
+      await expectInvalidSiteField(client, `zero-price-${suffix}`, "price_amount_cents", 0);
+      await expectInvalidSiteField(client, `zero-days-${suffix}`, "development_days", 0);
+      await expectInvalidSiteField(client, `bad-status-${suffix}`, "status", "deleted");
+      await expectInvalidSiteField(client, `bad-demo-mode-${suffix}`, "demo_mode", "iframe");
+
+      await expectRejectedTransaction(
+        client,
+        async () => undefined,
+        async () => {
+          await client.query(
+            `
+              INSERT INTO storage_cleanup_jobs (storage_path, reason, status, attempts, updated_at)
+              VALUES ($1, $2, $3, $4, now())
+            `,
+            [`catalog/${suffix}/image.png`, "test", "queued", 0]
+          );
+        }
+      );
+
+      await expectRejectedTransaction(
+        client,
+        async () => undefined,
+        async () => {
+          await client.query(
+            `
+              INSERT INTO storage_cleanup_jobs (storage_path, reason, status, attempts, updated_at)
+              VALUES ($1, $2, $3, $4, now())
+            `,
+            [`catalog/${suffix}/image.png`, "test", "pending", -1]
+          );
+        }
+      );
+
+      await expectRejectedTransaction(
+        client,
+        async () => undefined,
+        async () => {
+          await client.query(
+            `
+              INSERT INTO audit_logs (action, entity_type, request_id)
+              VALUES ($1, $2, $3)
+            `,
+            ["created", "unknown", `req_${suffix}`]
+          );
+        }
+      );
+    });
+  });
+
+  it("blocks category cascade deletes and preserves related sites", async () => {
+    await withTestClient(async (client) => {
+      const suffix = randomUUID();
+
+      await client.query("BEGIN");
+
+      try {
+        const category = await client.query<{ id: string }>(
+          "INSERT INTO categories (slug, title, updated_at) VALUES ($1, $2, now()) RETURNING id",
+          [`category-${suffix}`, "Category"]
+        );
+        const categoryId = category.rows[0]?.id;
+
+        if (categoryId === undefined) {
+          throw new Error("Expected category id.");
+        }
+
+        await client.query(
+          `
+            INSERT INTO sites (slug, title, category_id, short_description, updated_at)
+            VALUES ($1, $2, $3, $4, now())
+          `,
+          [`site-${suffix}`, "Site", categoryId, "Description"]
+        );
+
+        await expect(client.query("DELETE FROM categories WHERE id = $1", [categoryId])).rejects.toThrow();
+
+        await client.query("ROLLBACK");
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+    });
+  });
+
+  it("enforces B2 relation behavior", async () => {
+    await withTestClient(async (client) => {
+      const suffix = randomUUID();
+
+      await client.query("BEGIN");
+
+      try {
+        const user = await client.query<{ id: string }>(
+          "INSERT INTO users (email, password_hash, role, updated_at) VALUES ($1, $2, $3, now()) RETURNING id",
+          [`relations-${suffix}@example.test`, "hash", "editor"]
+        );
+        const userId = user.rows[0]?.id;
+
+        if (userId === undefined) {
+          throw new Error("Expected user id.");
+        }
+
+        const replacement = await client.query<{ id: string }>(
+          `
+            INSERT INTO refresh_sessions (user_id, token_hash, family_id, expires_at, updated_at)
+            VALUES ($1, $2, gen_random_uuid(), now() + interval '1 day', now())
+            RETURNING id
+          `,
+          [userId, `replacement-${suffix}`]
+        );
+        const replacementId = replacement.rows[0]?.id;
+
+        await client.query(
+          `
+            INSERT INTO refresh_sessions (user_id, token_hash, family_id, replaced_by_session_id, expires_at, updated_at)
+            VALUES ($1, $2, gen_random_uuid(), $3, now() + interval '1 day', now())
+          `,
+          [userId, `source-${suffix}`, replacementId]
+        );
+        await client.query(
+          `
+            INSERT INTO audit_logs (actor_user_id, action, entity_type, request_id)
+            VALUES ($1, $2, $3, $4)
+          `,
+          [userId, "created", "user", `req_${suffix}`]
+        );
+
+        await client.query("DELETE FROM users WHERE id = $1", [userId]);
+
+        const sessions = await client.query<{ count: string }>(
+          "SELECT count(*) FROM refresh_sessions WHERE user_id = $1",
+          [userId]
+        );
+        const auditLogs = await client.query<{ actor_user_id: string | null }>(
+          "SELECT actor_user_id FROM audit_logs WHERE request_id = $1",
+          [`req_${suffix}`]
+        );
+
+        expect(sessions.rows[0]?.count).toBe("0");
+        expect(auditLogs.rows[0]?.actor_user_id).toBeNull();
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+    });
+  });
+});
+
+async function expectRejectedTransaction(
+  client: Client,
+  setup: () => Promise<void>,
+  action: () => Promise<unknown>
+): Promise<void> {
+  await client.query("BEGIN");
+
+  try {
+    await setup();
+    await expect(action()).rejects.toThrow();
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+  }
+}
+
+async function createCategory(client: Client, slug: string): Promise<string> {
+  const category = await client.query<{ id: string }>(
+    "INSERT INTO categories (slug, title, updated_at) VALUES ($1, $2, now()) RETURNING id",
+    [slug, "Category"]
+  );
+  const categoryId = category.rows[0]?.id;
+
+  if (categoryId === undefined) {
+    throw new Error("Expected category id.");
+  }
+
+  return categoryId;
+}
+
+async function selectCategoryId(client: Client, slug: string): Promise<string> {
+  const category = await client.query<{ id: string }>("SELECT id FROM categories WHERE slug = $1", [slug]);
+  const categoryId = category.rows[0]?.id;
+
+  if (categoryId === undefined) {
+    throw new Error("Expected category id.");
+  }
+
+  return categoryId;
+}
+
+async function createUser(client: Client, email: string): Promise<string> {
+  const user = await client.query<{ id: string }>(
+    "INSERT INTO users (email, password_hash, role, updated_at) VALUES ($1, $2, $3, now()) RETURNING id",
+    [email, "hash", "editor"]
+  );
+  const userId = user.rows[0]?.id;
+
+  if (userId === undefined) {
+    throw new Error("Expected user id.");
+  }
+
+  return userId;
+}
+
+async function selectUserId(client: Client, email: string): Promise<string> {
+  const user = await client.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]);
+  const userId = user.rows[0]?.id;
+
+  if (userId === undefined) {
+    throw new Error("Expected user id.");
+  }
+
+  return userId;
+}
+
+async function expectInvalidSiteField(
+  client: Client,
+  slug: string,
+  column: "demo_mode" | "development_days" | "price_amount_cents" | "status" | "views",
+  value: number | string
+): Promise<void> {
+  await expectRejectedTransaction(
+    client,
+    async () => undefined,
+    async () => {
+      const categoryId = await createCategory(client, `category-${slug}`);
+
+      await client.query(
+        `
+          INSERT INTO sites (slug, title, category_id, short_description, ${column}, updated_at)
+          VALUES ($1, $2, $3, $4, $5, now())
+        `,
+        [slug, "Site", categoryId, "Description", value]
+      );
+    }
+  );
+}

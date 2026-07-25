@@ -1,6 +1,16 @@
+import "dotenv/config";
+
 import { afterEach, beforeEach } from "vitest";
 
-const mutableEnvKeys = ["NODE_ENV", "PORT", "LOG_LEVEL", "SERVICE_NAME"] as const;
+const mutableEnvKeys = [
+  "NODE_ENV",
+  "PORT",
+  "LOG_LEVEL",
+  "SERVICE_NAME",
+  "DATABASE_URL",
+  "SHADOW_DATABASE_URL",
+  "TEST_DATABASE_URL"
+] as const;
 const originalValues = new Map<string, string | undefined>();
 
 beforeEach(() => {
