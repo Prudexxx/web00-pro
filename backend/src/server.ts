@@ -28,6 +28,8 @@ import { createPrismaAdminCategoryRepository } from "./modules/admin/categories/
 import { createAdminCategoryService } from "./modules/admin/categories/category.service.js";
 import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repository.js";
 import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
+import { createPrismaAdminUserRepository } from "./modules/admin/users/user.repository.js";
+import { createAdminUserService } from "./modules/admin/users/user.service.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
@@ -105,6 +107,9 @@ export function startServer(options: StartServerOptions): StartedServer {
     }),
     siteService: createAdminSiteService({
       repository: createPrismaAdminSiteRepository({ prisma })
+    }),
+    userService: createAdminUserService({
+      repository: createPrismaAdminUserRepository({ prisma })
     })
   };
   const adminRoutes = createAdminRouter(

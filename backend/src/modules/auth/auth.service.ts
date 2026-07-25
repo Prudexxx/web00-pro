@@ -19,14 +19,34 @@ export function createAuthService(
   return {
     authenticateAccessToken: async (token) => {
       const verified = await dependencies.accessTokens.verify(token);
-      const user = await dependencies.repository.findActiveUserById(verified.subject);
+      const context = await dependencies.repository.findSessionContext({
+        sessionId: verified.sessionId,
+        userId: verified.subject
+      });
 
-      if (user === null) {
+      if (context === null) {
+        throw unauthorized();
+      }
+      if (context.session.userId !== verified.subject) {
+        throw unauthorized();
+      }
+      if (context.session.revokedAt !== null) {
+        throw unauthorized();
+      }
+      if (context.session.expiresAt.getTime() <= dependencies.clock().getTime()) {
+        throw unauthorized();
+      }
+      if (!context.user.active) {
         throw userDisabled();
+      }
+      if (context.user.role !== verified.role) {
+        throw unauthorized();
       }
 
       return {
-        ...user,
+        email: context.user.email,
+        id: context.user.id,
+        role: context.user.role,
         sessionId: verified.sessionId,
         tokenId: verified.tokenId
       };
@@ -310,5 +330,13 @@ function userDisabled(): AppError {
     code: "USER_DISABLED",
     message: "User is disabled.",
     statusCode: 403
+  });
+}
+
+function unauthorized(): AppError {
+  return new AppError({
+    code: "UNAUTHORIZED",
+    message: "Authentication required.",
+    statusCode: 401
   });
 }

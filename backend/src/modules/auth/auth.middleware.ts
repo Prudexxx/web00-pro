@@ -8,7 +8,8 @@ import type {
 
 export interface AuthMiddlewareOptions {
   accessTokens: AccessTokenService;
-  repository: Pick<AuthRepository, "findActiveUserById">;
+  clock?: () => Date;
+  repository: Pick<AuthRepository, "findSessionContext">;
 }
 
 export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
@@ -16,18 +17,35 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHan
     try {
       const token = parseBearerToken(request.get("Authorization"));
       const verified = await options.accessTokens.verify(token);
-      const user = await options.repository.findActiveUserById(verified.subject);
+      const context = await options.repository.findSessionContext({
+        sessionId: verified.sessionId,
+        userId: verified.subject
+      });
 
-      if (user === null) {
+      if (context === null) {
+        throw unauthorized();
+      }
+      if (context.session.revokedAt !== null) {
+        throw unauthorized();
+      }
+      if (context.session.expiresAt.getTime() <= (options.clock ?? (() => new Date()))().getTime()) {
+        throw unauthorized();
+      }
+      if (!context.user.active) {
         throw new AppError({
           code: "USER_DISABLED",
           message: "User is disabled.",
           statusCode: 403
         });
       }
+      if (context.user.role !== verified.role) {
+        throw unauthorized();
+      }
 
       (request as AuthRequest).auth = {
-        ...user,
+        email: context.user.email,
+        id: context.user.id,
+        role: context.user.role,
         sessionId: verified.sessionId,
         tokenId: verified.tokenId
       };

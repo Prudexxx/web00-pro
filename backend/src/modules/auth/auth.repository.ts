@@ -9,7 +9,8 @@ import type {
   RotateRefreshSessionInput,
   RotateRefreshSessionResult,
   SafeAuditInput,
-  SafeAuthUser
+  SafeAuthUser,
+  UserSessionContext
 } from "./auth.types.js";
 
 export interface CreateAuthRepositoryOptions {
@@ -41,6 +42,30 @@ export function createAuthRepository(options: CreateAuthRepositoryOptions): Auth
       });
 
       return session === null ? null : toRefreshSessionRecord(session);
+    },
+    findSessionContext: async (input) => {
+      const session = await options.prisma.refreshSession.findFirst({
+        select: {
+          expiresAt: true,
+          id: true,
+          revokedAt: true,
+          user: {
+            select: {
+              active: true,
+              email: true,
+              id: true,
+              role: true
+            }
+          },
+          userId: true
+        },
+        where: {
+          id: input.sessionId,
+          userId: input.userId
+        }
+      });
+
+      return session === null ? null : toUserSessionContext(session);
     },
     findUserByEmail: async (email) => {
       const user = await options.prisma.user.findUnique({
@@ -210,5 +235,33 @@ function toRefreshSessionRecord(input: {
     revokedAt: input.revokedAt,
     tokenHash: input.tokenHash,
     userId: input.userId
+  };
+}
+
+function toUserSessionContext(input: {
+  expiresAt: Date;
+  id: string;
+  revokedAt: Date | null;
+  user: {
+    active: boolean;
+    email: string;
+    id: string;
+    role: string;
+  };
+  userId: string;
+}): UserSessionContext {
+  return {
+    session: {
+      expiresAt: input.expiresAt,
+      id: input.id,
+      revokedAt: input.revokedAt,
+      userId: input.userId
+    },
+    user: {
+      active: input.user.active,
+      email: input.user.email,
+      id: input.user.id,
+      role: toAuthRole(input.user.role)
+    }
   };
 }

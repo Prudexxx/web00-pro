@@ -93,6 +93,21 @@ export interface RefreshSessionRecord {
   userId: string;
 }
 
+export interface UserSessionContext {
+  session: {
+    expiresAt: Date;
+    id: string;
+    revokedAt: Date | null;
+    userId: string;
+  };
+  user: {
+    active: boolean;
+    email: string;
+    id: string;
+    role: AuthRole;
+  };
+}
+
 export interface SafeAuditInput {
   action:
     | "auth.login.success"
@@ -145,6 +160,10 @@ export interface RevokeRefreshFamilyWithAuditInput {
 export interface AuthRepository {
   findUserByEmail(email: string): Promise<AuthUserRecord | null>;
   findActiveUserById(userId: string): Promise<SafeAuthUser | null>;
+  findSessionContext(input: {
+    sessionId: string;
+    userId: string;
+  }): Promise<UserSessionContext | null>;
   findRefreshSessionByTokenHash(tokenHash: string): Promise<RefreshSessionRecord | null>;
   commitLoginSuccess(input: CommitLoginSuccessInput): Promise<RefreshSessionRecord>;
   rotateRefreshSession(input: RotateRefreshSessionInput): Promise<RotateRefreshSessionResult>;

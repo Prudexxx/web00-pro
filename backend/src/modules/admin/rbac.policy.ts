@@ -15,7 +15,11 @@ export const B5_PERMISSIONS = [
   "category.create",
   "category.update",
   "category.delete",
-  "audit.read"
+  "audit.read",
+  "user.read",
+  "user.changeRole",
+  "user.disable",
+  "user.enable"
 ] as const satisfies readonly B5Permission[];
 
 const EDITOR_PERMISSIONS = [

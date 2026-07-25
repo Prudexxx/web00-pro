@@ -12,7 +12,11 @@ export type B5Permission =
   | "category.create"
   | "category.update"
   | "category.delete"
-  | "audit.read";
+  | "audit.read"
+  | "user.read"
+  | "user.changeRole"
+  | "user.disable"
+  | "user.enable";
 
 export interface PermissionPolicy {
   has(role: string, permission: B5Permission): boolean;

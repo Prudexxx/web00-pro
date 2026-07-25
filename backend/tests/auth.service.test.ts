@@ -55,6 +55,7 @@ function createDependencies(
       id: user.id,
       role: user.role
     }),
+    findSessionContext: vi.fn(),
     findRefreshSessionByTokenHash: vi.fn().mockResolvedValue(null),
     findUserByEmail: vi.fn(),
     revokeRefreshFamilyWithAudit: vi.fn().mockResolvedValue(undefined),

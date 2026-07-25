@@ -12,7 +12,7 @@ const accessTokens = createAccessTokenService({
   ttlSeconds: 900
 });
 
-function createApp(repository: Pick<AuthRepository, "findActiveUserById">) {
+function createApp(repository: Pick<AuthRepository, "findSessionContext">) {
   const app = express();
 
   app.get(
@@ -32,10 +32,19 @@ function createApp(repository: Pick<AuthRepository, "findActiveUserById">) {
 describe("auth middleware", () => {
   it("attaches a safe principal for valid bearer tokens", async () => {
     const repository = {
-      findActiveUserById: vi.fn().mockResolvedValue({
-        email: "admin@example.com",
-        id: "11111111-1111-4111-8111-111111111111",
-        role: "admin"
+      findSessionContext: vi.fn().mockResolvedValue({
+        session: {
+          expiresAt: new Date("2026-08-01T00:00:00.000Z"),
+          id: "22222222-2222-4222-8222-222222222222",
+          revokedAt: null,
+          userId: "11111111-1111-4111-8111-111111111111"
+        },
+        user: {
+          active: true,
+          email: "admin@example.com",
+          id: "11111111-1111-4111-8111-111111111111",
+          role: "admin"
+        }
       })
     };
     const token = await accessTokens.sign({
@@ -62,11 +71,11 @@ describe("auth middleware", () => {
 
   it("rejects missing bearer tokens before loading a user", async () => {
     const repository = {
-      findActiveUserById: vi.fn()
+      findSessionContext: vi.fn()
     };
 
     await request(createApp(repository)).get("/me").expect(401);
 
-    expect(repository.findActiveUserById).not.toHaveBeenCalled();
+    expect(repository.findSessionContext).not.toHaveBeenCalled();
   });
 });
