@@ -36,6 +36,34 @@ describe("AppError response contract", () => {
     });
   });
 
+  it("supports approved public catalog not-found error codes", () => {
+    const siteError = new AppError({
+      code: "SITE_NOT_FOUND",
+      message: "Site not found.",
+      statusCode: 404
+    });
+    const categoryError = new AppError({
+      code: "CATEGORY_NOT_FOUND",
+      message: "Category not found.",
+      statusCode: 404
+    });
+
+    expect(createErrorResponse(siteError, "req_site")).toEqual({
+      error: {
+        code: "SITE_NOT_FOUND",
+        message: "Site not found.",
+        requestId: "req_site"
+      }
+    });
+    expect(createErrorResponse(categoryError, "req_category")).toEqual({
+      error: {
+        code: "CATEGORY_NOT_FOUND",
+        message: "Category not found.",
+        requestId: "req_category"
+      }
+    });
+  });
+
   it("maps unknown errors to a safe internal error", () => {
     const error = toAppError(new Error("database password leaked"));
 

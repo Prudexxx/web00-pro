@@ -1,9 +1,10 @@
 import request from "supertest";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { AppEnv } from "../src/config/env.js";
 import type { AppLogEntry } from "../src/lib/logger.js";
 import { healthResponseSchema } from "../src/modules/health/health.schema.js";
+import type { PublicCatalogService } from "../src/modules/public-catalog/public-catalog.service.js";
 
 const testEnv: AppEnv = {
   LOG_LEVEL: "silent",
@@ -112,5 +113,25 @@ describe("GET /api/health", () => {
     expect(JSON.stringify(entry)).not.toContain("secret-password");
     expect(JSON.stringify(entry)).not.toContain("password");
     expect(JSON.stringify(entry)).not.toContain("token");
+  });
+
+  it("mounts an injected public catalog service without making health depend on the database", async () => {
+    const publicCatalogService = {
+      getCategoryBySlug: vi.fn(),
+      getSiteBySlug: vi.fn(),
+      listCategories: vi.fn(),
+      listPopularSites: vi.fn(),
+      listSites: vi.fn().mockResolvedValue({
+        data: [],
+        meta: { limit: 12, page: 1, total: 0, totalPages: 0 }
+      })
+    } as unknown as PublicCatalogService;
+    const app = createApp({ env: testEnv, publicCatalogService });
+
+    await request(app).get("/api/health").expect(200);
+    expect(publicCatalogService.listSites).not.toHaveBeenCalled();
+
+    await request(app).get("/api/sites").expect(200);
+    expect(publicCatalogService.listSites).toHaveBeenCalledTimes(1);
   });
 });

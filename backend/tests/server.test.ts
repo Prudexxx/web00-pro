@@ -62,4 +62,29 @@ describe("createShutdownHandler", () => {
     expect(exit).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("disconnects Prisma exactly once during graceful shutdown", async () => {
+    vi.useFakeTimers();
+    let closeCallback: (() => void) | undefined;
+    const close = vi.fn((callback?: () => void) => {
+      closeCallback = callback;
+      return undefined as unknown as Server;
+    });
+    const disconnect = vi.fn().mockResolvedValue(undefined);
+    const exit = vi.fn();
+    const logger = { log: vi.fn() };
+    const handler = createShutdownHandler(
+      { close } as unknown as Server,
+      { disconnect, env: testEnv, exit, logger, signal: "SIGTERM" }
+    );
+
+    handler();
+    handler();
+    closeCallback?.();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(exit).not.toHaveBeenCalled();
+  });
 });

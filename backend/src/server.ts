@@ -2,11 +2,18 @@ import { createServer, type Server } from "node:http";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { createApp } from "./app.js";
+import type { DatabaseEnv } from "./config/database-env.js";
+import { parseDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
 import { parseEnv } from "./config/env.js";
+import { createPrismaClient } from "./db/prisma.js";
+import type { PrismaClient } from "./generated/prisma/client.js";
 import { createLogger, type AppLogger } from "./lib/logger.js";
+import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
+import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
 export interface ShutdownHandlerOptions {
+  disconnect?: () => Promise<void>;
   env: AppEnv;
   exit: (code: number) => void;
   logger: AppLogger;
@@ -15,40 +22,73 @@ export interface ShutdownHandlerOptions {
   timeoutMs?: number;
 }
 
-export function startServer(env: AppEnv): Server {
-  const logger = createLogger({ env });
-  const app = createApp({ env, logger });
+export interface StartServerOptions {
+  createPrisma?: typeof createPrismaClient;
+  databaseEnv: DatabaseEnv;
+  env: AppEnv;
+  logger?: AppLogger;
+  now?: () => Date;
+  registerSignalHandlers?: boolean;
+}
+
+export interface StartedServer {
+  prisma: PrismaClient;
+  server: Server;
+}
+
+export function startServer(options: StartServerOptions): StartedServer {
+  const logger = options.logger ?? createLogger({ env: options.env });
+  const createPrisma = options.createPrisma ?? createPrismaClient;
+  const prisma = createPrisma({
+    databaseUrl: options.databaseEnv.DATABASE_URL
+  });
+  const repository = createPrismaPublicCatalogRepository({ prisma });
+  const publicCatalogService = createPublicCatalogService({ repository });
+  const createAppOptions = {
+    env: options.env,
+    logger,
+    publicCatalogService
+  };
+  const app = createApp(
+    options.now === undefined
+      ? createAppOptions
+      : { ...createAppOptions, now: options.now }
+  );
   const server = createServer(app);
 
-  server.listen(env.PORT, () => {
+  server.listen(options.env.PORT, () => {
     logLifecycle({
-      env,
+      env: options.env,
       event: "server_started",
       logger,
-      now: () => new Date()
+      now: options.now ?? (() => new Date())
     });
   });
 
-  process.once(
-    "SIGTERM",
-    createShutdownHandler(server, {
-      env,
-      exit: (code) => process.exit(code),
-      logger,
-      signal: "SIGTERM"
-    })
-  );
-  process.once(
-    "SIGINT",
-    createShutdownHandler(server, {
-      env,
-      exit: (code) => process.exit(code),
-      logger,
-      signal: "SIGINT"
-    })
-  );
+  if (options.registerSignalHandlers ?? true) {
+    process.once(
+      "SIGTERM",
+      createShutdownHandler(server, {
+        disconnect: () => prisma.$disconnect(),
+        env: options.env,
+        exit: (code) => process.exit(code),
+        logger,
+        signal: "SIGTERM"
+      })
+    );
+    process.once(
+      "SIGINT",
+      createShutdownHandler(server, {
+        disconnect: () => prisma.$disconnect(),
+        env: options.env,
+        exit: (code) => process.exit(code),
+        logger,
+        signal: "SIGINT"
+      })
+    );
+  }
 
-  return server;
+  return { prisma, server };
 }
 
 export function createShutdownHandler(
@@ -86,32 +126,55 @@ export function createShutdownHandler(
     server.close((error?: Error) => {
       clearTimeout(forcedTimeout);
 
-      if (error) {
-        logLifecycle({
-          env: options.env,
-          event: "server_shutdown_failed",
-          level: "error",
-          logger: options.logger,
-          now
-        });
-        options.exit(1);
-        return;
-      }
-
-      logLifecycle({
-        env: options.env,
-        event: "server_shutdown_complete",
-        logger: options.logger,
-        now
-      });
+      void handleServerClosed(error, options, now);
     });
   };
 }
 
-export function main(): Server {
-  const env = parseEnv(process.env);
+async function handleServerClosed(
+  error: Error | undefined,
+  options: ShutdownHandlerOptions,
+  now: () => Date
+): Promise<void> {
+  try {
+    await options.disconnect?.();
+  } catch {
+    logLifecycle({
+      env: options.env,
+      event: "server_shutdown_failed",
+      level: "error",
+      logger: options.logger,
+      now
+    });
+    options.exit(1);
+    return;
+  }
 
-  return startServer(env);
+  if (error) {
+    logLifecycle({
+      env: options.env,
+      event: "server_shutdown_failed",
+      level: "error",
+      logger: options.logger,
+      now
+    });
+    options.exit(1);
+    return;
+  }
+
+  logLifecycle({
+    env: options.env,
+    event: "server_shutdown_complete",
+    logger: options.logger,
+    now
+  });
+}
+
+export function main(): StartedServer {
+  const env = parseEnv(process.env);
+  const databaseEnv = parseDatabaseEnv(process.env);
+
+  return startServer({ databaseEnv, env });
 }
 
 if (isDirectRun()) {

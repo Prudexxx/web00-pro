@@ -4,7 +4,9 @@ export type ErrorCode =
   | "VALIDATION_ERROR"
   | "CONFIGURATION_ERROR"
   | "INVALID_JSON"
-  | "PAYLOAD_TOO_LARGE";
+  | "PAYLOAD_TOO_LARGE"
+  | "SITE_NOT_FOUND"
+  | "CATEGORY_NOT_FOUND";
 
 export interface ErrorDetail {
   code?: string;

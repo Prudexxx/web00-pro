@@ -5,10 +5,13 @@ import { requestIdMiddleware } from "./lib/request-id.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundMiddleware } from "./middleware/not-found.js";
 import { createHealthRouter } from "./modules/health/health.route.js";
+import { createPublicCatalogRouter } from "./modules/public-catalog/public-catalog.routes.js";
+import type { PublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
 export interface CreateAppOptions {
   env: AppEnv;
   logger?: AppLogger;
+  publicCatalogService?: PublicCatalogService;
   registerTestRoutes?: (app: Express) => void;
   now?: () => Date;
 }
@@ -23,6 +26,10 @@ export function createApp(options: CreateAppOptions): Express {
   app.use(express.json({ limit: "100kb" }));
   app.use(requestLogger({ env: options.env, logger, now }));
   app.use("/api/health", createHealthRouter({ env: options.env, now }));
+
+  if (options.publicCatalogService) {
+    app.use("/api", createPublicCatalogRouter({ service: options.publicCatalogService }));
+  }
 
   if (options.registerTestRoutes) {
     options.registerTestRoutes(app);
