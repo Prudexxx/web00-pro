@@ -15,7 +15,16 @@ export type ErrorCode =
   | "ORIGIN_NOT_ALLOWED"
   | "RATE_LIMITED"
   | "SITE_NOT_FOUND"
-  | "CATEGORY_NOT_FOUND";
+  | "CATEGORY_NOT_FOUND"
+  | "FORBIDDEN"
+  | "SITE_NOT_DRAFT"
+  | "SITE_NOT_PUBLISHED"
+  | "SITE_ALREADY_DELETED"
+  | "SITE_NOT_DELETED"
+  | "CATEGORY_INACTIVE"
+  | "CATEGORY_IN_USE"
+  | "SLUG_CONFLICT"
+  | "INVALID_STATE_TRANSITION";
 
 export interface ErrorDetail {
   code?: string;

@@ -9,6 +9,7 @@ import { createPublicCatalogRouter } from "./modules/public-catalog/public-catal
 import type { PublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
 export interface CreateAppOptions {
+  adminRoutes?: Router;
   authRoutes?: Router;
   env: AppEnv;
   logger?: AppLogger;
@@ -38,6 +39,10 @@ export function createApp(options: CreateAppOptions): Express {
 
   if (options.authRoutes) {
     app.use("/api/auth", options.authRoutes);
+  }
+
+  if (options.adminRoutes) {
+    app.use("/api/admin", options.adminRoutes);
   }
 
   if (options.registerTestRoutes) {

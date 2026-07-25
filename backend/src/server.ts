@@ -21,6 +21,13 @@ import { createAuthRouter } from "./modules/auth/auth.routes.js";
 import { createAuthService } from "./modules/auth/auth.service.js";
 import { createArgon2PasswordHasher } from "./modules/auth/password.service.js";
 import { createRefreshTokenService } from "./modules/auth/refresh-token.service.js";
+import { createAdminRouter } from "./modules/admin/admin.routes.js";
+import { createPrismaAdminAuditLogRepository } from "./modules/admin/audit/audit-log.repository.js";
+import { createAdminAuditLogService } from "./modules/admin/audit/audit-log.service.js";
+import { createPrismaAdminCategoryRepository } from "./modules/admin/categories/category.repository.js";
+import { createAdminCategoryService } from "./modules/admin/categories/category.service.js";
+import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repository.js";
+import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
@@ -88,7 +95,25 @@ export function startServer(options: StartServerOptions): StartedServer {
     nodeEnv: options.env.NODE_ENV,
     service: authService
   });
+  const adminRouterOptions = {
+    auditLogService: createAdminAuditLogService({
+      repository: createPrismaAdminAuditLogRepository({ prisma })
+    }),
+    authService,
+    categoryService: createAdminCategoryService({
+      repository: createPrismaAdminCategoryRepository({ prisma })
+    }),
+    siteService: createAdminSiteService({
+      repository: createPrismaAdminSiteRepository({ prisma })
+    })
+  };
+  const adminRoutes = createAdminRouter(
+    options.now === undefined
+      ? adminRouterOptions
+      : { ...adminRouterOptions, now: options.now }
+  );
   const createAppOptions = {
+    adminRoutes,
     authRoutes,
     env: options.env,
     logger,
