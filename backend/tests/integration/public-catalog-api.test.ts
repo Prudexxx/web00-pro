@@ -1,8 +1,9 @@
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/app.js";
-import { assertTestDatabaseUrl, parseDatabaseEnv } from "../../src/config/database-env.js";
+import { assertTestDatabaseUrl, parseTestDatabaseEnv } from "../../src/config/database-env.js";
 import type { AppEnv } from "../../src/config/env.js";
+import type { PublicCorsConfig } from "../../src/config/public-cors-env.js";
 import { createPrismaClient } from "../../src/db/prisma.js";
 import type { Prisma } from "../../src/generated/prisma/client.js";
 import { createPrismaPublicCatalogRepository } from "../../src/modules/public-catalog/public-catalog.repository.js";
@@ -16,15 +17,21 @@ const testEnv: AppEnv = {
   PORT: 3000,
   SERVICE_NAME: "web00-backend"
 };
-const databaseEnv = parseDatabaseEnv(process.env);
+const databaseEnv = parseTestDatabaseEnv(process.env);
 assertTestDatabaseUrl(databaseEnv);
 const prisma = createPrismaClient({
   databaseUrl: databaseEnv.TEST_DATABASE_URL,
   poolMax: 1
 });
+const allowedOrigin = "https://web00.example.com";
+const publicCorsConfig: PublicCorsConfig = {
+  allowedMethods: ["GET", "HEAD", "OPTIONS"],
+  allowedOrigins: new Set([allowedOrigin]),
+  maxOrigins: 10
+};
 const repository = createPrismaPublicCatalogRepository({ prisma });
 const service = createPublicCatalogService({ repository });
-const app = createApp({ env: testEnv, publicCatalogService: service });
+const app = createApp({ env: testEnv, publicCatalogService: service, publicCorsConfig });
 
 interface FixtureCategory {
   active?: boolean;
@@ -227,6 +234,44 @@ describe("public catalog API integration", () => {
     expect(JSON.stringify(response.body)).not.toContain("b3-inactive");
     expect(JSON.stringify(response.body)).not.toContain("b3-deleted");
     expect(JSON.stringify(response.body)).not.toContain("b3-hidden-category-site");
+  });
+
+  it("adds exact public CORS headers for allowed catalog GET and HEAD requests", async () => {
+    const getResponse = await request(app)
+      .get("/api/sites")
+      .set("Origin", allowedOrigin)
+      .expect(200);
+    const headResponse = await request(app)
+      .head("/api/sites")
+      .set("Origin", allowedOrigin)
+      .expect(200);
+
+    expect(getResponse.headers["access-control-allow-origin"]).toBe(allowedOrigin);
+    expect(getResponse.headers.vary).toContain("Origin");
+    expect(getResponse.headers["access-control-allow-credentials"]).toBeUndefined();
+    expect(headResponse.headers["access-control-allow-origin"]).toBe(allowedOrigin);
+    expect(headResponse.text).toBeUndefined();
+  });
+
+  it("handles public catalog preflight without exposing arbitrary origins", async () => {
+    const allowed = await request(app)
+      .options("/api/sites")
+      .set("Origin", allowedOrigin)
+      .expect(204);
+    const forbidden = await request(app)
+      .options("/api/sites")
+      .set("Origin", "https://evil.example.com")
+      .expect(403);
+    const untrustedGet = await request(app)
+      .get("/api/sites")
+      .set("Origin", "https://evil.example.com")
+      .expect(200);
+
+    expect(allowed.text).toBe("");
+    expect(allowed.headers["access-control-allow-origin"]).toBe(allowedOrigin);
+    expect(forbidden.body.error.code).toBe("CORS_ORIGIN_FORBIDDEN");
+    expect(JSON.stringify(forbidden.body)).not.toContain("evil.example.com");
+    expect(untrustedGet.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
   it("paginates public sites with stable metadata", async () => {

@@ -1,6 +1,6 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { parseDatabaseEnv } from "../config/database-env.js";
+import { parseRuntimeDatabaseEnv } from "../config/database-env.js";
 import { parseStorageEnv, toStorageConfig } from "../config/storage-env.js";
 import { createPrismaClient } from "../db/prisma.js";
 import type { InteractiveTerminal } from "./cli.types.js";
@@ -57,7 +57,7 @@ function createWorker(options: StorageCleanupCommandOptions): {
   disconnect: () => Promise<void>;
   worker: StorageCleanupWorker;
 } {
-  const databaseEnv = parseDatabaseEnv(options.processEnv ?? process.env);
+  const databaseEnv = parseRuntimeDatabaseEnv(options.processEnv ?? process.env);
   const storageConfig = toStorageConfig(
     parseStorageEnv(options.processEnv ?? process.env)
   );

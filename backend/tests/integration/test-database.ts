@@ -2,11 +2,11 @@ import "dotenv/config";
 import { Client, type QueryResultRow } from "pg";
 import {
   assertTestDatabaseUrl,
-  parseDatabaseEnv
+  parseTestDatabaseEnv
 } from "../../src/config/database-env.js";
 
 export function getTestDatabaseUrl(): string {
-  const env = parseDatabaseEnv(process.env);
+  const env = parseTestDatabaseEnv(process.env);
 
   assertTestDatabaseUrl(env);
 

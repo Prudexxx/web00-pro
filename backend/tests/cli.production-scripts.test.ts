@@ -24,4 +24,17 @@ describe("production CLI scripts", () => {
       expect(script).not.toContain("npm exec");
     }
   });
+
+  it("keeps production start free of one-off operational work", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const start = pkg.scripts?.start ?? "";
+
+    expect(start).toBe("node dist/server.js");
+    expect(start).not.toContain("migrate");
+    expect(start).not.toContain("seed");
+    expect(start).not.toContain("storage:bootstrap");
+    expect(start).not.toContain("admin:bootstrap");
+  });
 });

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createCliUserService } from "../src/cli/cli-user.service.js";
 import { runUserCreateCommand } from "../src/cli/user-create.command.js";
@@ -13,6 +15,16 @@ const createdUser = {
 };
 
 describe("CLI user create service", () => {
+  it("creates the production repository from runtime database env only", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src", "cli", "user-create.command.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("parseRuntimeDatabaseEnv");
+    expect(source).not.toContain("parseDatabaseEnv");
+  });
+
   it("defaults to editor and writes safe output without sessions or login", async () => {
     const repository = {
       bootstrapFirstAdmin: vi.fn(),

@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { createApp } from "./app.js";
 import type { AuthEnv } from "./config/auth-env.js";
 import { parseAuthEnv } from "./config/auth-env.js";
-import type { DatabaseEnv } from "./config/database-env.js";
-import { parseDatabaseEnv } from "./config/database-env.js";
+import type { RuntimeDatabaseEnv } from "./config/database-env.js";
+import { parseRuntimeDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
 import { parseEnv } from "./config/env.js";
+import type { PublicCorsConfig } from "./config/public-cors-env.js";
+import { parsePublicCorsEnv, toPublicCorsConfig } from "./config/public-cors-env.js";
 import type { StorageConfig } from "./config/storage-env.js";
 import { parseStorageEnv, toStorageConfig } from "./config/storage-env.js";
 import { createPrismaClient } from "./db/prisma.js";
@@ -43,6 +45,10 @@ import { createPrismaStorageCleanupRepository } from "./modules/storage-cleanup/
 import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cleanup.worker.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
+import {
+  createPrismaReadinessProbe,
+  createReadinessService
+} from "./modules/readiness/readiness.service.js";
 
 export interface ShutdownHandlerOptions {
   disconnect?: () => Promise<void>;
@@ -57,10 +63,11 @@ export interface ShutdownHandlerOptions {
 export interface StartServerOptions {
   authEnv: AuthEnv;
   createPrisma?: typeof createPrismaClient;
-  databaseEnv: DatabaseEnv;
+  databaseEnv: RuntimeDatabaseEnv;
   env: AppEnv;
   logger?: AppLogger;
   now?: () => Date;
+  publicCorsConfig: PublicCorsConfig;
   registerSignalHandlers?: boolean;
   storageConfig: StorageConfig;
 }
@@ -75,6 +82,9 @@ export function startServer(options: StartServerOptions): StartedServer {
   const createPrisma = options.createPrisma ?? createPrismaClient;
   const prisma = createPrisma({
     databaseUrl: options.databaseEnv.DATABASE_URL
+  });
+  const readinessService = createReadinessService({
+    probe: createPrismaReadinessProbe(prisma)
   });
   const imageUrlPolicy = createManagedImageUrlPolicy({
     bucket: options.storageConfig.bucket,
@@ -157,7 +167,9 @@ export function startServer(options: StartServerOptions): StartedServer {
     authRoutes,
     env: options.env,
     logger,
+    publicCorsConfig: options.publicCorsConfig,
     publicCatalogService,
+    readinessService,
     trustProxyHops: options.authEnv.TRUST_PROXY_HOPS
   };
   const app = createApp(
@@ -293,11 +305,14 @@ async function handleServerClosed(
 
 export function main(): StartedServer {
   const env = parseEnv(process.env);
-  const databaseEnv = parseDatabaseEnv(process.env);
-  const authEnv = parseAuthEnv(process.env);
+  const databaseEnv = parseRuntimeDatabaseEnv(process.env);
+  const authEnv = parseAuthEnv(process.env, { nodeEnv: env.NODE_ENV });
+  const publicCorsConfig = toPublicCorsConfig(
+    parsePublicCorsEnv(process.env, { nodeEnv: env.NODE_ENV })
+  );
   const storageConfig = toStorageConfig(parseStorageEnv(process.env));
 
-  return startServer({ authEnv, databaseEnv, env, storageConfig });
+  return startServer({ authEnv, databaseEnv, env, publicCorsConfig, storageConfig });
 }
 
 if (isDirectRun()) {

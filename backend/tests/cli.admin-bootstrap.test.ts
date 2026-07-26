@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import { createCliUserService } from "../src/cli/cli-user.service.js";
@@ -19,6 +21,16 @@ const safeAdmin = {
 };
 
 describe("CLI bootstrap service", () => {
+  it("creates the production repository from runtime database env only", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src", "cli", "admin-bootstrap.command.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("parseRuntimeDatabaseEnv");
+    expect(source).not.toContain("parseDatabaseEnv");
+  });
+
   it("normalizes email and passes only passwordHash into the repository", async () => {
     const repository = {
       bootstrapFirstAdmin: vi.fn().mockResolvedValue(safeAdmin),

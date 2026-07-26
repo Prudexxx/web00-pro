@@ -3,6 +3,7 @@ import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { requestIdMiddleware } from "../src/lib/request-id.js";
 import { errorHandler } from "../src/middleware/error-handler.js";
+import type { PublicCorsConfig } from "../src/config/public-cors-env.js";
 import { createPublicCatalogRouter } from "../src/modules/public-catalog/public-catalog.routes.js";
 import type { PublicCatalogService } from "../src/modules/public-catalog/public-catalog.service.js";
 
@@ -17,11 +18,21 @@ function createService(overrides: Partial<PublicCatalogService> = {}): PublicCat
   } as PublicCatalogService;
 }
 
-function createTestApp(service: PublicCatalogService): express.Express {
+const allowedOrigin = "https://web00.example.com";
+const publicCorsConfig: PublicCorsConfig = {
+  allowedMethods: ["GET", "HEAD", "OPTIONS"],
+  allowedOrigins: new Set([allowedOrigin]),
+  maxOrigins: 10
+};
+
+function createTestApp(
+  service: PublicCatalogService,
+  options: { publicCorsConfig?: PublicCorsConfig } = {}
+): express.Express {
   const app = express();
 
   app.use(requestIdMiddleware);
-  app.use("/api", createPublicCatalogRouter({ service }));
+  app.use("/api", createPublicCatalogRouter({ service, ...options }));
   app.use(errorHandler);
 
   return app;
@@ -35,6 +46,41 @@ describe("public catalog routes", () => {
 
     expect(service.listPopularSites).toHaveBeenCalledTimes(1);
     expect(service.getSiteBySlug).not.toHaveBeenCalled();
+  });
+
+  it("applies public CORS to exact public catalog GET and HEAD routes", async () => {
+    const service = createService();
+    const app = createTestApp(service, { publicCorsConfig });
+
+    const getResponse = await request(app)
+      .get("/api/sites")
+      .set("Origin", allowedOrigin)
+      .expect(200);
+    const headResponse = await request(app)
+      .head("/api/sites")
+      .set("Origin", allowedOrigin)
+      .expect(200);
+
+    expect(getResponse.headers["access-control-allow-origin"]).toBe(allowedOrigin);
+    expect(headResponse.headers["access-control-allow-origin"]).toBe(allowedOrigin);
+    expect(headResponse.text).toBeUndefined();
+  });
+
+  it("handles allowed and forbidden public catalog preflight without service calls", async () => {
+    const service = createService();
+    const app = createTestApp(service, { publicCorsConfig });
+
+    await request(app)
+      .options("/api/sites")
+      .set("Origin", allowedOrigin)
+      .expect(204);
+    const forbidden = await request(app)
+      .options("/api/sites")
+      .set("Origin", "https://evil.example.com")
+      .expect(403);
+
+    expect(forbidden.body.error.code).toBe("CORS_ORIGIN_FORBIDDEN");
+    expect(service.listSites).not.toHaveBeenCalled();
   });
 
   it("returns VALIDATION_ERROR with requestId for invalid query", async () => {

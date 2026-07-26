@@ -79,6 +79,47 @@ describe("Prisma toolchain contract", () => {
     expect(envExample).not.toContain("connect_timeout");
   });
 
+  it("documents production hardening environment ownership safely", () => {
+    const envExample = readFileSync(join(backendRoot, ".env.example"), "utf8");
+
+    expect(envExample).toContain("# Runtime server");
+    expect(envExample).toContain("# Migration tooling");
+    expect(envExample).toContain("# Test only");
+    expect(envExample).toContain("# Authentication");
+    expect(envExample).toContain("# Public CORS");
+    expect(envExample).toContain("# Storage");
+    expect(envExample).toContain("# Cleanup worker");
+    expect(envExample).toContain("PUBLIC_CORS_ORIGINS=");
+    expect(envExample).toContain("AUTH_ORIGIN=");
+    expect(envExample.indexOf("# Runtime server")).toBeLessThan(
+      envExample.indexOf("# Migration tooling")
+    );
+    expect(envExample.indexOf("# Migration tooling")).toBeLessThan(
+      envExample.indexOf("# Test only")
+    );
+    expect(envExample).not.toContain("real-service-role-key");
+    expect(envExample).not.toContain("production-password");
+  });
+
+  it("documents the Render Free operational contract", () => {
+    const readme = readFileSync(join(backendRoot, "README.md"), "utf8");
+
+    expect(readme).toContain("Render Free");
+    expect(readme).not.toContain(
+      "`DATABASE_URL`, `SHADOW_DATABASE_URL`, and `TEST_DATABASE_URL` live only in local `backend/.env`, Render variables, or CI secrets."
+    );
+    expect(readme).toContain("Render web service variables must include only runtime values.");
+    expect(readme).toContain("Root Directory: `backend`");
+    expect(readme).toContain("Build Command: `npm ci && npm run prisma:generate && npm run build`");
+    expect(readme).toContain("Start Command: `npm run start`");
+    expect(readme).toContain("Health Check Path: `/api/ready`");
+    expect(readme).toContain("& $PortableNpm run db:migrate:deploy");
+    expect(readme).toContain("& $PortableNpm run seed");
+    expect(readme).toContain("& $PortableNpm run storage:bootstrap");
+    expect(readme).toContain("& $PortableNpm run admin:bootstrap");
+    expect(readme).toContain("trusted machine");
+  });
+
   it("uses a non-mutating Prisma format check helper", () => {
     const script = readFileSync(join(backendRoot, "scripts", "check-prisma-format.ts"), "utf8");
 

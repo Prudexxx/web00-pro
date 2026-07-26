@@ -113,6 +113,34 @@ describe("app/server auth integration boundary", () => {
     expect(source).not.toContain("process.env");
   });
 
+  it("parses only runtime database env during server startup", () => {
+    const source = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+
+    expect(source).toContain("parseRuntimeDatabaseEnv");
+    expect(source).not.toContain("parseDatabaseEnv");
+    expect(source).not.toContain("TEST_DATABASE_URL");
+    expect(source).not.toContain("SHADOW_DATABASE_URL");
+  });
+
+  it("passes parsed NODE_ENV into auth environment parsing", () => {
+    const source = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+
+    expect(source).toContain("parseAuthEnv(process.env, { nodeEnv: env.NODE_ENV })");
+  });
+
+  it("wires public CORS and readiness through app/server composition", () => {
+    const appSource = readFileSync(join(process.cwd(), "src", "app.ts"), "utf8");
+    const serverSource = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+
+    expect(appSource).toContain("publicCorsConfig");
+    expect(appSource).toContain("readinessService");
+    expect(appSource).toContain("createReadinessRouter");
+    expect(serverSource).toContain("parsePublicCorsEnv");
+    expect(serverSource).toContain("toPublicCorsConfig");
+    expect(serverSource).toContain("createReadinessService");
+    expect(serverSource).toContain("createPrismaReadinessProbe");
+  });
+
   it("uses numeric trust proxy hops and never boolean true", () => {
     const app = createApp({ env: testEnv, trustProxyHops: 2 });
 

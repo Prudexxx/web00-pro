@@ -16,7 +16,7 @@ import { createAuthRouter } from "../../src/modules/auth/auth.routes.js";
 import { createAuthService } from "../../src/modules/auth/auth.service.js";
 import { createRefreshTokenService } from "../../src/modules/auth/refresh-token.service.js";
 import type { PasswordHasher } from "../../src/modules/auth/auth.types.js";
-import { parseDatabaseEnv } from "../../src/config/database-env.js";
+import { parseTestDatabaseEnv } from "../../src/config/database-env.js";
 import { assertTestDatabaseUrl } from "../../src/config/database-env.js";
 
 const testEnv: AppEnv = {
@@ -34,8 +34,11 @@ const fastHasher: PasswordHasher = {
   verifyDummy: async () => undefined
 };
 
-function createAuthApp(env: AppEnv = testEnv) {
-  const authEnv = parseAuthEnv(process.env);
+function createAuthApp(
+  env: AppEnv = testEnv,
+  authInput: NodeJS.ProcessEnv = process.env
+) {
+  const authEnv = parseAuthEnv(authInput, { nodeEnv: env.NODE_ENV });
   const repository = createAuthRepository({ prisma });
   const accessTokens = createAccessTokenService({
     audience: authEnv.JWT_AUDIENCE,
@@ -122,7 +125,7 @@ async function createUser(email: string, password = "password", active = true) {
 }
 
 beforeAll(() => {
-  const databaseEnv = parseDatabaseEnv(process.env);
+  const databaseEnv = parseTestDatabaseEnv(process.env);
 
   assertTestDatabaseUrl(databaseEnv);
   prisma = createPrismaClient({
@@ -320,7 +323,12 @@ describe("auth API integration", () => {
       ...testEnv,
       NODE_ENV: "production"
     };
-    const response = await request(createAuthApp(productionEnv))
+    const response = await request(
+      createAuthApp(productionEnv, {
+        ...process.env,
+        AUTH_ORIGIN: "https://admin.example.com"
+      })
+    )
       .post("/api/auth/login")
       .set("Origin", "https://wrong.example.com")
       .send({ email: `${fixturePrefix}origin@example.com`, password: "password" })

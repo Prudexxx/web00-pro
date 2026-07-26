@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import type { NodeEnvironment } from "./env.js";
 
 export interface AuthEnv {
   ACCESS_TOKEN_TTL_SECONDS: number;
@@ -18,6 +19,10 @@ export interface AuthEnvValidationIssue {
   variable: keyof AuthEnv;
 }
 
+export interface AuthEnvParseOptions {
+  nodeEnv: NodeEnvironment;
+}
+
 export class AuthEnvValidationError extends Error {
   public readonly issues: readonly AuthEnvValidationIssue[];
 
@@ -30,7 +35,7 @@ export class AuthEnvValidationError extends Error {
   }
 }
 
-export function parseAuthEnv(input: NodeJS.ProcessEnv): AuthEnv {
+export function parseAuthEnv(input: NodeJS.ProcessEnv, options: AuthEnvParseOptions): AuthEnv {
   const issues: AuthEnvValidationIssue[] = [];
   const accessSecret = parseBase64Secret(input.JWT_ACCESS_SECRET_BASE64, {
     issues,
@@ -71,7 +76,10 @@ export function parseAuthEnv(input: NodeJS.ProcessEnv): AuthEnv {
     min: 0,
     variable: "TRUST_PROXY_HOPS"
   });
-  const authOrigin = parseAuthOrigin(input.AUTH_ORIGIN, issues);
+  const authOrigin = parseAuthOrigin(input.AUTH_ORIGIN, {
+    issues,
+    nodeEnv: options.nodeEnv
+  });
 
   if (
     accessSecret.length >= 32 &&
@@ -195,11 +203,23 @@ function parseInteger(value: string | undefined, options: IntegerOptions): numbe
   return parsed;
 }
 
+interface AuthOriginOptions {
+  issues: AuthEnvValidationIssue[];
+  nodeEnv: NodeEnvironment;
+}
+
 function parseAuthOrigin(
   value: string | undefined,
-  issues: AuthEnvValidationIssue[]
+  options: AuthOriginOptions
 ): string | undefined {
   if (value === undefined || value.trim() === "") {
+    if (options.nodeEnv === "production") {
+      options.issues.push({
+        variable: "AUTH_ORIGIN",
+        message: "AUTH_ORIGIN is required in production."
+      });
+    }
+
     return undefined;
   }
 
@@ -208,15 +228,66 @@ function parseAuthOrigin(
   try {
     const url = new URL(trimmed);
 
-    if (url.origin !== trimmed || (url.protocol !== "http:" && url.protocol !== "https:")) {
+    if (trimmed.includes("*")) {
       throw new Error("invalid origin");
     }
+
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error("invalid origin");
+    }
+
+    if (url.username !== "" || url.password !== "") {
+      throw new Error("invalid origin");
+    }
+
+    if (url.search !== "" || url.hash !== "") {
+      throw new Error("invalid origin");
+    }
+
+    if (!hasOnlyRootPath(trimmed, url)) {
+      throw new Error("invalid origin");
+    }
+
+    if (url.pathname !== "" && url.pathname !== "/") {
+      throw new Error("invalid origin");
+    }
+
+    if (options.nodeEnv === "production" && url.protocol !== "https:") {
+      throw new Error("invalid origin");
+    }
+
+    if (url.protocol === "http:" && !isLocalhost(url.hostname)) {
+      throw new Error("invalid origin");
+    }
+
+    return url.origin;
   } catch {
-    issues.push({
+    options.issues.push({
       variable: "AUTH_ORIGIN",
-      message: "AUTH_ORIGIN must be an http or https origin without a path."
+      message: "AUTH_ORIGIN must be an approved exact origin."
     });
   }
 
-  return trimmed;
+  return undefined;
+}
+
+function isLocalhost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1";
+}
+
+function hasOnlyRootPath(value: string, url: URL): boolean {
+  const schemePrefix = `${url.protocol}//`;
+
+  if (!value.toLowerCase().startsWith(schemePrefix)) {
+    return false;
+  }
+
+  const afterAuthority = value.slice(schemePrefix.length);
+  const pathStart = afterAuthority.search(/[/?#]/);
+
+  if (pathStart === -1) {
+    return true;
+  }
+
+  return afterAuthority.slice(pathStart) === "/";
 }

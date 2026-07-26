@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
 import { parseAuthEnv } from "../../src/config/auth-env.js";
-import { assertTestDatabaseUrl, parseDatabaseEnv } from "../../src/config/database-env.js";
+import { assertTestDatabaseUrl, parseTestDatabaseEnv } from "../../src/config/database-env.js";
 import type { AppEnv } from "../../src/config/env.js";
 import { createPrismaClient } from "../../src/db/prisma.js";
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client.js";
@@ -42,7 +42,7 @@ let adminUserId: string;
 let editorUserId: string;
 
 beforeAll(async () => {
-  const databaseEnv = parseDatabaseEnv(process.env);
+  const databaseEnv = parseTestDatabaseEnv(process.env);
 
   assertTestDatabaseUrl(databaseEnv);
   prisma = createPrismaClient({
@@ -168,7 +168,7 @@ describe("admin users API", () => {
       })
     ).resolves.toBe(2);
 
-    const databaseEnv = parseDatabaseEnv(process.env);
+    const databaseEnv = parseTestDatabaseEnv(process.env);
     const clientA = createPrismaClient({
       databaseUrl: databaseEnv.TEST_DATABASE_URL
     });
@@ -304,7 +304,7 @@ describe("admin users API", () => {
 });
 
 function createAdminUsersApp() {
-  const authEnv = parseAuthEnv(process.env);
+  const authEnv = parseAuthEnv(process.env, { nodeEnv: testEnv.NODE_ENV });
   const authRepository = createAuthRepository({ prisma });
   const accessTokens = createAccessTokenService({
     audience: authEnv.JWT_AUDIENCE,
@@ -355,7 +355,7 @@ function createAdminUsersApp() {
 }
 
 async function signAccessToken(userId: string, role: "admin" | "editor"): Promise<string> {
-  const authEnv = parseAuthEnv(process.env);
+  const authEnv = parseAuthEnv(process.env, { nodeEnv: testEnv.NODE_ENV });
   const accessTokens = createAccessTokenService({
     audience: authEnv.JWT_AUDIENCE,
     issuer: authEnv.JWT_ISSUER,

@@ -4,7 +4,7 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/app.js";
 import { parseAuthEnv } from "../../src/config/auth-env.js";
-import { assertTestDatabaseUrl, parseDatabaseEnv } from "../../src/config/database-env.js";
+import { assertTestDatabaseUrl, parseTestDatabaseEnv } from "../../src/config/database-env.js";
 import type { AppEnv } from "../../src/config/env.js";
 import { createPrismaClient } from "../../src/db/prisma.js";
 import type { PrismaClient } from "../../src/generated/prisma/client.js";
@@ -45,7 +45,7 @@ let editorToken: string;
 let adminUserId: string;
 
 beforeAll(async () => {
-  const databaseEnv = parseDatabaseEnv(process.env);
+  const databaseEnv = parseTestDatabaseEnv(process.env);
 
   assertTestDatabaseUrl(databaseEnv);
   prisma = createPrismaClient({
@@ -219,7 +219,7 @@ describe("admin site image API", () => {
 });
 
 function createImageApp(storage: ImageStorage) {
-  const authEnv = parseAuthEnv(process.env);
+  const authEnv = parseAuthEnv(process.env, { nodeEnv: testEnv.NODE_ENV });
   const authRepository = createAuthRepository({ prisma });
   const accessTokens = createAccessTokenService({
     audience: authEnv.JWT_AUDIENCE,
@@ -317,7 +317,7 @@ async function pngFixture(): Promise<Buffer> {
 }
 
 async function signAccessToken(userId: string, role: "admin" | "editor"): Promise<string> {
-  const authEnv = parseAuthEnv(process.env);
+  const authEnv = parseAuthEnv(process.env, { nodeEnv: testEnv.NODE_ENV });
   const accessTokens = createAccessTokenService({
     audience: authEnv.JWT_AUDIENCE,
     issuer: authEnv.JWT_ISSUER,

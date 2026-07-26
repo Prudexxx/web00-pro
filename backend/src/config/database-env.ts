@@ -1,6 +1,13 @@
-export interface DatabaseEnv {
+export interface RuntimeDatabaseEnv {
+  DATABASE_URL: string;
+}
+
+export interface MigrationDatabaseEnv {
   DATABASE_URL: string;
   SHADOW_DATABASE_URL: string;
+}
+
+export interface TestDatabaseEnv {
   TEST_DATABASE_URL: string;
 }
 
@@ -23,35 +30,76 @@ export class DatabaseEnvValidationError extends Error {
   }
 }
 
-const databaseEnvKeys = ["DATABASE_URL", "SHADOW_DATABASE_URL", "TEST_DATABASE_URL"] as const;
+type DatabaseEnvKey = keyof RuntimeDatabaseEnv | keyof MigrationDatabaseEnv | keyof TestDatabaseEnv;
+
 const productionMarkers = ["supabase", "render", "production", "prod"];
 
-export function parseDatabaseEnv(input: NodeJS.ProcessEnv): DatabaseEnv {
+export function parseRuntimeDatabaseEnv(input: NodeJS.ProcessEnv): RuntimeDatabaseEnv {
   const issues: string[] = [];
   const env = {
-    DATABASE_URL: readRequiredUrl(input, "DATABASE_URL", issues),
-    SHADOW_DATABASE_URL: readRequiredUrl(input, "SHADOW_DATABASE_URL", issues),
-    TEST_DATABASE_URL: readRequiredUrl(input, "TEST_DATABASE_URL", issues)
+    DATABASE_URL: readRequiredUrl(input, "DATABASE_URL", issues)
   };
 
-  for (const key of databaseEnvKeys) {
-    if (env[key] !== "") {
-      parseDatabaseUrlForIssues(env[key], key, issues);
-    }
+  if (env.DATABASE_URL !== "") {
+    parseDatabaseUrlForIssues(env.DATABASE_URL, "DATABASE_URL", issues);
   }
 
   if (issues.length === 0) {
-    collectIsolationIssues(env, issues);
+    collectRuntimeIssues(env, issues);
   }
 
-  if (issues.length > 0) {
-    throw new DatabaseEnvValidationError(issues);
-  }
+  throwIfInvalid(issues);
 
   return env;
 }
 
-export function parseDatabaseUrl(value: string, variableName: keyof DatabaseEnv): DatabaseUrlParts {
+export function parseMigrationDatabaseEnv(input: NodeJS.ProcessEnv): MigrationDatabaseEnv {
+  const issues: string[] = [];
+  const env = {
+    DATABASE_URL: readRequiredUrl(input, "DATABASE_URL", issues),
+    SHADOW_DATABASE_URL: readRequiredUrl(input, "SHADOW_DATABASE_URL", issues)
+  };
+
+  if (env.DATABASE_URL !== "") {
+    parseDatabaseUrlForIssues(env.DATABASE_URL, "DATABASE_URL", issues);
+  }
+
+  if (env.SHADOW_DATABASE_URL !== "") {
+    parseDatabaseUrlForIssues(env.SHADOW_DATABASE_URL, "SHADOW_DATABASE_URL", issues);
+  }
+
+  if (issues.length === 0) {
+    collectMigrationIssues(env, issues);
+  }
+
+  throwIfInvalid(issues);
+
+  return env;
+}
+
+export function parseTestDatabaseEnv(input: NodeJS.ProcessEnv): TestDatabaseEnv {
+  const issues: string[] = [];
+  const env = {
+    TEST_DATABASE_URL: readRequiredUrl(input, "TEST_DATABASE_URL", issues)
+  };
+
+  if (env.TEST_DATABASE_URL !== "") {
+    parseDatabaseUrlForIssues(env.TEST_DATABASE_URL, "TEST_DATABASE_URL", issues);
+  }
+
+  if (issues.length === 0) {
+    collectTestIssues(env, issues);
+  }
+
+  throwIfInvalid(issues);
+
+  return env;
+}
+
+export function parseDatabaseUrl(
+  value: string,
+  variableName: DatabaseEnvKey
+): DatabaseUrlParts {
   const issues: string[] = [];
   const parts = parseDatabaseUrlForIssues(value, variableName, issues);
 
@@ -62,75 +110,53 @@ export function parseDatabaseUrl(value: string, variableName: keyof DatabaseEnv)
   return parts;
 }
 
-export function assertDatabaseIsolation(env: DatabaseEnv): void {
+export function assertRuntimeDatabaseUrl(env: RuntimeDatabaseEnv): void {
   const issues: string[] = [];
 
-  for (const key of databaseEnvKeys) {
-    parseDatabaseUrlForIssues(env[key], key, issues);
-  }
+  parseDatabaseUrlForIssues(env.DATABASE_URL, "DATABASE_URL", issues);
 
   if (issues.length === 0) {
-    collectIsolationIssues(env, issues);
+    collectRuntimeIssues(env, issues);
   }
 
-  if (issues.length > 0) {
-    throw new DatabaseEnvValidationError(issues);
-  }
-}
-
-export function assertTestDatabaseUrl(env: DatabaseEnv): void {
-  assertDatabaseIsolation(env);
-
-  const parts = parseDatabaseUrl(env.TEST_DATABASE_URL, "TEST_DATABASE_URL");
-  const issues: string[] = [];
-
-  if (!isTestDatabaseName(parts.database)) {
-    issues.push("TEST_DATABASE_URL must point to a test database.");
-  }
-
-  if (hasProductionMarker(parts)) {
-    issues.push("TEST_DATABASE_URL must not point to a production-like database.");
-  }
-
-  if (issues.length > 0) {
-    throw new DatabaseEnvValidationError(issues);
-  }
+  throwIfInvalid(issues);
 }
 
 export function assertMigrationDatabaseUrl(
-  env: DatabaseEnv,
+  env: MigrationDatabaseEnv,
   nodeEnv: string | undefined
 ): void {
-  assertDatabaseIsolation(env);
-
-  const database = parseDatabaseUrl(env.DATABASE_URL, "DATABASE_URL");
-  const shadow = parseDatabaseUrl(env.SHADOW_DATABASE_URL, "SHADOW_DATABASE_URL");
   const issues: string[] = [];
+
+  parseDatabaseUrlForIssues(env.DATABASE_URL, "DATABASE_URL", issues);
+  parseDatabaseUrlForIssues(env.SHADOW_DATABASE_URL, "SHADOW_DATABASE_URL", issues);
+
+  if (issues.length === 0) {
+    collectMigrationIssues(env, issues);
+  }
 
   if (nodeEnv === "production") {
     issues.push("DATABASE_URL must not run migrate dev when NODE_ENV is production.");
   }
 
-  if (isTestDatabaseName(database.database)) {
-    issues.push("DATABASE_URL must not point to a test database for migrate dev.");
+  throwIfInvalid(issues);
+}
+
+export function assertTestDatabaseUrl(env: TestDatabaseEnv): void {
+  const issues: string[] = [];
+
+  parseDatabaseUrlForIssues(env.TEST_DATABASE_URL, "TEST_DATABASE_URL", issues);
+
+  if (issues.length === 0) {
+    collectTestIssues(env, issues);
   }
 
-  if (!isShadowDatabaseName(shadow.database)) {
-    issues.push("SHADOW_DATABASE_URL must point to a shadow database.");
-  }
-
-  if (hasProductionMarker(database)) {
-    issues.push("DATABASE_URL must not point to a production-like database.");
-  }
-
-  if (issues.length > 0) {
-    throw new DatabaseEnvValidationError(issues);
-  }
+  throwIfInvalid(issues);
 }
 
 function readRequiredUrl(
   input: NodeJS.ProcessEnv,
-  key: keyof DatabaseEnv,
+  key: DatabaseEnvKey,
   issues: string[]
 ): string {
   const value = input[key];
@@ -145,7 +171,7 @@ function readRequiredUrl(
 
 function parseDatabaseUrlForIssues(
   value: string,
-  variableName: keyof DatabaseEnv,
+  variableName: DatabaseEnvKey,
   issues: string[]
 ): DatabaseUrlParts | null {
   let url: URL;
@@ -182,33 +208,50 @@ function parseDatabaseUrlForIssues(
   };
 }
 
-function collectIsolationIssues(env: DatabaseEnv, issues: string[]): void {
+function collectRuntimeIssues(env: RuntimeDatabaseEnv, issues: string[]): void {
+  const database = parseDatabaseUrl(env.DATABASE_URL, "DATABASE_URL");
+
+  if (isTestDatabaseName(database.database)) {
+    issues.push("DATABASE_URL must not point to a test database.");
+  }
+}
+
+function collectMigrationIssues(env: MigrationDatabaseEnv, issues: string[]): void {
   const database = parseDatabaseUrl(env.DATABASE_URL, "DATABASE_URL");
   const shadow = parseDatabaseUrl(env.SHADOW_DATABASE_URL, "SHADOW_DATABASE_URL");
-  const test = parseDatabaseUrl(env.TEST_DATABASE_URL, "TEST_DATABASE_URL");
 
   if (sameDatabaseTarget(database, shadow)) {
     issues.push("DATABASE_URL and SHADOW_DATABASE_URL must be isolated.");
   }
 
-  if (sameDatabaseTarget(database, test)) {
-    issues.push("DATABASE_URL and TEST_DATABASE_URL must be isolated.");
-  }
-
-  if (sameDatabaseTarget(shadow, test)) {
-    issues.push("SHADOW_DATABASE_URL and TEST_DATABASE_URL must be isolated.");
-  }
-
   if (isTestDatabaseName(database.database)) {
-    issues.push("DATABASE_URL must not point to a test database.");
+    issues.push("DATABASE_URL must not point to a test database for migrate dev.");
   }
 
   if (!isShadowDatabaseName(shadow.database)) {
     issues.push("SHADOW_DATABASE_URL must point to a shadow database.");
   }
 
+  if (hasProductionMarker(database)) {
+    issues.push("DATABASE_URL must not point to a production-like database.");
+  }
+}
+
+function collectTestIssues(env: TestDatabaseEnv, issues: string[]): void {
+  const test = parseDatabaseUrl(env.TEST_DATABASE_URL, "TEST_DATABASE_URL");
+
   if (!isTestDatabaseName(test.database)) {
     issues.push("TEST_DATABASE_URL must point to a test database.");
+  }
+
+  if (hasProductionMarker(test)) {
+    issues.push("TEST_DATABASE_URL must not point to a production-like database.");
+  }
+}
+
+function throwIfInvalid(issues: readonly string[]): void {
+  if (issues.length > 0) {
+    throw new DatabaseEnvValidationError(issues);
   }
 }
 

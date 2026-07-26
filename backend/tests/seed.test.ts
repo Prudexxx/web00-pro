@@ -3,13 +3,13 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { CatalogSnapshot } from "../prisma/seed-web00-data.js";
 import { seedWeb00Catalog } from "../prisma/seed-web00-data.js";
-import { parseDatabaseEnv } from "../src/config/database-env.js";
+import { parseTestDatabaseEnv } from "../src/config/database-env.js";
 import { createPrismaClient } from "../src/db/prisma.js";
 
 const snapshot = JSON.parse(
   readFileSync(join(process.cwd(), "prisma", "seed-data", "web00-catalog.json"), "utf8")
 ) as CatalogSnapshot;
-const databaseEnv = parseDatabaseEnv(process.env);
+const databaseEnv = parseTestDatabaseEnv(process.env);
 const prisma = createPrismaClient({
   databaseUrl: databaseEnv.TEST_DATABASE_URL,
   poolMax: 1
@@ -105,5 +105,7 @@ describe("WEB00 catalog seed", () => {
     expect(seedSource).toContain("seed-data/web00-catalog.json");
     expect(seedSource).not.toContain("assets/js/data.js");
     expect(seedSource).not.toContain("../assets");
+    expect(seedSource).toContain("parseRuntimeDatabaseEnv");
+    expect(seedSource).not.toContain("parseDatabaseEnv");
   });
 });

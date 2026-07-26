@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertTestDatabaseUrl, parseDatabaseEnv } from "../../src/config/database-env.js";
+import { assertTestDatabaseUrl, parseTestDatabaseEnv } from "../../src/config/database-env.js";
 import { createPrismaClient } from "../../src/db/prisma.js";
 import { Prisma, type PrismaClient } from "../../src/generated/prisma/client.js";
 import { runAdminBootstrapCommand } from "../../src/cli/admin-bootstrap.command.js";
@@ -20,7 +20,7 @@ const fixturePrefix = `b6-cli-${Date.now()}-`;
 let prisma: PrismaClient;
 
 beforeAll(() => {
-  const databaseEnv = parseDatabaseEnv(process.env);
+  const databaseEnv = parseTestDatabaseEnv(process.env);
 
   assertTestDatabaseUrl(databaseEnv);
   prisma = createPrismaClient({
@@ -41,7 +41,7 @@ describe("CLI user commands integration", () => {
   it("two concurrent first-admin bootstrap operations create exactly one admin and one audit", async () => {
     await expect(prisma.user.count({ where: { role: "admin" } })).resolves.toBe(0);
 
-    const databaseEnv = parseDatabaseEnv(process.env);
+    const databaseEnv = parseTestDatabaseEnv(process.env);
     const clientA = createPrismaClient({
       databaseUrl: databaseEnv.TEST_DATABASE_URL
     });

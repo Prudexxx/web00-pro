@@ -1,8 +1,20 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createCliUserService } from "../src/cli/cli-user.service.js";
 import { runUserSetPasswordCommand } from "../src/cli/user-set-password.command.js";
 
 describe("CLI user password-set service", () => {
+  it("creates the production repository from runtime database env only", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src", "cli", "user-set-password.command.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("parseRuntimeDatabaseEnv");
+    expect(source).not.toContain("parseDatabaseEnv");
+  });
+
   it("passes only passwordHash and returns a safe sessionsRevoked count", async () => {
     const repository = {
       bootstrapFirstAdmin: vi.fn(),

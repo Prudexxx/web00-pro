@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { parseDatabaseEnv } from "../config/database-env.js";
+import { parseRuntimeDatabaseEnv } from "../config/database-env.js";
 import { createPrismaClient } from "../db/prisma.js";
 import type { PrismaClient } from "../generated/prisma/client.js";
 import type { PasswordHasher } from "../modules/auth/auth.types.js";
@@ -97,7 +97,7 @@ function createRepository(options: UserCreateCommandOptions): {
     };
   }
 
-  const env = parseDatabaseEnv(options.processEnv ?? process.env);
+  const env = parseRuntimeDatabaseEnv(options.processEnv ?? process.env);
   const prisma = createPrismaClient({
     databaseUrl: env.DATABASE_URL
   });

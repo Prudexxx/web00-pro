@@ -4,14 +4,14 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { CatalogSnapshot } from "./seed-web00-data.js";
 import { seedWeb00Catalog } from "./seed-web00-data.js";
-import { assertMigrationDatabaseUrl, parseDatabaseEnv } from "../src/config/database-env.js";
+import { assertRuntimeDatabaseUrl, parseRuntimeDatabaseEnv } from "../src/config/database-env.js";
 import { createPrismaClient } from "../src/db/prisma.js";
 
 const snapshotPath = fileURLToPath(new URL("./seed-data/web00-catalog.json", import.meta.url));
 const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as CatalogSnapshot;
-const databaseEnv = parseDatabaseEnv(process.env);
+const databaseEnv = parseRuntimeDatabaseEnv(process.env);
 
-assertMigrationDatabaseUrl(databaseEnv, process.env.NODE_ENV);
+assertRuntimeDatabaseUrl(databaseEnv);
 
 const prisma = createPrismaClient({
   databaseUrl: databaseEnv.DATABASE_URL

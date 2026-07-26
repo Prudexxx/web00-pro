@@ -150,4 +150,15 @@ describe("GET /api/health", () => {
     await request(app).get("/api/sites").expect(200);
     expect(publicCatalogService.listSites).toHaveBeenCalledTimes(1);
   });
+
+  it("does not call an injected readiness service for health checks", async () => {
+    const readinessService = {
+      check: vi.fn().mockResolvedValue("ready" as const)
+    };
+    const app = createApp({ env: testEnv, readinessService });
+
+    await request(app).get("/api/health").expect(200);
+
+    expect(readinessService.check).not.toHaveBeenCalled();
+  });
 });
