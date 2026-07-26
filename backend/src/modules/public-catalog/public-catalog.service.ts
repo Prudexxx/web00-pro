@@ -5,6 +5,7 @@ import {
   mapSiteDetail,
   mapSiteSummary
 } from "./public-catalog.mapper.js";
+import type { ManagedImageUrlPolicy } from "../images/image.types.js";
 import type {
   CategoryDetailQuery,
   CategoryDetailResponse,
@@ -27,7 +28,7 @@ export interface PublicCatalogService {
 }
 
 export function createPublicCatalogService(
-  options: { repository: PublicCatalogRepository }
+  options: { imageUrlPolicy?: ManagedImageUrlPolicy; repository: PublicCatalogRepository }
 ): PublicCatalogService {
   const repository = options.repository;
 
@@ -49,7 +50,9 @@ export function createPublicCatalogService(
         throw categoryNotFoundError();
       }
 
-      const sites = (result.sites ?? []).map((site) => mapSiteSummary(site));
+      const sites = (result.sites ?? []).map((site) =>
+        mapSiteSummary(site, options.imageUrlPolicy)
+      );
       const data = mapCategoryDetail(result.category, sites);
 
       return result.meta === undefined ? { data } : { data, meta: result.meta };
@@ -66,7 +69,7 @@ export function createPublicCatalogService(
         });
       }
 
-      return { data: mapSiteDetail(site) };
+      return { data: mapSiteDetail(site, options.imageUrlPolicy) };
     },
 
     async listCategories(query) {
@@ -81,7 +84,7 @@ export function createPublicCatalogService(
       const sites = await repository.listPopularSites(query);
 
       return {
-        data: sites.map((site) => mapSiteSummary(site))
+        data: sites.map((site) => mapSiteSummary(site, options.imageUrlPolicy))
       };
     },
 
@@ -89,7 +92,7 @@ export function createPublicCatalogService(
       const result = await repository.listSites(query);
 
       return {
-        data: result.rows.map((site) => mapSiteSummary(site)),
+        data: result.rows.map((site) => mapSiteSummary(site, options.imageUrlPolicy)),
         meta: result.meta
       };
     }

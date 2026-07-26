@@ -31,6 +31,16 @@ describe("admin site update permission helper", () => {
       } as UpdateAdminSiteInput)
     ).not.toThrow();
   });
+
+  it("requires a preview before publishing", () => {
+    const error = new AppError({
+      code: "SITE_PREVIEW_REQUIRED",
+      message: "Site preview is required.",
+      statusCode: 409
+    });
+
+    expect(error.code).toBe("SITE_PREVIEW_REQUIRED");
+  });
 });
 
 function editorPrincipal(): AuthenticatedPrincipal {

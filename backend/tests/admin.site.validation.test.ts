@@ -27,6 +27,30 @@ describe("admin site validation", () => {
     );
   });
 
+  it("rejects image fields in generic create and patch requests", () => {
+    expect(() =>
+      parseCreateAdminSiteInput({
+        ...baseCreate,
+        previewImageUrl: "https://storage.example.test/preview.webp"
+      })
+    ).toThrow("Invalid request.");
+    expect(() =>
+      parseCreateAdminSiteInput({
+        ...baseCreate,
+        galleryImages: []
+      })
+    ).toThrow("Invalid request.");
+    expect(() =>
+      parseUpdateAdminSiteInput(
+        { previewImageUrl: "https://storage.example.test/preview.webp" },
+        "admin"
+      )
+    ).toThrow("Invalid request.");
+    expect(() => parseUpdateAdminSiteInput({ galleryImages: [] }, "admin")).toThrow(
+      "Invalid request."
+    );
+  });
+
   it("allows featured only in admin patch and never in editor patch", () => {
     expect(parseUpdateAdminSiteInput({ featured: true }, "admin")).toEqual({
       featured: true

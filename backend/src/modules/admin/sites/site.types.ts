@@ -70,10 +70,8 @@ export interface CreateAdminSiteInput {
   externalDemoUrl?: string | null;
   features?: string[];
   fullDescription?: string | null;
-  galleryImages?: unknown[];
   legacyTitle?: string | null;
   originalDemoUrl?: string | null;
-  previewImageUrl?: string | null;
   previewType?: string | null;
   priceAmountCents?: number | null;
   priceLabel?: string | null;
@@ -96,10 +94,8 @@ export interface UpdateAdminSiteInput {
   featured?: boolean;
   features?: string[];
   fullDescription?: string | null;
-  galleryImages?: unknown[];
   legacyTitle?: string | null;
   originalDemoUrl?: string | null;
-  previewImageUrl?: string | null;
   previewType?: string | null;
   priceAmountCents?: number | null;
   priceLabel?: string | null;
@@ -113,6 +109,7 @@ export interface UpdateAdminSiteInput {
 
 export interface SiteLifecycleRecord {
   deletedAt: Date | null;
+  previewImageUrl?: string | null;
   status: string;
 }
 

@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
+import { AppError } from "../../../lib/errors.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import {
   categoryInactive,
@@ -102,10 +103,10 @@ export function createPrismaAdminSiteRepository(
               featured: false,
               features: input.features ?? [],
               fullDescription: input.fullDescription ?? null,
-              galleryImages: (input.galleryImages ?? []) as Prisma.InputJsonValue,
+              galleryImages: [],
               legacyTitle: input.legacyTitle ?? null,
               originalDemoUrl: input.originalDemoUrl ?? null,
-              previewImageUrl: input.previewImageUrl ?? null,
+              previewImageUrl: null,
               previewType: input.previewType ?? null,
               priceAmountCents: input.priceAmountCents ?? null,
               priceLabel: input.priceLabel ?? null,
@@ -197,6 +198,13 @@ export function createPrismaAdminSiteRepository(
         assert: async (tx, before) => {
           if (before.status !== "draft") {
             throw siteNotDraft();
+          }
+          if (before.previewImageUrl === null || before.previewImageUrl.trim() === "") {
+            throw new AppError({
+              code: "SITE_PREVIEW_REQUIRED",
+              message: "Site preview is required.",
+              statusCode: 409
+            });
           }
           await assertCategoryIsActive(tx, before.categoryId);
         },
@@ -409,12 +417,8 @@ function toSiteUpdateData(input: UpdateAdminSiteInput): Prisma.SiteUpdateInput {
     ...(input.featured === undefined ? {} : { featured: input.featured }),
     ...(input.features === undefined ? {} : { features: input.features }),
     ...(input.fullDescription === undefined ? {} : { fullDescription: input.fullDescription }),
-    ...(input.galleryImages === undefined
-      ? {}
-      : { galleryImages: input.galleryImages as Prisma.InputJsonValue }),
     ...(input.legacyTitle === undefined ? {} : { legacyTitle: input.legacyTitle }),
     ...(input.originalDemoUrl === undefined ? {} : { originalDemoUrl: input.originalDemoUrl }),
-    ...(input.previewImageUrl === undefined ? {} : { previewImageUrl: input.previewImageUrl }),
     ...(input.previewType === undefined ? {} : { previewType: input.previewType }),
     ...(input.priceAmountCents === undefined ? {} : { priceAmountCents: input.priceAmountCents }),
     ...(input.priceLabel === undefined ? {} : { priceLabel: input.priceLabel }),

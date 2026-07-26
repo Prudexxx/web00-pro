@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AppError } from "../src/lib/errors.js";
+import { createManagedImageUrlPolicy } from "../src/modules/images/image-paths.js";
 import {
   mapCategory,
   mapCategoryDetail,
@@ -74,6 +75,7 @@ describe("public catalog mapper", () => {
           url: "assets/img/solution-gallery/example-01.png"
         }
       ],
+      previewImage: null,
       previewImageUrl: "assets/img/previews/example.png",
       previewType: "iframe",
       priceAmountCents: 500000,
@@ -99,6 +101,82 @@ describe("public catalog mapper", () => {
     ]) {
       expect(summary).not.toHaveProperty(field);
     }
+  });
+
+  it("adds managed preview and gallery variants while preserving legacy fields", () => {
+    const policy = createManagedImageUrlPolicy({
+      bucket: "web00-catalog-images",
+      publicBaseUrl: "https://storage.example.test"
+    });
+    const managedRecord: PublicSiteRecord = {
+      ...siteRecord,
+      category: { slug: "goods", title: "Goods" },
+      galleryImages: [
+        {
+          alt: "",
+          assetId: "33333333-3333-4333-8333-333333333333",
+          sortOrder: 0,
+          storagePath:
+            "sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/33333333-3333-4333-8333-333333333333",
+          url:
+            "https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/33333333-3333-4333-8333-333333333333/1200.webp"
+        }
+      ],
+      previewImageUrl:
+        "https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/preview/44444444-4444-4444-8444-444444444444/1200.webp"
+    };
+
+    const summary = mapSiteSummary(managedRecord, policy);
+
+    expect(summary.previewImageUrl).toBe(managedRecord.previewImageUrl);
+    expect(summary.previewImage).toMatchObject({
+      assetId: "44444444-4444-4444-8444-444444444444",
+      variants: [
+        expect.objectContaining({ width: 480 }),
+        expect.objectContaining({ width: 960 }),
+        expect.objectContaining({ width: 1200 })
+      ]
+    });
+    expect(summary.galleryImages[0]).toMatchObject({
+      alt: "Example Site",
+      assetId: "33333333-3333-4333-8333-333333333333",
+      variants: [
+        expect.objectContaining({ width: 480 }),
+        expect.objectContaining({ width: 960 }),
+        expect.objectContaining({ width: 1200 })
+      ]
+    });
+  });
+
+  it("does not classify gallery lookalikes as managed variants", () => {
+    const policy = createManagedImageUrlPolicy({
+      bucket: "web00-catalog-images",
+      publicBaseUrl: "https://storage.example.test"
+    });
+    const record: PublicSiteRecord = {
+      ...siteRecord,
+      galleryImages: [
+        {
+          alt: "Legacy lookalike",
+          assetId: "33333333-3333-4333-8333-333333333333",
+          sortOrder: 0,
+          storagePath:
+            "sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/33333333-3333-4333-8333-333333333333",
+          url:
+            "https://legacy.example.test/storage/v1/object/public/web00-catalog-images/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/33333333-3333-4333-8333-333333333333/1200.webp"
+        }
+      ]
+    };
+
+    const summary = mapSiteSummary(record, policy);
+
+    expect(summary.galleryImages[0]).toMatchObject({
+      alt: "Legacy lookalike",
+      assetId: "33333333-3333-4333-8333-333333333333",
+      url:
+        "https://legacy.example.test/storage/v1/object/public/web00-catalog-images/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/33333333-3333-4333-8333-333333333333/1200.webp"
+    });
+    expect(summary.galleryImages[0]).not.toHaveProperty("variants");
   });
 
   it("maps a site detail with only the approved additional fields", () => {

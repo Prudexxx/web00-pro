@@ -1,17 +1,20 @@
 import { z } from "zod";
 import { AppError } from "../../lib/errors.js";
+import type { ManagedImageUrlPolicy } from "../images/image.types.js";
 import type {
   PublicCategoryDetail,
   PublicCategoryRecord,
   PublicCategorySummary,
   PublicGalleryImage,
+  PublicPreviewImage,
   PublicSiteDetail,
   PublicSiteRecord,
   PublicSiteSummary
 } from "./public-catalog.types.js";
 
 export const publicGalleryImageSchema = z.object({
-  alt: z.string().min(1),
+  alt: z.string(),
+  assetId: z.string().uuid().optional(),
   sortOrder: z.number().int().min(0),
   storagePath: z.string().min(1),
   url: z.string().min(1)
@@ -30,10 +33,30 @@ export function parsePublicGalleryImages(value: unknown): PublicGalleryImage[] {
     });
   }
 
-  return parsed.data;
+  return parsed.data.map((image) =>
+    image.assetId === undefined
+      ? {
+          alt: image.alt,
+          sortOrder: image.sortOrder,
+          storagePath: image.storagePath,
+          url: image.url
+        }
+      : {
+          alt: image.alt,
+          assetId: image.assetId,
+          sortOrder: image.sortOrder,
+          storagePath: image.storagePath,
+          url: image.url
+        }
+  );
 }
 
-export function mapSiteSummary(record: PublicSiteRecord): PublicSiteSummary {
+export function mapSiteSummary(
+  record: PublicSiteRecord,
+  imageUrlPolicy?: ManagedImageUrlPolicy
+): PublicSiteSummary {
+  const siteId = typeof record.id === "string" ? record.id : "";
+
   return {
     category: {
       slug: record.category.slug,
@@ -45,7 +68,19 @@ export function mapSiteSummary(record: PublicSiteRecord): PublicSiteSummary {
     developmentDays: record.developmentDays,
     featured: record.featured,
     features: record.features,
-    galleryImages: parsePublicGalleryImages(record.galleryImages),
+    galleryImages: mapGalleryImages(
+      parsePublicGalleryImages(record.galleryImages),
+      record.title,
+      siteId,
+      imageUrlPolicy
+    ),
+    previewImage:
+      imageUrlPolicy === undefined || record.previewImageUrl === null || siteId === ""
+        ? null
+        : toPublicPreviewImage(
+            imageUrlPolicy.parseManagedPreview(siteId, record.previewImageUrl),
+            imageUrlPolicy
+          ),
     previewImageUrl: record.previewImageUrl,
     previewType: record.previewType,
     priceAmountCents: record.priceAmountCents,
@@ -58,12 +93,79 @@ export function mapSiteSummary(record: PublicSiteRecord): PublicSiteSummary {
   };
 }
 
-export function mapSiteDetail(record: PublicSiteRecord): PublicSiteDetail {
+export function mapSiteDetail(
+  record: PublicSiteRecord,
+  imageUrlPolicy?: ManagedImageUrlPolicy
+): PublicSiteDetail {
   return {
-    ...mapSiteSummary(record),
+    ...mapSiteSummary(record, imageUrlPolicy),
     fullDescription: record.fullDescription,
     publishedAt: record.publishedAt === null ? null : record.publishedAt.toISOString()
   };
+}
+
+function mapGalleryImages(
+  images: PublicGalleryImage[],
+  siteTitle: string,
+  siteId: string,
+  imageUrlPolicy?: ManagedImageUrlPolicy
+): PublicGalleryImage[] {
+  return images.map((image) => {
+    if (image.assetId === undefined || imageUrlPolicy === undefined || siteId === "") {
+      return image;
+    }
+
+    const managed = toManagedGalleryDescriptor(image, siteId, imageUrlPolicy);
+
+    if (managed === null) {
+      return image;
+    }
+
+    return {
+      ...image,
+      alt: image.alt.trim() === "" ? siteTitle : image.alt,
+      variants: imageUrlPolicy.buildVariants(managed)
+    };
+  });
+}
+
+function toPublicPreviewImage(
+  preview: ReturnType<ManagedImageUrlPolicy["parseManagedPreview"]>,
+  imageUrlPolicy: ManagedImageUrlPolicy
+): PublicPreviewImage | null {
+  if (preview === null) {
+    return null;
+  }
+
+  return {
+    assetId: preview.assetId,
+    url: preview.url,
+    variants: imageUrlPolicy.buildVariants(preview)
+  };
+}
+
+function toManagedGalleryDescriptor(
+  image: PublicGalleryImage,
+  siteId: string,
+  imageUrlPolicy: ManagedImageUrlPolicy
+): ReturnType<ManagedImageUrlPolicy["parseManagedGallery"]> {
+  if (
+    image.assetId === undefined
+  ) {
+    return null;
+  }
+
+  const managed = imageUrlPolicy.parseManagedGallery(siteId, image.url);
+
+  if (
+    managed === null ||
+    managed.assetId !== image.assetId ||
+    managed.storagePath !== image.storagePath
+  ) {
+    return null;
+  }
+
+  return managed;
 }
 
 export function mapCategory(record: PublicCategoryRecord): PublicCategorySummary {

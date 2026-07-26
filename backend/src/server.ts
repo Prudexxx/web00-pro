@@ -9,6 +9,8 @@ import type { DatabaseEnv } from "./config/database-env.js";
 import { parseDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
 import { parseEnv } from "./config/env.js";
+import type { StorageConfig } from "./config/storage-env.js";
+import { parseStorageEnv, toStorageConfig } from "./config/storage-env.js";
 import { createPrismaClient } from "./db/prisma.js";
 import type { PrismaClient } from "./generated/prisma/client.js";
 import { createLogger, type AppLogger } from "./lib/logger.js";
@@ -30,6 +32,15 @@ import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repo
 import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
 import { createPrismaAdminUserRepository } from "./modules/admin/users/user.repository.js";
 import { createAdminUserService } from "./modules/admin/users/user.service.js";
+import { createSiteImageService } from "./modules/admin/images/site-image.service.js";
+import { createPrismaSiteImageRepository } from "./modules/admin/images/site-image.repository.js";
+import { createAssetUploadCoordinator } from "./modules/images/asset-upload-coordinator.js";
+import { createManagedImageUrlPolicy } from "./modules/images/image-paths.js";
+import { createSharpImageProcessor } from "./modules/images/image-processor.js";
+import { createBusboyMultipartImageParser } from "./modules/images/multipart-image-parser.js";
+import { createSupabaseImageStorage } from "./modules/images/supabase-image-storage.js";
+import { createPrismaStorageCleanupRepository } from "./modules/storage-cleanup/storage-cleanup.repository.js";
+import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cleanup.worker.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 
@@ -51,6 +62,7 @@ export interface StartServerOptions {
   logger?: AppLogger;
   now?: () => Date;
   registerSignalHandlers?: boolean;
+  storageConfig: StorageConfig;
 }
 
 export interface StartedServer {
@@ -64,8 +76,22 @@ export function startServer(options: StartServerOptions): StartedServer {
   const prisma = createPrisma({
     databaseUrl: options.databaseEnv.DATABASE_URL
   });
+  const imageUrlPolicy = createManagedImageUrlPolicy({
+    bucket: options.storageConfig.bucket,
+    publicBaseUrl: options.storageConfig.publicBaseUrl
+  });
+  const imageStorage = createSupabaseImageStorage(options.storageConfig);
+  const storageCleanupRepository = createPrismaStorageCleanupRepository({ prisma });
+  const storageCleanupWorker = createStorageCleanupWorker({
+    clock: { now: options.now ?? (() => new Date()) },
+    repository: storageCleanupRepository,
+    storage: imageStorage
+  });
   const repository = createPrismaPublicCatalogRepository({ prisma });
-  const publicCatalogService = createPublicCatalogService({ repository });
+  const publicCatalogService = createPublicCatalogService({
+    imageUrlPolicy,
+    repository
+  });
   const authRepository = createAuthRepository({ prisma });
   const authService = createAuthService({
     accessTokenTtlSeconds: options.authEnv.ACCESS_TOKEN_TTL_SECONDS,
@@ -108,6 +134,15 @@ export function startServer(options: StartServerOptions): StartedServer {
     siteService: createAdminSiteService({
       repository: createPrismaAdminSiteRepository({ prisma })
     }),
+    imageParser: createBusboyMultipartImageParser(),
+    imageService: createSiteImageService({
+      cleanup: storageCleanupRepository,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy,
+      processor: createSharpImageProcessor(),
+      repository: createPrismaSiteImageRepository({ prisma }),
+      storage: imageStorage
+    }),
     userService: createAdminUserService({
       repository: createPrismaAdminUserRepository({ prisma })
     })
@@ -132,6 +167,10 @@ export function startServer(options: StartServerOptions): StartedServer {
   );
   const server = createServer(app);
 
+  if (options.storageConfig.workerEnabled) {
+    storageCleanupWorker.start();
+  }
+
   server.listen(options.env.PORT, () => {
     logLifecycle({
       env: options.env,
@@ -145,7 +184,10 @@ export function startServer(options: StartServerOptions): StartedServer {
     process.once(
       "SIGTERM",
       createShutdownHandler(server, {
-        disconnect: () => prisma.$disconnect(),
+        disconnect: async () => {
+          await storageCleanupWorker.stop();
+          await prisma.$disconnect();
+        },
         env: options.env,
         exit: (code) => process.exit(code),
         logger,
@@ -155,7 +197,10 @@ export function startServer(options: StartServerOptions): StartedServer {
     process.once(
       "SIGINT",
       createShutdownHandler(server, {
-        disconnect: () => prisma.$disconnect(),
+        disconnect: async () => {
+          await storageCleanupWorker.stop();
+          await prisma.$disconnect();
+        },
         env: options.env,
         exit: (code) => process.exit(code),
         logger,
@@ -250,8 +295,9 @@ export function main(): StartedServer {
   const env = parseEnv(process.env);
   const databaseEnv = parseDatabaseEnv(process.env);
   const authEnv = parseAuthEnv(process.env);
+  const storageConfig = toStorageConfig(parseStorageEnv(process.env));
 
-  return startServer({ authEnv, databaseEnv, env });
+  return startServer({ authEnv, databaseEnv, env, storageConfig });
 }
 
 if (isDirectRun()) {

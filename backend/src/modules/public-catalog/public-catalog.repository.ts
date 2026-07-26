@@ -31,6 +31,7 @@ export const publicSiteSelect = {
   features: true,
   fullDescription: true,
   galleryImages: true,
+  id: true,
   previewImageUrl: true,
   previewType: true,
   priceAmountCents: true,

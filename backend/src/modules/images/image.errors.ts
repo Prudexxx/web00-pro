@@ -1,0 +1,38 @@
+import { AppError, type ErrorCode } from "../../lib/errors.js";
+
+export type B7ImageErrorCode =
+  | "IMAGE_REQUIRED"
+  | "IMAGE_TOO_LARGE"
+  | "IMAGE_BATCH_LIMIT_EXCEEDED"
+  | "IMAGE_TOTAL_SIZE_EXCEEDED"
+  | "IMAGE_FORMAT_UNSUPPORTED"
+  | "IMAGE_MIME_MISMATCH"
+  | "IMAGE_INVALID"
+  | "IMAGE_ANIMATION_NOT_ALLOWED"
+  | "IMAGE_PIXEL_LIMIT_EXCEEDED"
+  | "IMAGE_OUTPUT_TOO_LARGE"
+  | "IMAGE_PROCESSING_TIMEOUT"
+  | "GALLERY_LIMIT_EXCEEDED"
+  | "GALLERY_DATA_INVALID"
+  | "IMAGE_NOT_FOUND"
+  | "IMAGE_NOT_MANAGED"
+  | "SITE_PREVIEW_REQUIRED"
+  | "SITE_IMAGE_STATE_FORBIDDEN"
+  | "UPLOAD_ID_CONFLICT"
+  | "STORAGE_UNAVAILABLE"
+  | "STORAGE_WRITE_FAILED"
+  | "STORAGE_CONFIGURATION_INVALID"
+  | "STORAGE_CLEANUP_DEFERRED"
+  | "CONCURRENT_MODIFICATION";
+
+export function createImageAppError(
+  code: B7ImageErrorCode,
+  message: string,
+  statusCode: number
+): AppError {
+  return new AppError({
+    code: code as ErrorCode,
+    message,
+    statusCode
+  });
+}

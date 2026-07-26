@@ -35,9 +35,23 @@ export interface PaginationMeta {
 
 export interface PublicGalleryImage {
   alt: string;
+  assetId?: string;
   sortOrder: number;
   storagePath: string;
   url: string;
+  variants?: PublicImageVariant[];
+}
+
+export interface PublicImageVariant {
+  avifUrl: string;
+  webpUrl: string;
+  width: number;
+}
+
+export interface PublicPreviewImage {
+  assetId: string;
+  url: string;
+  variants: PublicImageVariant[];
 }
 
 export interface PublicSiteCategory {
@@ -54,6 +68,7 @@ export interface PublicSiteSummary {
   featured: boolean;
   features: string[];
   galleryImages: PublicGalleryImage[];
+  previewImage: PublicPreviewImage | null;
   previewImageUrl: string | null;
   previewType: string | null;
   priceAmountCents: number | null;
@@ -92,6 +107,7 @@ export interface PublicSiteRecord {
   features: string[];
   fullDescription: string | null;
   galleryImages: unknown;
+  id?: string;
   previewImageUrl: string | null;
   previewType: string | null;
   priceAmountCents: number | null;

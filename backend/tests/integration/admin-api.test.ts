@@ -484,6 +484,7 @@ async function createSite(input: {
       featured: false,
       features: [],
       galleryImages: [],
+      previewImageUrl: `assets/img/previews/${input.slug}.png`,
       publishedAt: input.published ? new Date("2026-07-24T00:00:00.000Z") : null,
       shortDescription: "Short",
       slug: `${fixturePrefix}${input.slug}`,
