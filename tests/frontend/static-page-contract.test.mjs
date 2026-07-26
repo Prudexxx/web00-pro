@@ -40,6 +40,7 @@ test("solutions.html provides stable B8 catalog state nodes", async () => {
   assert.match(html, /data-catalog-fallback/);
   assert.match(html, /Показаны сохранённые данные\. Обновление временно недоступно\./);
   assert.match(html, /data-catalog-empty/);
+  assert.match(html, /Подходящих решений пока нет\./);
   assert.match(html, /data-catalog-fatal/);
   assert.match(html, /data-solutions-grid/);
   assert.match(html, /data-solution-modal-content/);
@@ -171,4 +172,13 @@ test("B8 CSS supports catalog status and homepage API empty state without new gl
   assert.match(catalogCss, /body\[data-page="solutions"\] \.catalog-state/);
   assert.match(catalogCss, /\.catalog-state\[hidden\]/);
   assert.match(homeCss, /\.mock-template-card--empty/);
+});
+
+test("brief mobile summary preview is constrained by its parent card", async () => {
+  const css = await readFile("assets/css/brief-premium.css", "utf8");
+
+  assert.match(
+    css,
+    /body\[data-page="brief"\] \.brief-summary \.solution-preview\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*min-height:\s*0;/s,
+  );
 });
