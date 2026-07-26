@@ -1,4 +1,4 @@
-const WEB00_CACHE = "web00-shell-v2";
+const WEB00_CACHE = "web00-shell-v3-b8";
 
 const SHELL_ASSETS = [
   "index.html",
@@ -10,10 +10,21 @@ const SHELL_ASSETS = [
   "assets/css/base.css",
   "assets/css/shell.css",
   "assets/css/components.css",
+  "assets/js/data.js",
+  "assets/js/catalog-api.js",
+  "assets/js/main.js",
   "assets/icons/web00-icon-192.png",
   "assets/icons/web00-icon-512.png",
   "assets/icons/web00-maskable-512.png"
 ];
+
+function isRuntimeConfigRequest(url) {
+  return url.origin === self.location.origin && url.pathname.endsWith("/assets/js/runtime-config.js");
+}
+
+function isApiRequest(url) {
+  return url.origin === self.location.origin && (url.pathname.startsWith("/api/") || url.pathname === "/api");
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -25,7 +36,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((key) => key !== WEB00_CACHE).map((key) => caches.delete(key)))
+      Promise.all(keys.filter((key) => key.startsWith("web00-shell-") && key !== WEB00_CACHE).map((key) => caches.delete(key)))
     )
   );
   self.clients.claim();
@@ -36,6 +47,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
+  if (isRuntimeConfigRequest(url) || isApiRequest(url)) return;
   if (url.origin !== self.location.origin) return;
 
   // No personal/project data is cached in this frontend-only service worker.

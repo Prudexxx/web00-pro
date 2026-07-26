@@ -609,6 +609,32 @@ body[data-page="solutions"] .solution-card.is-hidden {
   display: none;
 }
 
+body[data-page="solutions"] .catalog-state {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--catalog-border);
+  border-radius: 6px;
+  background: #fffdfb;
+  color: var(--catalog-secondary);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.catalog-state[hidden] {
+  display: none !important;
+}
+
+body[data-page="solutions"] .catalog-state--fallback {
+  border-color: rgba(142, 15, 19, 0.28);
+  background: var(--catalog-accent-soft);
+  color: var(--catalog-accent);
+}
+
+body[data-page="solutions"] .catalog-state--fatal {
+  border-color: rgba(142, 15, 19, 0.34);
+  color: var(--catalog-accent);
+}
+
 body[data-page="solutions"] .solution-preview,
 body[data-page="solutions"] .solution-card .solution-preview,
 body[data-page="solutions"] .solution-preview--image,
