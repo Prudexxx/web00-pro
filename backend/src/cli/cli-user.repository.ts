@@ -3,6 +3,8 @@ import { AppError } from "../lib/errors.js";
 import type { CliUserRole } from "./cli.types.js";
 
 export const MAX_SERIALIZABLE_ATTEMPTS = 5;
+export const SERIALIZABLE_MAX_WAIT_MS = 10_000;
+export const SERIALIZABLE_TIMEOUT_MS = 30_000;
 
 export interface SafeCliUserRecord {
   active: boolean;
@@ -50,7 +52,11 @@ export interface CliUserRepository {
 interface SerializablePrisma {
   $transaction<T>(
     operation: (tx: Prisma.TransactionClient) => Promise<T>,
-    options: { isolationLevel: Prisma.TransactionIsolationLevel }
+    options: {
+      isolationLevel: Prisma.TransactionIsolationLevel;
+      maxWait: number;
+      timeout: number;
+    }
   ): Promise<T>;
 }
 
@@ -71,7 +77,9 @@ export async function runSerializableWithRetry<T>(
   for (let attempt = 1; attempt <= MAX_SERIALIZABLE_ATTEMPTS; attempt += 1) {
     try {
       return await prisma.$transaction(operation, {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: SERIALIZABLE_MAX_WAIT_MS,
+        timeout: SERIALIZABLE_TIMEOUT_MS
       });
     } catch (error) {
       if (error instanceof AppError || !isRetryableSerializableConflict(error)) {

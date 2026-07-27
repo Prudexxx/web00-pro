@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
+import { Prisma } from "../src/generated/prisma/client.js";
 import { createCliUserService } from "../src/cli/cli-user.service.js";
 import {
   MAX_SERIALIZABLE_ATTEMPTS,
@@ -18,6 +19,12 @@ const safeAdmin = {
   lastLoginAt: null,
   role: "admin" as const,
   updatedAt: new Date("2026-07-25T00:00:00.000Z")
+};
+
+const expectedSerializableTransactionOptions = {
+  isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+  maxWait: 10_000,
+  timeout: 30_000
 };
 
 describe("CLI bootstrap service", () => {
@@ -95,11 +102,41 @@ describe("CLI bootstrap service", () => {
 });
 
 describe("runSerializableWithRetry", () => {
+  it("keeps the documented serializable retry attempt count", () => {
+    expect(MAX_SERIALIZABLE_ATTEMPTS).toBe(5);
+  });
+
+  it("passes the production acquisition wait and timeout options to every attempt", async () => {
+    const prisma = {
+      $transaction: vi
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error("write conflict"), { code: "P2034" }))
+        .mockImplementationOnce(async (operation: (tx: unknown) => Promise<string>) =>
+          operation({})
+        )
+    };
+
+    await expect(
+      runSerializableWithRetry(prisma as never, async () => "ok")
+    ).resolves.toBe("ok");
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(prisma.$transaction).toHaveBeenNthCalledWith(
+      1,
+      expect.any(Function),
+      expectedSerializableTransactionOptions
+    );
+    expect(prisma.$transaction).toHaveBeenNthCalledWith(
+      2,
+      expect.any(Function),
+      expectedSerializableTransactionOptions
+    );
+  });
+
   it("retries P2034 once and opens a fresh serializable transaction per attempt", async () => {
     const transactions: unknown[] = [];
     const prisma = {
       $transaction: vi.fn(async (operation: (tx: unknown) => Promise<string>, options) => {
-        expect(options).toMatchObject({ isolationLevel: "Serializable" });
+        expect(options).toMatchObject(expectedSerializableTransactionOptions);
         const tx = {};
         transactions.push(tx);
 
