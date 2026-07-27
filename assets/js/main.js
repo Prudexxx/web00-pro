@@ -12,6 +12,7 @@
   let bugAttachment = null;
   let catalogState = null;
   let popularCatalogState = null;
+  let catalogRetryUsed = false;
   const TITLE_ALIASES = new Map([
     ["Каталог мебели", "Мебельный магазин"],
     ["Сайт для клининга", "Услуга клининга"],
@@ -902,6 +903,9 @@
     setCatalogStateNode("[data-catalog-fallback]", !loading && Boolean(state?.staticFallbackActive));
     setCatalogStateNode("[data-catalog-empty]", !loading && state?.lifecycle === "empty");
     setCatalogStateNode("[data-catalog-fatal]", !loading && state?.lifecycle === "fatal");
+    $$("[data-catalog-retry]").forEach((button) => {
+      button.disabled = loading || catalogRetryUsed;
+    });
   }
 
   async function initCatalogState() {
@@ -910,10 +914,17 @@
       updateCatalogStateNodes(null);
       return catalogState;
     }
+    catalogState = CATALOG.getStaticCatalog();
     updateCatalogStateNodes(null, { loading: true });
-    const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions" });
-    if (nextCatalogState) catalogState = nextCatalogState;
-    updateCatalogStateNodes(catalogState);
+    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
+      if (nextCatalogState) {
+        catalogState = nextCatalogState;
+        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
+      }
+      updateCatalogStateNodes(catalogState);
+    }).catch(() => {
+      updateCatalogStateNodes(catalogState);
+    });
     return catalogState;
   }
 
@@ -922,16 +933,38 @@
       popularCatalogState = null;
       return popularCatalogState;
     }
-    const nextPopularCatalogState = await CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3 });
-    if (nextPopularCatalogState) popularCatalogState = nextPopularCatalogState;
+    CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3 }).then((nextPopularCatalogState) => {
+      if (nextPopularCatalogState) popularCatalogState = nextPopularCatalogState;
+      renderPopularSolutions();
+    }).catch(() => undefined);
     return popularCatalogState;
   }
 
   async function initBriefCatalogState() {
     if (!CATALOG || page !== "brief") return catalogState;
-    const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions" });
-    if (nextCatalogState) catalogState = nextCatalogState;
+    catalogState = CATALOG.getStaticCatalog();
+    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
+      if (nextCatalogState) catalogState = nextCatalogState;
+    }).catch(() => undefined);
     return catalogState;
+  }
+
+  async function retryCatalogLoad(button) {
+    if (!CATALOG || page !== "solutions" || catalogRetryUsed) return;
+    catalogRetryUsed = true;
+    if (button) button.disabled = true;
+    updateCatalogStateNodes(catalogState, { loading: true });
+    try {
+      const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions" });
+      if (nextCatalogState) {
+        catalogState = nextCatalogState;
+        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
+      }
+    } catch (_) {
+      // Keep the currently visible saved catalog if the retry cannot complete.
+    } finally {
+      updateCatalogStateNodes(catalogState);
+    }
   }
 
   function setModal(name, open) {
@@ -1024,6 +1057,13 @@
 
     document.addEventListener("click", (event) => {
       const leadButton = event.target.closest("[data-open-lead]");
+      const catalogRetryButton = event.target.closest("[data-catalog-retry]");
+      if (catalogRetryButton) {
+        event.preventDefault();
+        retryCatalogLoad(catalogRetryButton);
+        return;
+      }
+
       if (leadButton) {
         event.preventDefault();
         const solutionId = leadButton.dataset.solutionId;

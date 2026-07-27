@@ -620,8 +620,34 @@ body[data-page="solutions"] .catalog-state {
   line-height: 1.35;
 }
 
+body[data-page="solutions"] .catalog-state--fallback,
+body[data-page="solutions"] .catalog-state--fatal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .catalog-state[hidden] {
   display: none !important;
+}
+
+body[data-page="solutions"] .catalog-state button {
+  min-height: 32px;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  padding: 0 12px;
+  background: #fffdfb;
+  color: inherit;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+body[data-page="solutions"] .catalog-state button:disabled {
+  cursor: default;
+  opacity: 0.56;
 }
 
 body[data-page="solutions"] .catalog-state--fallback {
@@ -633,6 +659,18 @@ body[data-page="solutions"] .catalog-state--fallback {
 body[data-page="solutions"] .catalog-state--fatal {
   border-color: rgba(142, 15, 19, 0.34);
   color: var(--catalog-accent);
+}
+
+@media (max-width: 560px) {
+  body[data-page="solutions"] .catalog-state--fallback,
+  body[data-page="solutions"] .catalog-state--fatal {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  body[data-page="solutions"] .catalog-state button {
+    width: 100%;
+  }
 }
 
 body[data-page="solutions"] .solution-preview,

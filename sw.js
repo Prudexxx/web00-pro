@@ -1,4 +1,4 @@
-const WEB00_CACHE = "web00-shell-v3-b8";
+const WEB00_CACHE = "web00-shell-v4-b8-live-api";
 
 const SHELL_ASSETS = [
   "index.html",

@@ -12,6 +12,9 @@
   const ENCODED_CONTROL_RE = /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i;
   const LOCAL_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
   const CHANNELS = new Map();
+  const API_EMPTY_FALLBACK_SOURCE = "API_EMPTY_FALLBACK";
+  const CACHE_VERSION = "b8-live-api-v1";
+  const CACHE_TTL_MS = 5 * 60 * 1000;
 
   function escapeHtml(value) {
     return String(value ?? "")
@@ -141,6 +144,52 @@
 
   function getConfig() {
     return validateConfig();
+  }
+
+  function getSessionStorage() {
+    try {
+      return window.sessionStorage || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function catalogCacheKey(kind, options = {}) {
+    if (kind === "popular") {
+      const limit = Number(options.limit || 3);
+      return `WEB00_CATALOG_API_CACHE:${CACHE_VERSION}:popular:${Number.isFinite(limit) ? Math.round(limit) : 3}`;
+    }
+    return `WEB00_CATALOG_API_CACHE:${CACHE_VERSION}:solutions`;
+  }
+
+  function readCachedCatalogResult(key) {
+    const storage = getSessionStorage();
+    if (!storage) return null;
+    let payload;
+    try {
+      payload = JSON.parse(storage.getItem(key) || "null");
+    } catch (_) {
+      return null;
+    }
+    if (!payload || payload.version !== CACHE_VERSION || !Array.isArray(payload.items)) return null;
+    const age = Date.now() - Number(payload.createdAt || 0);
+    if (!Number.isFinite(age) || age < 0 || age > CACHE_TTL_MS) return null;
+    return catalogResultFromItems(payload.items, "api-cache");
+  }
+
+  function writeCachedCatalogResult(key, result) {
+    if (!result || result.source !== "api" || result.lifecycle !== "ready" || !Array.isArray(result.items)) return;
+    const storage = getSessionStorage();
+    if (!storage) return;
+    try {
+      storage.setItem(key, JSON.stringify({
+        version: CACHE_VERSION,
+        createdAt: Date.now(),
+        items: result.items,
+      }));
+    } catch (_) {
+      // Session storage can be unavailable in private or constrained browser modes.
+    }
   }
 
   function moneyFromCents(value) {
@@ -390,6 +439,24 @@
     };
   }
 
+  function apiEmptyFallbackResult() {
+    const fallback = getStaticCatalog({ source: API_EMPTY_FALLBACK_SOURCE });
+    if (fallback.lifecycle === "ready" && fallback.items.length) {
+      return withStateFlags({
+        source: API_EMPTY_FALLBACK_SOURCE,
+        lifecycle: "fallback",
+        items: fallback.items,
+        errorCode: "WEB00_API_EMPTY",
+      }, { apiAvailable: true, staticFallbackActive: true });
+    }
+    return withStateFlags({
+      source: "api",
+      lifecycle: "empty",
+      items: [],
+      errorCode: "WEB00_API_EMPTY",
+    }, { apiAvailable: true, staticFallbackActive: false });
+  }
+
   async function loadAllSites(options = {}) {
     const config = options.config || getConfig();
     if (!config.apiEnabled) return getStaticCatalog();
@@ -476,6 +543,12 @@
 
     const channel = getRequestChannel(kind === "popular" ? "popular" : "catalog");
     const request = channel.start(config.requestTimeoutMs);
+    const cacheKey = catalogCacheKey(kind, options);
+    const cached = readCachedCatalogResult(cacheKey);
+    if (cached) {
+      channel.finish(request.sequence);
+      return withStateFlags(cached, { apiAvailable: true, staticFallbackActive: false });
+    }
 
     try {
       const result = kind === "popular"
@@ -484,6 +557,10 @@
       if (channel.isStale(request.sequence)) {
         return null;
       }
+      if (result.source === "api" && result.lifecycle === "empty" && config.staticFallbackEnabled) {
+        return apiEmptyFallbackResult();
+      }
+      writeCachedCatalogResult(cacheKey, result);
       return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
     } catch (error) {
       const errorCode = error && error.code ? error.code : (request.signal.aborted ? "WEB00_API_ABORTED" : "WEB00_API_ERROR");

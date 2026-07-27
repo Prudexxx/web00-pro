@@ -1,5 +1,21 @@
 export function createFakeBrowser(options = {}) {
   const listeners = new Map();
+  const sessionValues = new Map();
+  const sessionStorage = options.sessionStorage || {
+    getItem(key) {
+      const value = sessionValues.get(String(key));
+      return value === undefined ? null : value;
+    },
+    setItem(key, value) {
+      sessionValues.set(String(key), String(value));
+    },
+    removeItem(key) {
+      sessionValues.delete(String(key));
+    },
+    clear() {
+      sessionValues.clear();
+    },
+  };
   const document = {
     body: { dataset: { page: options.page || "home" } },
     addEventListener(type, handler) {
@@ -26,6 +42,7 @@ export function createFakeBrowser(options = {}) {
     setTimeout,
     clearTimeout,
     AbortController,
+    sessionStorage,
     WEB00_TEST_MODE: options.testMode !== false,
   };
 
