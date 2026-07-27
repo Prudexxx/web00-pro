@@ -23,7 +23,7 @@
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
     "prisma:format": "prisma format --schema prisma/schema.prisma",
     "prisma:format:check": "tsx scripts/check-prisma-format.ts",
-    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:generate": "prisma generate --config prisma.generate.config.ts",
     "seed": "tsx prisma/seed.ts",
     "seed:verify": "tsx scripts/verify-catalog-snapshot.ts",
     "seed:build-snapshot": "tsx scripts/build-catalog-snapshot.ts",

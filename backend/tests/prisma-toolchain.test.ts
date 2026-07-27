@@ -1,11 +1,40 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const backendRoot = process.cwd();
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function readJsonFile<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
+}
+
+function runNpmScriptWithoutDatabaseUrls(script: string): ReturnType<typeof spawnSync> {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DOTENV_CONFIG_PATH: join(backendRoot, ".env.prisma-generate-contract-missing"),
+    NODE_ENV: "production"
+  };
+
+  delete env.DATABASE_URL;
+  delete env.SHADOW_DATABASE_URL;
+  delete env.TEST_DATABASE_URL;
+
+  const npmExecPath = [
+    process.env.npm_execpath,
+    join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
+  ].find((candidate): candidate is string => candidate !== undefined && existsSync(candidate));
+  const command = npmExecPath === undefined ? npmCommand : process.execPath;
+  const args = npmExecPath === undefined ? ["run", script] : [npmExecPath, "run", script];
+
+  return spawnSync(command, args, {
+    cwd: backendRoot,
+    encoding: "utf8",
+    env,
+    shell: npmExecPath === undefined && process.platform === "win32",
+    timeout: 120_000
+  });
 }
 
 describe("Prisma toolchain contract", () => {
@@ -44,7 +73,7 @@ describe("Prisma toolchain contract", () => {
       "prisma:validate": "prisma validate --schema prisma/schema.prisma",
       "prisma:format": "prisma format --schema prisma/schema.prisma",
       "prisma:format:check": "tsx scripts/check-prisma-format.ts",
-      "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+      "prisma:generate": "prisma generate --config prisma.generate.config.ts",
       seed: "tsx prisma/seed.ts",
       "seed:verify": "tsx scripts/verify-catalog-snapshot.ts",
       "seed:build-snapshot": "tsx scripts/build-catalog-snapshot.ts",
@@ -56,6 +85,52 @@ describe("Prisma toolchain contract", () => {
     });
     expect(packageJson.scripts).not.toHaveProperty("postinstall");
   });
+
+  it("separates Prisma generate from strict migration config", () => {
+    const packageJson = readJsonFile<{
+      scripts?: Record<string, string>;
+    }>(join(backendRoot, "package.json"));
+    const generationConfig = readFileSync(join(backendRoot, "prisma.generate.config.ts"), "utf8");
+    const migrationConfig = readFileSync(join(backendRoot, "prisma.config.ts"), "utf8");
+
+    expect(packageJson.scripts?.["prisma:generate"]).toBe(
+      "prisma generate --config prisma.generate.config.ts"
+    );
+    expect(generationConfig).toContain('import { defineConfig } from "prisma/config";');
+    expect(generationConfig).toContain('schema: "prisma/schema.prisma"');
+    expect(generationConfig).not.toContain("datasource");
+    expect(generationConfig).not.toContain("DATABASE_URL");
+    expect(generationConfig).not.toContain("SHADOW_DATABASE_URL");
+    expect(generationConfig).not.toContain("dotenv/config");
+    expect(generationConfig).not.toMatch(/postgres(?:ql)?:\/\//);
+    expect(generationConfig).not.toContain("password");
+    expect(generationConfig).not.toContain("sb_secret_");
+
+    expect(migrationConfig).toContain('import "dotenv/config";');
+    expect(migrationConfig).toContain('url: env("DATABASE_URL")');
+    expect(migrationConfig).toContain('shadowDatabaseUrl: env("SHADOW_DATABASE_URL")');
+
+    for (const scriptName of [
+      "prisma:validate",
+      "db:migrate:dev",
+      "db:migrate:deploy",
+      "db:migrate:status",
+      "seed"
+    ]) {
+      expect(packageJson.scripts?.[scriptName]).not.toContain("prisma.generate.config.ts");
+    }
+  });
+
+  it("generates Prisma client without database URLs in a Render-shaped build environment", () => {
+    const result = runNpmScriptWithoutDatabaseUrls("prisma:generate");
+    const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}\n${result.error?.message ?? ""}`;
+
+    expect(output).not.toContain("DATABASE_URL=");
+    expect(output).not.toContain("SHADOW_DATABASE_URL=");
+    expect(output).not.toContain("TEST_DATABASE_URL=");
+    expect(result.status, output).toBe(0);
+    expect(existsSync(join(backendRoot, "src", "generated", "prisma", "client.ts"))).toBe(true);
+  }, 120_000);
 
   it("keeps generated Prisma output and local env files out of Git", () => {
     const gitignore = readFileSync(join(backendRoot, ".gitignore"), "utf8");
