@@ -536,6 +536,10 @@ body[data-page="brief"] .brief-summary__eyebrow {
 }
 
 body[data-page="brief"] .brief-summary .solution-preview {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 0;
   margin-bottom: 12px;
   aspect-ratio: 16 / 9;
   overflow: hidden;
