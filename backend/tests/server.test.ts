@@ -95,6 +95,70 @@ describe("createShutdownHandler", () => {
 });
 
 describe("app/server auth integration boundary", () => {
+  it("binds the HTTP listener to all interfaces for Render while preserving lifecycle logging", async () => {
+    vi.resetModules();
+    const listen = vi.fn();
+    const close = vi.fn();
+    const server = { close, listen } as unknown as Server;
+
+    vi.doMock("node:http", () => ({
+      createServer: vi.fn(() => server)
+    }));
+
+    const { startServer } = await import("../src/server.js");
+    const logger = { log: vi.fn() };
+    const port = 53_201;
+
+    startServer({
+      authEnv: {
+        ACCESS_TOKEN_TTL_SECONDS: 900,
+        AUTH_FINGERPRINT_SECRET: Buffer.alloc(32, 2),
+        AUTH_FINGERPRINT_SECRET_BASE64: Buffer.alloc(32, 2).toString("base64"),
+        JWT_ACCESS_SECRET: Buffer.alloc(32, 1),
+        JWT_ACCESS_SECRET_BASE64: Buffer.alloc(32, 1).toString("base64"),
+        JWT_AUDIENCE: "web00-admin",
+        JWT_ISSUER: "web00-backend",
+        REFRESH_TOKEN_TTL_SECONDS: 604_800,
+        TRUST_PROXY_HOPS: 1
+      },
+      createPrisma: vi.fn(() => ({ $disconnect: vi.fn() }) as never),
+      databaseEnv: { DATABASE_URL: "postgresql://user:pass@127.0.0.1:5432/web00_backend_dev" },
+      env: { ...testEnv, PORT: port },
+      logger,
+      publicCorsConfig: {
+        allowedMethods: ["GET", "HEAD", "OPTIONS"],
+        allowedOrigins: new Set(["https://prudexxx.github.io"]),
+        maxOrigins: 10
+      },
+      registerSignalHandlers: false,
+      storageConfig: {
+        bucket: "web00-catalog-images",
+        credentials: {
+          serviceRoleKey: "sb_secret_fake",
+          supabaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co"
+        },
+        publicBaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co",
+        workerEnabled: false,
+        workerPollIntervalSeconds: 60
+      }
+    });
+
+    expect(listen).toHaveBeenCalledTimes(1);
+    expect(listen).toHaveBeenCalledWith(port, "0.0.0.0", expect.any(Function));
+
+    const lifecycleCallback = listen.mock.calls[0]?.[2] as (() => void) | undefined;
+    lifecycleCallback?.();
+
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "server_started",
+        service: "web00-backend"
+      })
+    );
+
+    vi.doUnmock("node:http");
+  });
+
   it("mounts injected auth routes before the final 404 handler", async () => {
     const authRoutes = express.Router();
 

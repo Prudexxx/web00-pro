@@ -183,7 +183,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     storageCleanupWorker.start();
   }
 
-  server.listen(options.env.PORT, () => {
+  server.listen(options.env.PORT, "0.0.0.0", () => {
     logLifecycle({
       env: options.env,
       event: "server_started",
