@@ -2,6 +2,7 @@ import { createApiClient } from "./api-client.js";
 import { createAuthStore } from "./auth-store.js";
 import { createLoginView } from "./screens/login.js";
 import { createAuthenticatedShell } from "./screens/shell.js";
+import { createImageManagerScreen } from "./screens/image-manager.js";
 import { createSiteEditorScreen } from "./screens/site-editor.js";
 import { createSitesListScreen } from "./screens/sites-list.js";
 
@@ -112,6 +113,7 @@ export async function bootstrapAdminApp(options = {}) {
       onEdit: (siteId) => {
         showSiteEditor("edit", siteId);
       },
+      onImages: showImageManager,
       onStatus: shellElement.setStatus,
       role: currentUser.role
     });
@@ -126,12 +128,28 @@ export async function bootstrapAdminApp(options = {}) {
       documentRef,
       mode,
       onCancel: showSitesList,
+      onImages: showImageManager,
       onSaved: showSitesList,
       onStatus: shellElement.setStatus,
       role: currentUser.role,
       ...(siteId === undefined ? {} : { siteId })
     });
     shellElement.showContent(mode === "create" ? "Создать draft" : "Редактировать карточку", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function showImageManager(siteId) {
+    destroyCurrentScreen();
+    currentScreen = createImageManagerScreen({
+      apiClient: api,
+      documentRef,
+      onBack: showSitesList,
+      onSiteUpdated: () => {},
+      onStatus: shellElement.setStatus,
+      role: currentUser.role,
+      siteId
+    });
+    shellElement.showContent("Изображения", currentScreen.element);
     void currentScreen.load();
   }
 

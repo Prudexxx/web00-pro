@@ -5,6 +5,7 @@ import {
   replaceContent,
   setBusy
 } from "../dom.js";
+import { createConfirmationDialog } from "../dialog.js";
 
 const QUERY_ORDER = [
   "search",
@@ -23,6 +24,51 @@ const STATUS_VALUES = new Set(["draft", "published", "archived"]);
 const DELETED_VALUES = new Set(["without", "with", "only"]);
 const SORT_VALUES = new Set(["updatedAt", "createdAt", "title", "sortOrder"]);
 const DIRECTION_VALUES = new Set(["asc", "desc"]);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LIFECYCLE_ACTIONS = {
+  publish: {
+    confirmLabel: "Опубликовать",
+    description: "Сайт станет доступен публичному каталогу после подтверждения сервером.",
+    label: "Опубликовать",
+    method: "POST",
+    path: (siteId) => `/api/admin/sites/${siteId}/publish`,
+    success: "Сайт опубликован."
+  },
+  unpublish: {
+    confirmLabel: "Снять с публикации",
+    description: "Сайт вернётся в draft после подтверждения сервером.",
+    label: "Снять",
+    method: "POST",
+    path: (siteId) => `/api/admin/sites/${siteId}/unpublish`,
+    success: "Сайт снят с публикации."
+  },
+  "soft-delete": {
+    confirmLabel: "Удалить",
+    description: "Сайт будет скрыт как удалённый после подтверждения сервером.",
+    destructive: true,
+    label: "Удалить",
+    method: "DELETE",
+    path: (siteId) => `/api/admin/sites/${siteId}`,
+    success: "Сайт удалён."
+  },
+  restore: {
+    confirmLabel: "Восстановить",
+    description: "Сайт вернётся из удалённых после подтверждения сервером.",
+    label: "Восстановить",
+    method: "POST",
+    path: (siteId) => `/api/admin/sites/${siteId}/restore`,
+    success: "Сайт восстановлен."
+  },
+  "permanent-delete": {
+    confirmLabel: "Удалить навсегда",
+    description: "Permanent delete нельзя отменить. Запрос отправляется без тела.",
+    destructive: true,
+    label: "Удалить навсегда",
+    method: "DELETE",
+    path: (siteId) => `/api/admin/sites/${siteId}/permanent`,
+    success: "Сайт удалён навсегда."
+  }
+};
 
 export function createSitesListScreen(options) {
   const documentRef = options?.documentRef ?? document;
@@ -30,9 +76,11 @@ export function createSitesListScreen(options) {
   const role = options?.role === "admin" ? "admin" : "editor";
   const onCreate = typeof options?.onCreate === "function" ? options.onCreate : () => {};
   const onEdit = typeof options?.onEdit === "function" ? options.onEdit : () => {};
+  const onImages = typeof options?.onImages === "function" ? options.onImages : () => {};
   const onStatus = typeof options?.onStatus === "function" ? options.onStatus : () => {};
   let activeController = null;
   let categories = [];
+  let currentDialog = null;
   let filters = {};
   let destroyed = false;
 
@@ -46,6 +94,10 @@ export function createSitesListScreen(options) {
     attributes: {
       "aria-live": "polite"
     }
+  });
+  const dialogHost = createElement("section", {
+    documentRef,
+    className: "admin-dialog-host"
   });
   const form = createFilterForm({
     documentRef,
@@ -98,7 +150,8 @@ export function createSitesListScreen(options) {
       }),
       form,
       statusRegion,
-      results
+      results,
+      dialogHost
     ]
   });
 
@@ -129,7 +182,9 @@ export function createSitesListScreen(options) {
       renderSites({
         documentRef,
         filters,
+        onImages,
         onEdit,
+        onLifecycleAction: openLifecycleDialog,
         results,
         role,
         sites: Array.isArray(siteResponse?.data) ? siteResponse.data : [],
@@ -151,12 +206,61 @@ export function createSitesListScreen(options) {
   function destroy() {
     destroyed = true;
     abortActiveRequest();
+    currentDialog?.destroy();
+    currentDialog = null;
   }
 
   function abortActiveRequest() {
     if (activeController !== null) {
       activeController.abort();
       activeController = null;
+    }
+  }
+
+  function openLifecycleDialog(site, actionId, invoker) {
+    const action = LIFECYCLE_ACTIONS[actionId];
+    if (action === undefined || !getAvailableLifecycleActions(site, role).some((item) => item.id === actionId)) {
+      return;
+    }
+
+    currentDialog?.destroy();
+    currentDialog = createConfirmationDialog({
+      confirmationText: actionId === "permanent-delete" ? confirmationPhrase(site) : undefined,
+      confirmLabel: action.confirmLabel,
+      description: `${action.description} Сайт: ${visibleSiteName(site)}.`,
+      destructive: action.destructive === true,
+      documentRef,
+      onConfirm: async () => {
+        await runLifecycleMutation(site, actionId);
+      },
+      title: action.confirmLabel
+    });
+    replaceContent(dialogHost, currentDialog.element);
+    currentDialog.open(invoker);
+  }
+
+  async function runLifecycleMutation(site, actionId) {
+    const action = LIFECYCLE_ACTIONS[actionId];
+
+    try {
+      await apiClient.requestJson(action.path(validateUuid(site.id, "site")), {
+        method: action.method
+      });
+      if (destroyed) {
+        return;
+      }
+
+      statusRegion.textContent = action.success;
+      onStatus(action.success);
+      await load();
+    } catch (error) {
+      if (!destroyed) {
+        const message = lifecycleErrorMessage(error);
+        statusRegion.textContent = message;
+        onStatus(message);
+      }
+
+      throw dialogError(error);
     }
   }
 
@@ -170,6 +274,26 @@ export function createSitesListScreen(options) {
       });
     }
   };
+}
+
+export function getAvailableLifecycleActions(site, role) {
+  if (role !== "admin" || typeof site !== "object" || site === null) {
+    return [];
+  }
+  if ("active" in site && site.active !== true) {
+    return [];
+  }
+  if (site.deletedAt !== undefined && site.deletedAt !== null) {
+    return [actionDescriptor("restore"), actionDescriptor("permanent-delete")];
+  }
+  if (site.status === "draft") {
+    return [actionDescriptor("publish"), actionDescriptor("soft-delete")];
+  }
+  if (site.status === "published") {
+    return [actionDescriptor("unpublish"), actionDescriptor("soft-delete")];
+  }
+
+  return [];
 }
 
 export function normalizeSitesListFilters(rawFilters, options = {}) {
@@ -355,7 +479,7 @@ function renderError(results, documentRef, error) {
   replaceContent(results, ...children);
 }
 
-function renderSites({ documentRef, filters, meta, onEdit, results, role, sites }) {
+function renderSites({ documentRef, filters, meta, onEdit, onImages, onLifecycleAction, results, role, sites }) {
   if (sites.length === 0) {
     replaceContent(results, createElement("p", {
       documentRef,
@@ -392,7 +516,14 @@ function renderSites({ documentRef, filters, meta, onEdit, results, role, sites 
       }),
       createElement("tbody", {
         documentRef,
-        children: sites.map((site) => createSiteRow({ documentRef, onEdit, role, site }))
+        children: sites.map((site) => createSiteRow({
+          documentRef,
+          onEdit,
+          onImages,
+          onLifecycleAction,
+          role,
+          site
+        }))
       })
     ]
   });
@@ -405,7 +536,7 @@ function renderSites({ documentRef, filters, meta, onEdit, results, role, sites 
   replaceContent(results, table, pagination);
 }
 
-function createSiteRow({ documentRef, onEdit, role, site }) {
+function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role, site }) {
   const cells = [
     createElement("td", { documentRef, text: site.title ?? "" }),
     createElement("td", { documentRef, text: site.slug ?? "" }),
@@ -423,17 +554,51 @@ function createSiteRow({ documentRef, onEdit, role, site }) {
   cells.push(createElement("td", {
     documentRef,
     children: [
-      createElement("button", {
+      createElement("div", {
         documentRef,
-        text: "Редактировать",
-        attributes: {
-          "data-action": "edit-site",
-          "data-site-id": site.id,
-          type: "button"
-        },
-        on: {
-          click: () => onEdit(site.id)
-        }
+        className: "admin-site-actions",
+        children: [
+          createElement("button", {
+            documentRef,
+            text: "Редактировать",
+            attributes: {
+              "data-action": "edit-site",
+              "data-site-id": site.id,
+              type: "button"
+            },
+            on: {
+              click: () => onEdit(site.id)
+            }
+          }),
+          ...(canManageSiteImages(site, role)
+            ? [
+                createElement("button", {
+                  documentRef,
+                  text: "Изображения",
+                  attributes: {
+                    "data-action": "manage-images",
+                    "data-site-id": site.id,
+                    type: "button"
+                  },
+                  on: {
+                    click: () => onImages(site.id)
+                  }
+                })
+              ]
+            : []),
+          ...getAvailableLifecycleActions(site, role).map((action) => createElement("button", {
+            documentRef,
+            text: action.label,
+            attributes: {
+              "data-lifecycle-action": action.id,
+              "data-site-id": site.id,
+              type: "button"
+            },
+            on: {
+              click: (event) => onLifecycleAction(site, action.id, event.currentTarget ?? event.target)
+            }
+          }))
+        ]
       })
     ]
   }));
@@ -442,6 +607,63 @@ function createSiteRow({ documentRef, onEdit, role, site }) {
     documentRef,
     children: cells
   });
+}
+
+function canManageSiteImages(site, role) {
+  if (typeof site !== "object" || site === null) {
+    return false;
+  }
+  if ("active" in site && site.active !== true) {
+    return false;
+  }
+  if ("deletedAt" in site && site.deletedAt !== null && site.deletedAt !== undefined) {
+    return false;
+  }
+  if (site.status === "archived") {
+    return false;
+  }
+  if (role === "editor") {
+    return site.status === "draft";
+  }
+
+  return role === "admin" && (site.status === "draft" || site.status === "published");
+}
+
+function actionDescriptor(id) {
+  return {
+    id,
+    label: LIFECYCLE_ACTIONS[id].label
+  };
+}
+
+function confirmationPhrase(site) {
+  return `${site.title ?? ""} / ${site.slug ?? ""}`.trim();
+}
+
+function visibleSiteName(site) {
+  return `${site.title ?? site.slug ?? site.id} / ${site.slug ?? site.id}`;
+}
+
+function validateUuid(value, label) {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    throw new Error(`Invalid ${label} id.`);
+  }
+
+  return value;
+}
+
+function lifecycleErrorMessage(error) {
+  return [
+    typeof error?.code === "string" ? error.code : null,
+    typeof error?.message === "string" ? error.message : "Не удалось выполнить действие."
+  ].filter(Boolean).join(": ");
+}
+
+function dialogError(error) {
+  const nextError = new Error(lifecycleErrorMessage(error));
+  nextError.requestId = typeof error?.requestId === "string" ? error.requestId : null;
+
+  return nextError;
 }
 
 function updateCategoryOptions(form, categories, documentRef) {

@@ -23,6 +23,7 @@ export function createSiteEditorScreen(options) {
   const role = options?.role === "admin" ? "admin" : "editor";
   const siteId = options?.siteId;
   const onCancel = typeof options?.onCancel === "function" ? options.onCancel : () => {};
+  const onImages = typeof options?.onImages === "function" ? options.onImages : () => {};
   const onSaved = typeof options?.onSaved === "function" ? options.onSaved : () => {};
   const onStatus = typeof options?.onStatus === "function" ? options.onStatus : () => {};
   let activeController = null;
@@ -299,7 +300,21 @@ export function createSiteEditorScreen(options) {
             click: onCancel
           }
         })
-      ]
+      ].concat(mode === "edit" && currentSite?.id !== undefined
+        ? [
+            createElement("button", {
+              documentRef,
+              text: "Изображения",
+              attributes: {
+                "data-action": "manage-images",
+                type: "button"
+              },
+              on: {
+                click: () => onImages(currentSite.id)
+              }
+            })
+          ]
+        : [])
     });
   }
 

@@ -9,6 +9,7 @@ const ALLOWED_TAGS = new Set([
   "h2",
   "h3",
   "header",
+  "img",
   "input",
   "label",
   "legend",
@@ -33,6 +34,8 @@ const ALLOWED_TAGS = new Set([
 
 const ALLOWED_ATTRIBUTES = new Set([
   "autocomplete",
+  "accept",
+  "alt",
   "checked",
   "class",
   "disabled",
@@ -41,6 +44,7 @@ const ALLOWED_ATTRIBUTES = new Set([
   "id",
   "max",
   "min",
+  "multiple",
   "name",
   "placeholder",
   "required",
@@ -49,6 +53,7 @@ const ALLOWED_ATTRIBUTES = new Set([
   "rel",
   "role",
   "scope",
+  "src",
   "step",
   "tabindex",
   "target",

@@ -54,14 +54,12 @@ describe("admin site UI contract guard", () => {
     }
   });
 
-  it("keeps production browser assets free of superseded routes and early Wave 4 actions", async () => {
+  it("keeps production browser assets free of superseded routes and out-of-scope admin actions", async () => {
     const assetText = await readAdminAssetText();
 
     expect(assetText).not.toMatch(/\/api\/admin\/uploads\/images/);
     expect(assetText).not.toMatch(/\/api\/admin\/users/);
     expect(assetText).not.toMatch(/set-password|password-reset|change-password/i);
-    expect(assetText).not.toMatch(/\/publish|\/unpublish|\/restore|\/permanent/);
-    expect(assetText).not.toMatch(/\bDELETE\b/);
     expect(assetText).not.toMatch(/category.*POST|category.*PATCH|category.*DELETE/i);
   });
 });
