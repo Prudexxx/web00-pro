@@ -62,16 +62,17 @@ export function createSupabaseImageStorage(
     }
   ) as SupabaseStorageLike
 ): ImageStorage {
+  const storageClient = client.storage;
+
   return {
     async createBucket(input) {
       assertBucketConfig(input, config.bucket);
-      const createBucket = client.storage.createBucket;
 
-      if (createBucket === undefined) {
+      if (storageClient.createBucket === undefined) {
         throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await createBucket(input.id, {
+      const result = await storageClient.createBucket(input.id, {
         allowedMimeTypes: [...input.allowedMimeTypes],
         fileSizeLimit: input.fileSizeLimit,
         public: input.public
@@ -86,7 +87,7 @@ export function createSupabaseImageStorage(
     getPublicUrl(path) {
       assertVariantPath(path);
 
-      const publicUrl = client.storage.from(config.bucket).getPublicUrl?.(path).data
+      const publicUrl = storageClient.from(config.bucket).getPublicUrl?.(path).data
         .publicUrl ?? deterministicPublicUrl(config, path);
 
       assertSafePublicUrl(config, publicUrl, path);
@@ -97,16 +98,14 @@ export function createSupabaseImageStorage(
         throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const getBucket = client.storage.getBucket;
-
-      if (getBucket === undefined) {
+      if (storageClient.getBucket === undefined) {
         return {
           compatible: true,
           exists: true
         };
       }
 
-      const result = await getBucket(bucket);
+      const result = await storageClient.getBucket(bucket);
 
       if (result.error !== null) {
         return { exists: false };
@@ -123,13 +122,13 @@ export function createSupabaseImageStorage(
       }
 
       const prefix = commonCanonicalPrefix(paths);
-      const list = client.storage.from(config.bucket).list;
+      const bucketClient = storageClient.from(config.bucket);
 
-      if (list === undefined) {
+      if (bucketClient.list === undefined) {
         throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await list(prefix);
+      const result = await bucketClient.list(prefix);
 
       if (result.error !== null || result.data === null) {
         throw storageOperationFailed(
@@ -162,13 +161,13 @@ export function createSupabaseImageStorage(
         assertVariantPath(path);
       }
 
-      const remove = client.storage.from(config.bucket).remove;
+      const bucketClient = storageClient.from(config.bucket);
 
-      if (remove === undefined) {
+      if (bucketClient.remove === undefined) {
         throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await remove([...paths]);
+      const result = await bucketClient.remove([...paths]);
 
       if (result.error !== null) {
         throw storageOperationFailed(
@@ -184,13 +183,13 @@ export function createSupabaseImageStorage(
     },
     async uploadObject(input) {
       assertUploadInput(input);
-      const upload = client.storage.from(config.bucket).upload;
+      const bucketClient = storageClient.from(config.bucket);
 
-      if (upload === undefined) {
+      if (bucketClient.upload === undefined) {
         throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await upload(input.path, input.body, {
+      const result = await bucketClient.upload(input.path, input.body, {
         cacheControl: input.cacheControl,
         contentType: input.contentType,
         upsert: false
