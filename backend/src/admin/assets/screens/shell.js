@@ -39,10 +39,17 @@ export function createAuthenticatedShell(options) {
     }, [item.label]);
 
     button.addEventListener("click", () => {
+      const navigationResult = onNavigate(item.id);
+
+      if (navigationResult === false) {
+        return;
+      }
+
       activeSection = item.id;
       setActiveSection(item.id);
-      showPlaceholder(item.label);
-      onNavigate(item.id);
+      if (navigationResult !== true) {
+        showPlaceholder(item.label);
+      }
       content.focus();
     });
 

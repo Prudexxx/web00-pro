@@ -527,6 +527,190 @@ textarea {
   font-size: 13px;
 }
 
+.admin-categories-screen,
+.admin-users-screen,
+.admin-audit-screen {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.admin-filter-form,
+.admin-mutation-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: end;
+  border: 1px solid #d6dbe3;
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.admin-audit-filters {
+  grid-template-columns: repeat(5, minmax(130px, 1fr));
+}
+
+.admin-mutation-form {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+  align-items: start;
+}
+
+.admin-mutation-form h3,
+.admin-form-error,
+.admin-form-actions,
+.admin-check-field,
+.admin-field:has(textarea) {
+  grid-column: 1 / -1;
+}
+
+.admin-mutation-form h3,
+.admin-detail-panel h3,
+.admin-audit-entry h3 {
+  margin: 0;
+  color: #18212f;
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.admin-check-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #2d3948;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.admin-check-field input {
+  width: 18px;
+  min-height: 18px;
+}
+
+.admin-form-actions,
+.admin-row-actions,
+.admin-user-actions,
+.admin-inline-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-form-error:not(:empty) {
+  display: grid;
+  gap: 6px;
+  color: #8a2d1a;
+}
+
+.admin-category-results,
+.admin-user-results,
+.admin-audit-results {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.admin-data-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.admin-data-table th,
+.admin-data-table td {
+  border-bottom: 1px solid #d6dbe3;
+  padding: 12px 10px;
+  text-align: left;
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.admin-data-table th {
+  color: #2d3948;
+  font-weight: 800;
+}
+
+.admin-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border: 1px solid #c9d3df;
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: #f4f6f8;
+  color: #2d3948;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.admin-badge.is-active,
+.admin-badge.is-admin {
+  border-color: #8eb8aa;
+  background: #eaf4f1;
+  color: #153c33;
+}
+
+.admin-badge.is-muted,
+.admin-badge.is-editor {
+  border-color: #d6dbe3;
+  background: #f4f6f8;
+  color: #526173;
+}
+
+.admin-detail-panel,
+.admin-audit-entry {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d6dbe3;
+  border-radius: 8px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+.admin-audit-list {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-audit-entry-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-json-details {
+  min-width: 0;
+}
+
+.admin-json-details summary {
+  cursor: pointer;
+  color: #2d3948;
+  font-weight: 800;
+}
+
+.admin-json-block {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid #d6dbe3;
+  border-radius: 6px;
+  margin: 8px 0 0;
+  padding: 10px;
+  background: #111827;
+  color: #f9fafb;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-pagination-note {
+  margin: 8px 0 0;
+  color: #526173;
+  font-size: 13px;
+}
+
 noscript {
   position: fixed;
   inset: auto 16px 16px;
@@ -582,6 +766,8 @@ noscript {
   }
 
   .admin-filter-bar,
+  .admin-filter-form,
+  .admin-mutation-form,
   .admin-editor-section,
   .admin-preview-card,
   .admin-upload-form,
@@ -594,32 +780,44 @@ noscript {
     grid-template-columns: 1fr;
   }
 
-  .admin-sites-table {
+  .admin-sites-table,
+  .admin-data-table {
     min-width: 0;
   }
 
-  .admin-sites-table thead {
+  .admin-sites-table thead,
+  .admin-data-table thead {
     display: none;
   }
 
   .admin-sites-table,
   .admin-sites-table tbody,
   .admin-sites-table tr,
-  .admin-sites-table td {
+  .admin-sites-table td,
+  .admin-data-table,
+  .admin-data-table tbody,
+  .admin-data-table tr,
+  .admin-data-table td {
     display: block;
     width: 100%;
   }
 
-  .admin-sites-table tr {
+  .admin-sites-table tr,
+  .admin-data-table tr {
     border: 1px solid #d6dbe3;
     border-radius: 8px;
     margin-bottom: 12px;
     padding: 8px;
   }
 
-  .admin-sites-table td {
+  .admin-sites-table td,
+  .admin-data-table td {
     border-bottom: 0;
     padding: 8px;
+  }
+
+  .admin-audit-entry-header {
+    flex-direction: column;
   }
 }
 

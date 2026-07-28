@@ -2,6 +2,8 @@ const ALLOWED_TAGS = new Set([
   "a",
   "article",
   "button",
+  "code",
+  "details",
   "div",
   "fieldset",
   "form",
@@ -18,10 +20,12 @@ const ALLOWED_TAGS = new Set([
   "nav",
   "option",
   "p",
+  "pre",
   "section",
   "select",
   "span",
   "strong",
+  "summary",
   "table",
   "tbody",
   "td",
@@ -62,6 +66,7 @@ const ALLOWED_ATTRIBUTES = new Set([
 ]);
 
 const ALLOWED_EVENTS = new Set(["change", "click", "input", "submit"]);
+const DEFAULT_JSON_TEXT_LIMIT = 4000;
 
 export function createElement(tagName, options = {}) {
   const normalizedTag = normalizeTagName(tagName);
@@ -130,6 +135,7 @@ export function createRequestIdControl(requestId, options = {}) {
     documentRef,
     text: "Скопировать requestId",
     attributes: {
+      "data-action": "copy-request-id",
       type: "button"
     }
   });
@@ -160,6 +166,30 @@ export function createRequestIdControl(requestId, options = {}) {
   });
 
   return control;
+}
+
+export function stringifySafeJson(value, options = {}) {
+  const maxLength = normalizeMaxLength(options.maxLength);
+  let serialized;
+
+  try {
+    serialized = JSON.stringify(value === undefined ? null : value, createJsonReplacer(), 2);
+  } catch (error) {
+    serialized = JSON.stringify({
+      error: "Unable to serialize value.",
+      message: error instanceof Error ? error.message : "Unknown serialization error."
+    }, null, 2);
+  }
+
+  if (serialized === undefined) {
+    serialized = "null";
+  }
+  if (serialized.length <= maxLength) {
+    return serialized;
+  }
+
+  const remaining = serialized.length - maxLength;
+  return `${serialized.slice(0, maxLength)}\n... [truncated ${remaining} characters]`;
 }
 
 export function setBusy(element, busy) {
@@ -195,6 +225,32 @@ export function createLiveRegion(options = {}) {
       role: "status"
     }
   });
+}
+
+function normalizeMaxLength(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_JSON_TEXT_LIMIT;
+  }
+
+  return Math.max(100, Math.min(20000, Math.floor(value)));
+}
+
+function createJsonReplacer() {
+  const seen = new WeakSet();
+
+  return (_key, nextValue) => {
+    if (typeof nextValue === "bigint") {
+      return `${nextValue.toString()}n`;
+    }
+    if (typeof nextValue === "object" && nextValue !== null) {
+      if (seen.has(nextValue)) {
+        return "[Circular]";
+      }
+      seen.add(nextValue);
+    }
+
+    return nextValue;
+  };
 }
 
 function normalizeTagName(tagName) {

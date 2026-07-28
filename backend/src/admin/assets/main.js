@@ -2,9 +2,12 @@ import { createApiClient } from "./api-client.js";
 import { createAuthStore } from "./auth-store.js";
 import { createLoginView } from "./screens/login.js";
 import { createAuthenticatedShell } from "./screens/shell.js";
+import { createAuditScreen } from "./screens/audit.js";
+import { createCategoriesScreen } from "./screens/categories.js";
 import { createImageManagerScreen } from "./screens/image-manager.js";
 import { createSiteEditorScreen } from "./screens/site-editor.js";
 import { createSitesListScreen } from "./screens/sites-list.js";
+import { createUsersScreen } from "./screens/users.js";
 
 export async function bootstrapAdminApp(options = {}) {
   const documentRef = options.documentRef ?? document;
@@ -71,9 +74,7 @@ export async function bootstrapAdminApp(options = {}) {
           showLogin
         });
       },
-      onNavigate: (section) => {
-        navigate(section);
-      },
+      onNavigate: (section) => navigate(section),
       user
     });
     root.replaceChildren(
@@ -87,18 +88,32 @@ export async function bootstrapAdminApp(options = {}) {
 
   function navigate(section, params = {}) {
     if (shellElement === null || currentUser === null) {
-      return;
+      return false;
     }
 
-    if (section !== "sites") {
-      destroyCurrentScreen();
-      shellElement.showPlaceholder(
-        section === "categories" ? "Категории" : section === "users" ? "Пользователи" : "Журнал"
-      );
-      return;
+    if (currentScreen?.isMutationBusy?.() === true) {
+      shellElement.setStatus("Дождитесь завершения текущего действия.");
+      return false;
     }
 
-    showSitesList();
+    switch (section) {
+      case "audit":
+        showAudit();
+        return true;
+      case "categories":
+        showCategories();
+        return true;
+      case "sites":
+        showSitesList();
+        return true;
+      case "users":
+        showUsers();
+        return true;
+      default:
+        destroyCurrentScreen();
+        shellElement.showPlaceholder("Раздел");
+        return true;
+    }
   }
 
   function showSitesList() {
@@ -135,6 +150,46 @@ export async function bootstrapAdminApp(options = {}) {
       ...(siteId === undefined ? {} : { siteId })
     });
     shellElement.showContent(mode === "create" ? "Создать draft" : "Редактировать карточку", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function showCategories() {
+    destroyCurrentScreen();
+    shellElement.setActiveSection("categories");
+    currentScreen = createCategoriesScreen({
+      apiClient: api,
+      documentRef,
+      onStatus: shellElement.setStatus,
+      role: currentUser.role
+    });
+    shellElement.showContent("Категории", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function showUsers() {
+    destroyCurrentScreen();
+    shellElement.setActiveSection("users");
+    currentScreen = createUsersScreen({
+      apiClient: api,
+      currentUser,
+      documentRef,
+      onStatus: shellElement.setStatus,
+      role: currentUser.role
+    });
+    shellElement.showContent("Пользователи", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function showAudit() {
+    destroyCurrentScreen();
+    shellElement.setActiveSection("audit");
+    currentScreen = createAuditScreen({
+      apiClient: api,
+      documentRef,
+      onStatus: shellElement.setStatus,
+      role: currentUser.role
+    });
+    shellElement.showContent("Журнал", currentScreen.element);
     void currentScreen.load();
   }
 
