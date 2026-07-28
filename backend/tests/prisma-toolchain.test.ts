@@ -53,6 +53,7 @@ describe("Prisma toolchain contract", () => {
       dotenv: expect.stringMatching(/^(\^)?17\./),
       express: "^5.2.1",
       "express-rate-limit": "8.6.0",
+      helmet: "8.3.0",
       jose: "6.2.3",
       pg: expect.stringMatching(/^\^8\./),
       zod: "^4.4.3"
@@ -79,7 +80,8 @@ describe("Prisma toolchain contract", () => {
       "seed:build-snapshot": "tsx scripts/build-catalog-snapshot.ts",
       typecheck: "npm run prisma:generate && tsc -p tsconfig.typecheck.json",
       "test:run": "npm run prisma:generate && vitest run",
-      build: "npm run prisma:generate && tsc -p tsconfig.build.json",
+      build:
+        "npm run prisma:generate && tsc -p tsconfig.build.json && node scripts/copy-admin-assets.mjs",
       check:
         "npm run prisma:validate && npm run prisma:format:check && npm run prisma:generate && npm run typecheck && npm run test:run && npm run build"
     });

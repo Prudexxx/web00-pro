@@ -13,6 +13,7 @@ import type { ReadinessService } from "./modules/readiness/readiness.types.js";
 
 export interface CreateAppOptions {
   adminRoutes?: Router;
+  adminUiRoutes?: Router;
   authRoutes?: Router;
   env: AppEnv;
   logger?: AppLogger;
@@ -60,6 +61,10 @@ export function createApp(options: CreateAppOptions): Express {
 
   if (options.adminRoutes) {
     app.use("/api/admin", options.adminRoutes);
+  }
+
+  if (options.adminUiRoutes) {
+    app.use("/admin", options.adminUiRoutes);
   }
 
   if (options.registerTestRoutes) {
