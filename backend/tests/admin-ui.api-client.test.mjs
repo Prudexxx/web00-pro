@@ -1,0 +1,294 @@
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  parseApiError,
+  createApiClient
+} from "../src/admin/assets/api-client.js";
+import { AUTH_STATES, createAuthStore } from "../src/admin/assets/auth-store.js";
+
+describe("admin API client", () => {
+  it("accepts only same-origin API paths and rejects absolute or traversal-like input", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { data: [] }));
+    const api = createApiClient({ authStore: createAuthStore(), fetchImpl });
+
+    await expect(api.requestJson("/api/admin/sites", { method: "GET" })).resolves.toEqual({
+      data: []
+    });
+
+    for (const path of [
+      "https://admin.example.test/api/admin/sites",
+      "//admin.example.test/api/admin/sites",
+      "/admin/assets/main.js",
+      "/api/admin/../auth/me",
+      "/api/%2e%2e/auth/me"
+    ]) {
+      await expect(api.requestJson(path, { method: "GET" })).rejects.toMatchObject({
+        code: "INVALID_API_PATH"
+      });
+    }
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("injects Bearer auth and sets JSON content type only for JSON request bodies", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, { data: [] }))
+      .mockResolvedValueOnce(jsonResponse(200, { data: { id: "site-1" } }));
+    const api = createApiClient({ authStore, fetchImpl });
+    const signal = new AbortController().signal;
+
+    authStore.setAuthenticated({
+      accessToken: "memory-token-a",
+      user: {
+        email: "admin@example.test",
+        id: "user-admin",
+        role: "admin"
+      }
+    });
+
+    await api.requestJson("/api/admin/sites", { method: "GET", signal });
+    await api.requestJson("/api/admin/sites", {
+      body: { title: "WEB00" },
+      method: "POST"
+    });
+
+    const getOptions = fetchImpl.mock.calls[0][1];
+    const postOptions = fetchImpl.mock.calls[1][1];
+
+    expect(readHeader(getOptions, "Authorization")).toBe("Bearer memory-token-a");
+    expect(readHeader(getOptions, "Accept")).toBe("application/json");
+    expect(readHeader(getOptions, "Content-Type")).toBeUndefined();
+    expect(getOptions.signal).toBe(signal);
+
+    expect(readHeader(postOptions, "Authorization")).toBe("Bearer memory-token-a");
+    expect(readHeader(postOptions, "Content-Type")).toBe("application/json");
+    expect(postOptions.body).toBe(JSON.stringify({ title: "WEB00" }));
+  });
+
+  it("uses one shared refresh and replays simultaneous JSON requests once", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi.fn((requestPath) => {
+      const adminAttempt = fetchImpl.mock.calls.filter(([url]) => url === requestPath).length;
+
+      if (requestPath === "/api/admin/sites" && adminAttempt === 1) {
+        return Promise.resolve(authExpiredResponse("req_sites"));
+      }
+      if (requestPath === "/api/admin/categories" && adminAttempt === 1) {
+        return Promise.resolve(authExpiredResponse("req_categories"));
+      }
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "memory-token-b",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/admin/sites") {
+        return Promise.resolve(jsonResponse(200, { data: [{ id: "site-1" }] }));
+      }
+      if (requestPath === "/api/admin/categories") {
+        return Promise.resolve(jsonResponse(200, { data: [{ id: "category-1" }] }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+    const api = createApiClient({ authStore, fetchImpl });
+
+    authStore.setAuthenticated({
+      accessToken: "memory-token-old",
+      user: safeUser("admin")
+    });
+
+    const [sites, categories] = await Promise.all([
+      api.requestJson("/api/admin/sites", { method: "GET" }),
+      api.requestJson("/api/admin/categories", { method: "GET" })
+    ]);
+
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/auth/refresh")).toHaveLength(1);
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/admin/sites")).toHaveLength(2);
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/admin/categories")).toHaveLength(2);
+    expect(sites).toEqual({ data: [{ id: "site-1" }] });
+    expect(categories).toEqual({ data: [{ id: "category-1" }] });
+    expect(authStore.getAccessToken()).toBe("memory-token-b");
+  });
+
+  it("limits JSON replay to one retry and does not refresh FORBIDDEN responses", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(authExpiredResponse("req_first"))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        data: {
+          accessToken: "memory-token-c",
+          user: safeUser("admin")
+        }
+      }))
+      .mockResolvedValueOnce(authExpiredResponse("req_second"))
+      .mockResolvedValueOnce(jsonResponse(403, {
+        error: {
+          code: "FORBIDDEN",
+          message: "Forbidden.",
+          requestId: "req_forbidden"
+        }
+      }));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    authStore.setAuthenticated({
+      accessToken: "memory-token-old",
+      user: safeUser("admin")
+    });
+
+    await expect(api.requestJson("/api/admin/sites", { method: "GET" })).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+      requestId: "req_second"
+    });
+    await expect(api.requestJson("/api/admin/sites", { method: "GET" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      requestId: "req_forbidden"
+    });
+
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/auth/refresh")).toHaveLength(1);
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/admin/sites")).toHaveLength(3);
+  });
+
+  it("does not replay multipart requests and lets the browser set multipart content type", async () => {
+    const authStore = createAuthStore();
+    const formData = new FormData();
+    const fetchImpl = vi.fn().mockResolvedValue(authExpiredResponse("req_upload"));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    formData.append("clientFileId", "00000000-0000-4000-8000-000000000001");
+    authStore.setAuthenticated({
+      accessToken: "memory-token-upload",
+      user: safeUser("admin")
+    });
+
+    await expect(
+      api.requestMultipart("/api/admin/sites/00000000-0000-4000-8000-000000000002/images/preview", {
+        body: formData,
+        method: "PUT"
+      })
+    ).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+      requestId: "req_upload"
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(readHeader(fetchImpl.mock.calls[0][1], "Authorization")).toBe(
+      "Bearer memory-token-upload"
+    );
+    expect(readHeader(fetchImpl.mock.calls[0][1], "Content-Type")).toBeUndefined();
+    expect(fetchImpl.mock.calls[0][1].body).toBe(formData);
+  });
+
+  it("clears auth state when refresh fails", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(authExpiredResponse("req_needs_refresh"))
+      .mockResolvedValueOnce(jsonResponse(401, {
+        error: {
+          code: "REFRESH_INVALID",
+          message: "Refresh token is invalid.",
+          requestId: "req_refresh_invalid"
+        }
+      }));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    authStore.setAuthenticated({
+      accessToken: "memory-token-expired",
+      user: safeUser("editor")
+    });
+
+    await expect(api.requestJson("/api/admin/sites", { method: "GET" })).rejects.toMatchObject({
+      code: "REFRESH_INVALID",
+      requestId: "req_refresh_invalid"
+    });
+    expect(authStore.getAccessToken()).toBeNull();
+    expect(authStore.getSnapshot()).toEqual({
+      state: AUTH_STATES.UNAUTHENTICATED,
+      user: null
+    });
+  });
+
+  it("normalizes backend errors without retaining raw response data or secrets", () => {
+    const error = parseApiError({ status: 400 }, {
+      accessToken: "must-not-leak",
+      cookie: "refresh_cookie",
+      error: {
+        code: "VALIDATION_ERROR",
+        details: [{ message: "Required", path: "title" }],
+        message: "Invalid request.",
+        requestId: "req_validation"
+      }
+    });
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [{ message: "Required", path: "title" }],
+      message: "Invalid request.",
+      requestId: "req_validation",
+      status: 400
+    });
+    expect(error).not.toHaveProperty("request");
+    expect(error).not.toHaveProperty("response");
+    expect(error).not.toHaveProperty("rawBody");
+    expect(JSON.stringify(error)).not.toContain("must-not-leak");
+    expect(JSON.stringify(error)).not.toContain("refresh_cookie");
+  });
+
+  it("passes AbortSignal to fetch and returns a controlled cancellation error", async () => {
+    const authStore = createAuthStore();
+    const abortError = Object.assign(new Error("The operation was aborted."), {
+      name: "AbortError"
+    });
+    const fetchImpl = vi.fn().mockRejectedValue(abortError);
+    const api = createApiClient({ authStore, fetchImpl });
+    const signal = new AbortController().signal;
+
+    await expect(api.requestJson("/api/admin/sites", { method: "GET", signal })).rejects.toMatchObject({
+      code: "REQUEST_ABORTED",
+      message: "Request was cancelled."
+    });
+    expect(fetchImpl.mock.calls[0][1].signal).toBe(signal);
+  });
+});
+
+function authExpiredResponse(requestId) {
+  return jsonResponse(401, {
+    error: {
+      code: "UNAUTHORIZED",
+      message: "Authentication required.",
+      requestId
+    }
+  });
+}
+
+function jsonResponse(status, body) {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+    status
+  });
+}
+
+function readHeader(options, name) {
+  const headers = options.headers;
+
+  if (headers instanceof Headers) {
+    return headers.get(name) ?? undefined;
+  }
+
+  return headers?.[name] ?? headers?.[name.toLowerCase()];
+}
+
+function safeUser(role) {
+  return {
+    email: `${role}@example.test`,
+    id: `user-${role}`,
+    role
+  };
+}

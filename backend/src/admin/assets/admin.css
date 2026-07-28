@@ -1,6 +1,6 @@
 :root {
   color: #18212f;
-  background: #f6f7f9;
+  background: #f4f6f8;
   font-family:
     system-ui,
     -apple-system,
@@ -21,7 +21,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background: #f6f7f9;
+  background: #f4f6f8;
 }
 
 button,
@@ -33,6 +33,31 @@ textarea,
   font: inherit;
 }
 
+button {
+  min-height: 42px;
+  border: 1px solid #222f3f;
+  border-radius: 6px;
+  background: #222f3f;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #bac3cf;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: #18212f;
+}
+
 :focus-visible {
   outline: 3px solid #145fd7;
   outline-offset: 3px;
@@ -40,9 +65,206 @@ textarea,
 
 .admin-root {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
   padding: 24px;
+}
+
+.admin-bootstrap,
+.admin-login {
+  width: min(100%, 420px);
+  margin: 12vh auto 0;
+  border: 1px solid #d6dbe3;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 28px;
+}
+
+.admin-bootstrap h1,
+.admin-login h1,
+.admin-shell h1,
+.admin-shell h2 {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.admin-bootstrap h1,
+.admin-login h1 {
+  font-size: 28px;
+}
+
+.admin-kicker {
+  margin: 0 0 8px;
+  color: #2b6f5e;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.admin-login-form {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-login-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-login-note,
+.admin-login-status,
+.admin-shell-status,
+.admin-shell-content p,
+.admin-bootstrap p {
+  margin: 0;
+  color: #526173;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.admin-field {
+  display: grid;
+  gap: 7px;
+  color: #2d3948;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.admin-shell {
+  min-height: calc(100vh - 48px);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  border: 1px solid #d6dbe3;
+  background: #ffffff;
+}
+
+.admin-shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid #d6dbe3;
+  padding: 18px 20px;
+}
+
+.admin-shell-header h1 {
+  font-size: 24px;
+}
+
+.admin-shell-user {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: #526173;
+  font-size: 14px;
+}
+
+.admin-shell-user strong {
+  color: #18212f;
+}
+
+.admin-shell-body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 0;
+}
+
+.admin-shell-nav {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  border-right: 1px solid #d6dbe3;
+  padding: 16px;
+  background: #f9fafb;
+}
+
+.admin-shell-nav button {
+  width: 100%;
+  border-color: transparent;
+  background: transparent;
+  color: #2d3948;
+  text-align: left;
+}
+
+.admin-shell-nav button[aria-current="page"] {
+  border-color: #2b6f5e;
+  background: #eaf4f1;
+  color: #153c33;
+}
+
+.admin-shell-main {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+}
+
+.admin-shell-content {
+  display: grid;
+  gap: 10px;
+  max-width: 680px;
+}
+
+.admin-shell-content h2 {
+  font-size: 22px;
+}
+
+noscript {
+  position: fixed;
+  inset: auto 16px 16px;
+  border: 1px solid #a9412b;
+  border-radius: 8px;
+  background: #fff7f4;
+  color: #6f1f0e;
+  padding: 12px 14px;
+  font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .admin-root {
+    padding: 12px;
+  }
+
+  .admin-bootstrap,
+  .admin-login {
+    margin-top: 8vh;
+    padding: 22px;
+  }
+
+  .admin-shell {
+    min-height: calc(100vh - 24px);
+  }
+
+  .admin-shell-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-shell-user {
+    justify-content: flex-start;
+  }
+
+  .admin-shell-body {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-shell-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+    border-bottom: 1px solid #d6dbe3;
+  }
+
+  .admin-shell-main {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 460px) {
+  .admin-shell-nav {
+    grid-template-columns: 1fr;
+  }
 }
 
 .admin-wave-shell {
@@ -68,11 +290,6 @@ textarea,
 }
 
 @media (max-width: 640px) {
-  .admin-root {
-    align-items: stretch;
-    padding: 16px;
-  }
-
   .admin-wave-shell {
     padding: 20px;
   }
