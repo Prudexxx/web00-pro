@@ -2,6 +2,8 @@ import { createApiClient } from "./api-client.js";
 import { createAuthStore } from "./auth-store.js";
 import { createLoginView } from "./screens/login.js";
 import { createAuthenticatedShell } from "./screens/shell.js";
+import { createSiteEditorScreen } from "./screens/site-editor.js";
+import { createSitesListScreen } from "./screens/sites-list.js";
 
 export async function bootstrapAdminApp(options = {}) {
   const documentRef = options.documentRef ?? document;
@@ -17,6 +19,10 @@ export async function bootstrapAdminApp(options = {}) {
     fetchImpl: options.fetchImpl ?? fetch
   });
   let screenAbort = null;
+  let currentScreen = null;
+  let currentUser = null;
+  let shellElement = null;
+  const autoLoadScreens = options.autoLoadScreens ?? options.documentRef === undefined;
   const unsubscribe = authStore.subscribe((snapshot) => {
     root.setAttribute("aria-busy", isBusyState(snapshot.state) ? "true" : "false");
   });
@@ -33,6 +39,9 @@ export async function bootstrapAdminApp(options = {}) {
 
   function showLogin() {
     abortScreenRequests();
+    destroyCurrentScreen();
+    shellElement = null;
+    currentUser = null;
     root.replaceChildren(
       createLoginView({
         documentRef,
@@ -47,23 +56,90 @@ export async function bootstrapAdminApp(options = {}) {
 
   function showShell(user) {
     abortScreenRequests();
+    destroyCurrentScreen();
+    currentUser = user;
     screenAbort = new AbortController();
+    shellElement = createAuthenticatedShell({
+      documentRef,
+      onLogout: () => {
+        void logoutAdminSession({
+          abortController: screenAbort,
+          api,
+          authStore,
+          destroyCurrentScreen,
+          showLogin
+        });
+      },
+      onNavigate: (section) => {
+        navigate(section);
+      },
+      user
+    });
     root.replaceChildren(
-      createAuthenticatedShell({
-        documentRef,
-        onLogout: () => {
-          void logoutAdminSession({
-            abortController: screenAbort,
-            api,
-            authStore,
-            showLogin
-          });
-        },
-        onNavigate: () => {},
-        user
-      })
+      shellElement
     );
+    if (autoLoadScreens) {
+      navigate("sites");
+    }
     root.focus();
+  }
+
+  function navigate(section, params = {}) {
+    if (shellElement === null || currentUser === null) {
+      return;
+    }
+
+    if (section !== "sites") {
+      destroyCurrentScreen();
+      shellElement.showPlaceholder(
+        section === "categories" ? "Категории" : section === "users" ? "Пользователи" : "Журнал"
+      );
+      return;
+    }
+
+    showSitesList();
+  }
+
+  function showSitesList() {
+    destroyCurrentScreen();
+    shellElement.setActiveSection("sites");
+    currentScreen = createSitesListScreen({
+      apiClient: api,
+      documentRef,
+      onCreate: () => {
+        showSiteEditor("create");
+      },
+      onEdit: (siteId) => {
+        showSiteEditor("edit", siteId);
+      },
+      onStatus: shellElement.setStatus,
+      role: currentUser.role
+    });
+    shellElement.showContent("Сайты", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function showSiteEditor(mode, siteId) {
+    destroyCurrentScreen();
+    currentScreen = createSiteEditorScreen({
+      apiClient: api,
+      documentRef,
+      mode,
+      onCancel: showSitesList,
+      onSaved: showSitesList,
+      onStatus: shellElement.setStatus,
+      role: currentUser.role,
+      ...(siteId === undefined ? {} : { siteId })
+    });
+    shellElement.showContent(mode === "create" ? "Создать draft" : "Редактировать карточку", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function destroyCurrentScreen() {
+    if (currentScreen !== null) {
+      currentScreen.destroy();
+      currentScreen = null;
+    }
   }
 
   function abortScreenRequests() {
@@ -87,15 +163,17 @@ export async function bootstrapAdminApp(options = {}) {
     api,
     authStore,
     destroy() {
+      destroyCurrentScreen();
       abortScreenRequests();
       unsubscribe();
     }
   };
 }
 
-export async function logoutAdminSession({ abortController, api, authStore, showLogin }) {
+export async function logoutAdminSession({ abortController, api, authStore, destroyCurrentScreen, showLogin }) {
   authStore.setState("LOGGING_OUT");
   authStore.clear();
+  destroyCurrentScreen?.();
   abortController?.abort();
   showLogin();
 

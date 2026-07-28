@@ -40,15 +40,8 @@ export function createAuthenticatedShell(options) {
 
     button.addEventListener("click", () => {
       activeSection = item.id;
-      for (const navButton of nav.querySelectorAll("[data-section]")) {
-        navButton.setAttribute(
-          "aria-current",
-          navButton.getAttribute("data-section") === activeSection ? "page" : "false"
-        );
-      }
-      contentTitle.textContent = item.label;
-      contentNote.textContent = "Раздел будет подключён на следующем этапе";
-      status.textContent = `Открыт раздел: ${item.label}`;
+      setActiveSection(item.id);
+      showPlaceholder(item.label);
       onNavigate(item.id);
       content.focus();
     });
@@ -71,7 +64,7 @@ export function createAuthenticatedShell(options) {
 
   contentTitle.setAttribute("id", "admin-content-title");
 
-  return element(documentRef, "section", { class: "admin-shell" }, [
+  const shell = element(documentRef, "section", { class: "admin-shell" }, [
     element(documentRef, "header", { class: "admin-shell-header" }, [
       element(documentRef, "div", {}, [
         element(documentRef, "p", { class: "admin-kicker" }, ["WEB00"]),
@@ -88,6 +81,37 @@ export function createAuthenticatedShell(options) {
       element(documentRef, "main", { class: "admin-shell-main" }, [content, status])
     ])
   ]);
+
+  shell.contentRegion = content;
+  shell.setActiveSection = setActiveSection;
+  shell.setStatus = (message) => {
+    status.textContent = message;
+  };
+  shell.showContent = (title, ...children) => {
+    contentTitle.textContent = title;
+    content.replaceChildren(contentTitle, ...children);
+    content.focus();
+  };
+  shell.showPlaceholder = showPlaceholder;
+
+  return shell;
+
+  function setActiveSection(section) {
+    activeSection = section;
+    for (const navButton of nav.querySelectorAll("[data-section]")) {
+      navButton.setAttribute(
+        "aria-current",
+        navButton.getAttribute("data-section") === activeSection ? "page" : "false"
+      );
+    }
+  }
+
+  function showPlaceholder(label) {
+    contentTitle.textContent = label;
+    contentNote.textContent = "Раздел будет подключён на следующем этапе";
+    content.replaceChildren(contentTitle, contentNote);
+    status.textContent = `Открыт раздел: ${label}`;
+  }
 }
 
 export function visibleNavigation(role) {
