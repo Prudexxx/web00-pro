@@ -217,6 +217,54 @@ describe("PreviewImageService", () => {
     );
   });
 
+  it("does not let preview observability logger failures replace the original error", async () => {
+    const fakes = createFakes();
+
+    fakes.storage.uploadObject = vi.fn(async () => {
+      throw new AppError({
+        code: "STORAGE_WRITE_FAILED",
+        message: "Storage write failed.",
+        statusCode: 503
+      });
+    });
+
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      diagnostics: {
+        environment: "test",
+        logger: {
+          log() {
+            throw new Error("logger unavailable");
+          }
+        },
+        now: () => context.now,
+        service: "web00-backend"
+      },
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+
+    await expect(
+      service.preview.replacePreview({
+        context,
+        file: {
+          alt: "",
+          assetId,
+          declaredMimeType: "image/png",
+          index: 0,
+          source: Buffer.from("source")
+        },
+        siteId
+      })
+    ).rejects.toMatchObject({
+      code: "STORAGE_WRITE_FAILED",
+      message: "Storage write failed."
+    });
+  });
+
   it("cleans stale unattached preview objects before uploading deterministic paths", async () => {
     const fakes = createFakes();
 

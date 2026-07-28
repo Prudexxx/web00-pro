@@ -10,6 +10,7 @@ import { createImagePipelineSemaphore } from "./image-semaphore.js";
 import type {
   ImagePipelineSemaphore,
   ImageProcessor,
+  ImageProcessorDiagnosticStage,
   ImageSlot,
   ImageVariant,
   OutputFormat,
@@ -65,6 +66,7 @@ async function processImage(
   input: {
     assetId: string;
     declaredMimeType: string;
+    onStage?: (stage: ImageProcessorDiagnosticStage) => void;
     siteId: string;
     slot: ImageSlot;
     source: Buffer;
@@ -81,6 +83,7 @@ async function processImage(
     );
   }
 
+  input.onStage?.("IMAGE_METADATA_READ");
   const metadata = await readMetadata(input.source);
 
   if (metadata.format !== expectedFormat) {
@@ -98,6 +101,7 @@ async function processImage(
   const basePath = buildImageBasePath(input.siteId, input.slot, input.assetId);
 
   for (const width of widths) {
+    input.onStage?.("IMAGE_WEBP_ENCODED");
     variants.push(
       await encodeVariant({
         basePath,
@@ -106,6 +110,7 @@ async function processImage(
         width
       })
     );
+    input.onStage?.("IMAGE_AVIF_ENCODED");
     variants.push(
       await encodeVariant({
         basePath,
@@ -132,6 +137,8 @@ async function processImage(
       );
     }
   }
+
+  input.onStage?.("IMAGE_PROCESS_COMPLETED");
 
   return {
     assetId: input.assetId,

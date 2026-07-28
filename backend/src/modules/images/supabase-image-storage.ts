@@ -1,6 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import type { StorageConfig } from "../../config/storage-env.js";
 import { createImageAppError } from "./image.errors.js";
+import {
+  attachPreviewUploadDiagnostic,
+  createPreviewStorageDiagnostic,
+  type PreviewStorageDiagnosticCode
+} from "./preview-upload-observability.js";
 import type {
   ImageStorage,
   StorageBucketConfig,
@@ -57,23 +62,24 @@ export function createSupabaseImageStorage(
     }
   ) as SupabaseStorageLike
 ): ImageStorage {
+  const storageClient = client.storage;
+
   return {
     async createBucket(input) {
       assertBucketConfig(input, config.bucket);
-      const createBucket = client.storage.createBucket;
 
-      if (createBucket === undefined) {
-        throw storageConfigurationInvalid();
+      if (storageClient.createBucket === undefined) {
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await createBucket(input.id, {
+      const result = await storageClient.createBucket(input.id, {
         allowedMimeTypes: [...input.allowedMimeTypes],
         fileSizeLimit: input.fileSizeLimit,
         public: input.public
       });
 
       if (result.error !== null) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION", result.error);
       }
 
       return { created: true };
@@ -81,7 +87,7 @@ export function createSupabaseImageStorage(
     getPublicUrl(path) {
       assertVariantPath(path);
 
-      const publicUrl = client.storage.from(config.bucket).getPublicUrl?.(path).data
+      const publicUrl = storageClient.from(config.bucket).getPublicUrl?.(path).data
         .publicUrl ?? deterministicPublicUrl(config, path);
 
       assertSafePublicUrl(config, publicUrl, path);
@@ -89,19 +95,17 @@ export function createSupabaseImageStorage(
     },
     async inspectBucket(bucket) {
       if (bucket !== config.bucket) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const getBucket = client.storage.getBucket;
-
-      if (getBucket === undefined) {
+      if (storageClient.getBucket === undefined) {
         return {
           compatible: true,
           exists: true
         };
       }
 
-      const result = await getBucket(bucket);
+      const result = await storageClient.getBucket(bucket);
 
       if (result.error !== null) {
         return { exists: false };
@@ -118,19 +122,21 @@ export function createSupabaseImageStorage(
       }
 
       const prefix = commonCanonicalPrefix(paths);
-      const list = client.storage.from(config.bucket).list;
+      const bucketClient = storageClient.from(config.bucket);
 
-      if (list === undefined) {
-        throw storageConfigurationInvalid();
+      if (bucketClient.list === undefined) {
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await list(prefix);
+      const result = await bucketClient.list(prefix);
 
       if (result.error !== null || result.data === null) {
-        throw createImageAppError(
+        throw storageOperationFailed(
           "STORAGE_UNAVAILABLE",
           "Storage is unavailable.",
-          503
+          503,
+          "STORAGE_INSPECT",
+          result.error
         );
       }
 
@@ -155,19 +161,21 @@ export function createSupabaseImageStorage(
         assertVariantPath(path);
       }
 
-      const remove = client.storage.from(config.bucket).remove;
+      const bucketClient = storageClient.from(config.bucket);
 
-      if (remove === undefined) {
-        throw storageConfigurationInvalid();
+      if (bucketClient.remove === undefined) {
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await remove([...paths]);
+      const result = await bucketClient.remove([...paths]);
 
       if (result.error !== null) {
-        throw createImageAppError(
+        throw storageOperationFailed(
           "STORAGE_UNAVAILABLE",
           "Storage is unavailable.",
-          503
+          503,
+          "STORAGE_REMOVE",
+          result.error
         );
       }
 
@@ -175,23 +183,25 @@ export function createSupabaseImageStorage(
     },
     async uploadObject(input) {
       assertUploadInput(input);
-      const upload = client.storage.from(config.bucket).upload;
+      const bucketClient = storageClient.from(config.bucket);
 
-      if (upload === undefined) {
-        throw storageConfigurationInvalid();
+      if (bucketClient.upload === undefined) {
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
-      const result = await upload(input.path, input.body, {
+      const result = await bucketClient.upload(input.path, input.body, {
         cacheControl: input.cacheControl,
         contentType: input.contentType,
         upsert: false
       });
 
       if (result.error !== null) {
-        throw createImageAppError(
+        throw storageOperationFailed(
           "STORAGE_WRITE_FAILED",
           "Storage write failed.",
-          503
+          503,
+          "STORAGE_UPLOAD",
+          result.error
         );
       }
 
@@ -211,13 +221,13 @@ function assertUploadInput(input: UploadImageObjectInput): void {
     input.upsert !== false ||
     (input.contentType !== "image/webp" && input.contentType !== "image/avif")
   ) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 }
 
 function assertVariantPath(path: string): void {
   if (!variantPathPattern.test(path)) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 }
 
@@ -233,12 +243,12 @@ function commonCanonicalPrefix(paths: readonly string[]): string {
       continue;
     }
     if (prefix !== nextPrefix) {
-      throw storageConfigurationInvalid();
+      throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
     }
   }
 
   if (prefix === undefined) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 
   return prefix;
@@ -258,7 +268,7 @@ function assertSafePublicUrl(
   try {
     url = new URL(publicUrl);
   } catch {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_PUBLIC_URL");
   }
 
   const expected = new URL(deterministicPublicUrl(config, path));
@@ -269,7 +279,7 @@ function assertSafePublicUrl(
     url.search !== "" ||
     url.hash !== ""
   ) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_PUBLIC_URL");
   }
 }
 
@@ -284,7 +294,7 @@ function assertBucketConfig(
     input.allowedMimeTypes[0] !== "image/webp" ||
     input.allowedMimeTypes[1] !== "image/avif"
   ) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 }
 
@@ -308,10 +318,29 @@ function isCompatibleBucket(data: unknown): boolean {
   );
 }
 
-function storageConfigurationInvalid(): ReturnType<typeof createImageAppError> {
-  return createImageAppError(
-    "STORAGE_CONFIGURATION_INVALID",
-    "Storage configuration is invalid.",
-    503
+function storageOperationFailed(
+  code: "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED",
+  message: string,
+  statusCode: number,
+  operation: PreviewStorageDiagnosticCode,
+  providerError?: unknown
+): ReturnType<typeof createImageAppError> {
+  return attachPreviewUploadDiagnostic(
+    createImageAppError(code, message, statusCode),
+    createPreviewStorageDiagnostic(operation, providerError)
+  );
+}
+
+function storageConfigurationInvalid(
+  operation: PreviewStorageDiagnosticCode,
+  providerError?: unknown
+): ReturnType<typeof createImageAppError> {
+  return attachPreviewUploadDiagnostic(
+    createImageAppError(
+      "STORAGE_CONFIGURATION_INVALID",
+      "Storage configuration is invalid.",
+      503
+    ),
+    createPreviewStorageDiagnostic(operation, providerError)
   );
 }

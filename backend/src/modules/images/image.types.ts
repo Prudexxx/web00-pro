@@ -26,6 +26,12 @@ export interface ParsedImageFile {
   source: Buffer;
 }
 
+export type ImageProcessorDiagnosticStage =
+  | "IMAGE_METADATA_READ"
+  | "IMAGE_WEBP_ENCODED"
+  | "IMAGE_AVIF_ENCODED"
+  | "IMAGE_PROCESS_COMPLETED";
+
 export interface MultipartImageParser {
   parseBatch(request: NodeJS.ReadableStream): Promise<ParsedImageFile[]>;
   parseBatchStream(request: NodeJS.ReadableStream): AsyncIterable<ParsedImageFile>;
@@ -36,6 +42,7 @@ export interface ImageProcessor {
   process(input: {
     assetId: string;
     declaredMimeType: string;
+    onStage?: (stage: ImageProcessorDiagnosticStage) => void;
     siteId: string;
     slot: ImageSlot;
     source: Buffer;

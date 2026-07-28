@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import { AppError } from "../../../lib/errors.js";
 import { runSerializableWithRetry } from "../../../cli/cli-user.repository.js";
 import type { ManagedGalleryImage } from "../../images/image.types.js";
+import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
 import type { SiteImageRepository } from "./site-image.service.js";
 
@@ -126,20 +127,27 @@ export function createPrismaSiteImageRepository(options: {
       return site as SiteImageMutationSite | null;
     },
     async replacePreview(input) {
-      return runSerializableWithRetry(prisma, async (tx) => {
+      const onStage = input.onStage ?? noopPreviewStage;
+
+      onStage("DB_ATTACH_STARTED");
+      const after = await runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
+        onStage("DB_SITE_UPDATED");
         const after = await tx.site.update({
           data: { previewImageUrl: input.previewImageUrl },
           select: siteImageSelect,
           where: { id: input.siteId }
         });
 
+        onStage("DB_RESERVATIONS_COMPLETED");
         await markReservationsCompleted(tx, input.uploadReservationIds, input.context.now);
+        onStage("DB_CLEANUP_JOBS_CREATED");
         await createCleanupJobs(tx, input.cleanupPaths, {
           context: input.context,
           reason: "preview_replace",
           siteId: input.siteId
         });
+        onStage("DB_AUDIT_CREATED");
         await createImageAudit(tx, {
           action: "site.image.preview_replace",
           afterJson: {
@@ -154,6 +162,10 @@ export function createPrismaSiteImageRepository(options: {
 
         return after as SiteImageMutationSite;
       });
+
+      onStage("DB_ATTACH_COMMITTED");
+
+      return after;
     },
     async reorderGallery(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
@@ -220,6 +232,10 @@ function normalizeGallery(items: Record<string, unknown>[]): Record<string, unkn
     ...item,
     sortOrder: index
   }));
+}
+
+function noopPreviewStage(_stage: PreviewUploadStage): void {
+  return undefined;
 }
 
 async function markReservationsCompleted(
