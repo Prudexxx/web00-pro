@@ -41,6 +41,7 @@ export function createCategoriesScreen(options) {
     documentRef,
     politeness: "assertive"
   });
+  formErrorRegion.setAttribute("role", "alert");
   const results = createElement("section", {
     documentRef,
     className: "admin-category-results",
@@ -382,6 +383,7 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
     documentRef,
     attributes: {
       autocomplete: "off",
+      maxlength: String(CATEGORY_LIMITS.search),
       name: "categorySearch",
       placeholder: "Поиск",
       type: "search",
@@ -405,8 +407,10 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
   const pageInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       min: "1",
       name: "categoryPage",
+      step: "1",
       type: "number",
       value: String(filters.page)
     }
@@ -414,9 +418,11 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
   const limitInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       max: "100",
       min: "1",
       name: "categoryLimit",
+      step: "1",
       type: "number",
       value: String(filters.limit)
     }
@@ -494,7 +500,7 @@ function createCategoryForm({ documentRef, formErrorRegion, onCancel, onSubmit }
     documentRef,
     attributes: {
       autocomplete: "off",
-      max: String(CATEGORY_LIMITS.slug),
+      maxlength: String(CATEGORY_LIMITS.slug),
       name: "categorySlug",
       required: true,
       type: "text"
@@ -504,7 +510,7 @@ function createCategoryForm({ documentRef, formErrorRegion, onCancel, onSubmit }
     documentRef,
     attributes: {
       autocomplete: "off",
-      max: String(CATEGORY_LIMITS.title),
+      maxlength: String(CATEGORY_LIMITS.title),
       name: "categoryTitle",
       required: true,
       type: "text"
@@ -513,7 +519,7 @@ function createCategoryForm({ documentRef, formErrorRegion, onCancel, onSubmit }
   const descriptionInput = createElement("textarea", {
     documentRef,
     attributes: {
-      max: String(CATEGORY_LIMITS.description),
+      maxlength: String(CATEGORY_LIMITS.description),
       name: "categoryDescription",
       rows: "4"
     }
@@ -521,8 +527,10 @@ function createCategoryForm({ documentRef, formErrorRegion, onCancel, onSubmit }
   const sortInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       min: "0",
       name: "categorySortOrder",
+      step: "1",
       type: "number"
     }
   });
@@ -563,7 +571,7 @@ function createCategoryForm({ documentRef, formErrorRegion, onCancel, onSubmit }
       labeled(documentRef, "Slug", slugInput),
       labeled(documentRef, "Название", titleInput),
       labeled(documentRef, "Описание", descriptionInput),
-      labeled(documentRef, "Sort order", sortInput),
+      labeled(documentRef, "Порядок", sortInput),
       createElement("label", {
         documentRef,
         className: "admin-check-field",
@@ -648,13 +656,13 @@ function renderCategories({ categories, documentRef, filters, onDelete, onEdit, 
               createElement("th", { documentRef, text: "Slug", attributes: { scope: "col" } }),
               createElement("th", { documentRef, text: "Название", attributes: { scope: "col" } }),
               createElement("th", { documentRef, text: "Описание", attributes: { scope: "col" } }),
-              createElement("th", { documentRef, text: "Sort", attributes: { scope: "col" } }),
+              createElement("th", { documentRef, text: "Порядок", attributes: { scope: "col" } }),
               createElement("th", { documentRef, text: "Сайты", attributes: { scope: "col" } }),
               ...(role === "admin"
                 ? [
                     createElement("th", { documentRef, text: "Активность", attributes: { scope: "col" } }),
-                    createElement("th", { documentRef, text: "Created", attributes: { scope: "col" } }),
-                    createElement("th", { documentRef, text: "Updated", attributes: { scope: "col" } }),
+                    createElement("th", { documentRef, text: "Создано", attributes: { scope: "col" } }),
+                    createElement("th", { documentRef, text: "Обновлено", attributes: { scope: "col" } }),
                     createElement("th", { documentRef, text: "Действия", attributes: { scope: "col" } })
                   ]
                 : [])
@@ -685,18 +693,21 @@ function renderCategories({ categories, documentRef, filters, onDelete, onEdit, 
 
 function renderCategoryRow({ category, documentRef, onDelete, onEdit, role }) {
   const cells = [
-    createElement("td", { documentRef, text: category.id ?? "" }),
-    createElement("td", { documentRef, text: category.slug ?? "" }),
-    createElement("td", { documentRef, text: category.title ?? "" }),
-    createElement("td", { documentRef, text: category.description ?? "" }),
-    createElement("td", { documentRef, text: category.sortOrder ?? "" }),
-    createElement("td", { documentRef, text: category.siteCount ?? "" })
+    tableCell(documentRef, "ID", category.id ?? ""),
+    tableCell(documentRef, "Slug", category.slug ?? ""),
+    tableCell(documentRef, "Название", category.title ?? ""),
+    tableCell(documentRef, "Описание", category.description ?? ""),
+    tableCell(documentRef, "Порядок", category.sortOrder ?? ""),
+    tableCell(documentRef, "Сайты", category.siteCount ?? "")
   ];
 
   if (role === "admin") {
     cells.push(
       createElement("td", {
         documentRef,
+        attributes: {
+          "data-label": "Активность"
+        },
         children: [
           createElement("span", {
             documentRef,
@@ -705,10 +716,13 @@ function renderCategoryRow({ category, documentRef, onDelete, onEdit, role }) {
           })
         ]
       }),
-      createElement("td", { documentRef, text: category.createdAt ?? "" }),
-      createElement("td", { documentRef, text: category.updatedAt ?? "" }),
+      tableCell(documentRef, "Создано", category.createdAt ?? ""),
+      tableCell(documentRef, "Обновлено", category.updatedAt ?? ""),
       createElement("td", {
         documentRef,
+        attributes: {
+          "data-label": "Действия"
+        },
         children: [
           createElement("div", {
             documentRef,
@@ -746,6 +760,16 @@ function renderCategoryRow({ category, documentRef, onDelete, onEdit, role }) {
   return createElement("tr", {
     documentRef,
     children: cells
+  });
+}
+
+function tableCell(documentRef, label, text) {
+  return createElement("td", {
+    documentRef,
+    attributes: {
+      "data-label": label
+    },
+    text
   });
 }
 

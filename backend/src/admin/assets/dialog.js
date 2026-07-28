@@ -29,6 +29,7 @@ export function createConfirmationDialog(options) {
     documentRef,
     politeness: "assertive"
   });
+  errorRegion.setAttribute("role", "alert");
   const typedInput = confirmationText === null ? null : createElement("input", {
     documentRef,
     attributes: {

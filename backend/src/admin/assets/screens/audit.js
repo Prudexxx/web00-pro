@@ -199,8 +199,9 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
     documentRef,
     attributes: {
       autocomplete: "off",
+      maxlength: "80",
       name: "auditAction",
-      placeholder: "action",
+      placeholder: "Фильтр по действию",
       type: "search",
       value: filters.action ?? ""
     }
@@ -209,8 +210,9 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
     documentRef,
     attributes: {
       autocomplete: "off",
+      maxlength: "36",
       name: "auditActorUserId",
-      placeholder: "actorUserId",
+      placeholder: "UUID автора",
       type: "text",
       value: filters.actorUserId ?? ""
     }
@@ -219,19 +221,20 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
     documentRef,
     attributes: {
       autocomplete: "off",
+      maxlength: "36",
       name: "auditEntityId",
-      placeholder: "entityId",
+      placeholder: "UUID сущности",
       type: "text",
       value: filters.entityId ?? ""
     }
   });
   const entityTypeSelect = createSelect(documentRef, "auditEntityType", [
     ["", "Любая сущность"],
-    ["auth", "auth"],
-    ["category", "category"],
-    ["site", "site"],
-    ["upload", "upload"],
-    ["user", "user"]
+    ["auth", "Аутентификация"],
+    ["category", "Категория"],
+    ["site", "Сайт"],
+    ["upload", "Загрузка"],
+    ["user", "Пользователь"]
   ], filters.entityType ?? "");
   const fromInput = createElement("input", {
     documentRef,
@@ -256,8 +259,10 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
   const pageInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       min: "1",
       name: "auditPage",
+      step: "1",
       type: "number",
       value: String(filters.page)
     }
@@ -265,9 +270,11 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
   const limitInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       max: "100",
       min: "1",
       name: "auditLimit",
+      step: "1",
       type: "number",
       value: String(filters.limit)
     }
@@ -280,13 +287,13 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
       "data-action": "filter-audit"
     },
     children: [
-      labeled(documentRef, "Action", actionInput),
-      labeled(documentRef, "Actor ID", actorInput),
-      labeled(documentRef, "Entity ID", entityIdInput),
-      labeled(documentRef, "Entity type", entityTypeSelect),
-      labeled(documentRef, "From", fromInput),
-      labeled(documentRef, "To", toInput),
-      labeled(documentRef, "Sort", sortSelect),
+      labeled(documentRef, "Действие", actionInput),
+      labeled(documentRef, "ID автора", actorInput),
+      labeled(documentRef, "ID сущности", entityIdInput),
+      labeled(documentRef, "Тип сущности", entityTypeSelect),
+      labeled(documentRef, "С даты", fromInput),
+      labeled(documentRef, "По дату", toInput),
+      labeled(documentRef, "Порядок", sortSelect),
       labeled(documentRef, "Страница", pageInput),
       labeled(documentRef, "Лимит", limitInput),
       createElement("button", {
@@ -388,19 +395,19 @@ function renderAuditEntry({ clipboard, documentRef, entry }) {
       }),
       createElement("p", {
         documentRef,
-        text: `Actor: ${formatActor(entry.actor)}`
+        text: `Автор: ${formatActor(entry.actor)}`
       }),
       createElement("p", {
         documentRef,
-        text: `Entity: ${entry.entityType ?? ""} ${entry.entityId ?? ""}`
+        text: `Сущность: ${entry.entityType ?? ""} ${entry.entityId ?? ""}`
       }),
       createElement("p", {
         documentRef,
         text: "requestId: "
       }),
       createRequestIdControl(entry.requestId ?? "", { clipboard, documentRef }),
-      createJsonDetails(documentRef, "Before JSON", entry.beforeJson),
-      createJsonDetails(documentRef, "After JSON", entry.afterJson)
+      createJsonDetails(documentRef, "До изменения", entry.beforeJson),
+      createJsonDetails(documentRef, "После изменения", entry.afterJson)
     ]
   });
 }

@@ -233,6 +233,8 @@ export function createImageManagerScreen(options) {
     const altInput = createElement("input", {
       documentRef,
       attributes: {
+        autocomplete: "off",
+        maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt),
         name: "previewAlt",
         type: "text"
       }
@@ -339,7 +341,7 @@ export function createImageManagerScreen(options) {
         }),
         createElement("p", {
           documentRef,
-          text: `Sort: ${image.sortOrder ?? 0}`
+          text: `Порядок: ${image.sortOrder ?? 0}`
         }),
         ...(canMutate ? [createElement("button", {
           documentRef,
@@ -366,11 +368,14 @@ export function createImageManagerScreen(options) {
           documentRef,
           text: image.assetId
         }),
-        labeled("Sort order", createElement("input", {
+        labeled("Порядок", createElement("input", {
           documentRef,
           attributes: {
             "data-asset-id": image.assetId,
+            inputmode: "numeric",
+            min: "0",
             name: "gallerySortOrder",
+            step: "1",
             type: "number",
             value: String(image.sortOrder ?? 0)
           }
@@ -379,6 +384,8 @@ export function createImageManagerScreen(options) {
           documentRef,
           attributes: {
             "data-asset-id": image.assetId,
+            autocomplete: "off",
+            maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt),
             name: "galleryItemAlt",
             type: "text",
             value: image.alt ?? ""
@@ -423,6 +430,8 @@ export function createImageManagerScreen(options) {
     const altInput = createElement("input", {
       documentRef,
       attributes: {
+        autocomplete: "off",
+        maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt),
         name: "galleryAlt",
         type: "text"
       }
@@ -474,6 +483,8 @@ export function createImageManagerScreen(options) {
     const altInput = createElement("input", {
       documentRef,
       attributes: {
+        autocomplete: "off",
+        maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt),
         name: "galleryBatchAlt",
         type: "text"
       }
@@ -813,8 +824,10 @@ export function createImageManagerScreen(options) {
   function clearFileInputs() {
     for (const input of element.querySelectorAll("input")) {
       if (input.type === "file") {
-        input.files = [];
         input.value = "";
+        if (Array.isArray(input.files)) {
+          input.files = [];
+        }
       }
     }
   }

@@ -36,7 +36,7 @@ const LIFECYCLE_ACTIONS = {
   },
   unpublish: {
     confirmLabel: "Снять с публикации",
-    description: "Сайт вернётся в draft после подтверждения сервером.",
+    description: "Сайт вернётся в черновик после подтверждения сервером.",
     label: "Снять",
     method: "POST",
     path: (siteId) => `/api/admin/sites/${siteId}/unpublish`,
@@ -61,7 +61,7 @@ const LIFECYCLE_ACTIONS = {
   },
   "permanent-delete": {
     confirmLabel: "Удалить навсегда",
-    description: "Permanent delete нельзя отменить. Запрос отправляется без тела.",
+    description: "Окончательное удаление нельзя отменить. Запрос отправляется без тела.",
     destructive: true,
     label: "Удалить навсегда",
     method: "DELETE",
@@ -137,7 +137,7 @@ export function createSitesListScreen(options) {
           }),
           createElement("button", {
             documentRef,
-            text: "Создать draft",
+            text: "Создать черновик",
             attributes: {
               "data-action": "create-site",
               type: "button"
@@ -358,15 +358,17 @@ function createFilterForm({ documentRef, onApply, onReset, role }) {
       createLabeledControl(documentRef, "Поиск", createElement("input", {
         documentRef,
         attributes: {
+          autocomplete: "off",
+          maxlength: "100",
           name: "search",
           type: "search"
         }
       })),
       createLabeledControl(documentRef, "Статус", createSelect(documentRef, "status", [
         ["", "Все"],
-        ["draft", "Draft"],
-        ["published", "Published"],
-        ["archived", "Archived"]
+        ["draft", "Черновик"],
+        ["published", "Опубликован"],
+        ["archived", "Архив"]
       ])),
       createLabeledControl(documentRef, "Категория", createSelect(documentRef, "category", [
         ["", "Все"]
@@ -384,8 +386,10 @@ function createFilterForm({ documentRef, onApply, onReset, role }) {
       createLabeledControl(documentRef, "Страница", createElement("input", {
         documentRef,
         attributes: {
+          inputmode: "numeric",
           min: "1",
           name: "page",
+          step: "1",
           type: "number",
           value: "1"
         }
@@ -393,9 +397,11 @@ function createFilterForm({ documentRef, onApply, onReset, role }) {
       createLabeledControl(documentRef, "Лимит", createElement("input", {
         documentRef,
         attributes: {
+          inputmode: "numeric",
           max: "100",
           min: "1",
           name: "limit",
+          step: "1",
           type: "number",
           value: "20"
         }
@@ -410,7 +416,7 @@ function createFilterForm({ documentRef, onApply, onReset, role }) {
         ["true", "Активные"],
         ["false", "Неактивные"]
       ])),
-      createLabeledControl(documentRef, "Featured", createSelect(documentRef, "featured", [
+      createLabeledControl(documentRef, "Выделение", createSelect(documentRef, "featured", [
         ["", "Все"],
         ["true", "Да"],
         ["false", "Нет"]
@@ -538,21 +544,24 @@ function renderSites({ documentRef, filters, meta, onEdit, onImages, onLifecycle
 
 function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role, site }) {
   const cells = [
-    createElement("td", { documentRef, text: site.title ?? "" }),
-    createElement("td", { documentRef, text: site.slug ?? "" }),
-    createElement("td", { documentRef, text: site.category?.title ?? site.categoryId ?? "" }),
-    createElement("td", { documentRef, text: site.status ?? "" })
+    tableCell(documentRef, "Название", site.title ?? ""),
+    tableCell(documentRef, "Slug", site.slug ?? ""),
+    tableCell(documentRef, "Категория", site.category?.title ?? site.categoryId ?? ""),
+    tableCell(documentRef, "Статус", siteStatusLabel(site.status))
   ];
 
   if (role === "admin") {
     cells.push(
-      createElement("td", { documentRef, text: site.active === true ? "Активен" : "Неактивен" }),
-      createElement("td", { documentRef, text: site.views ?? "" })
+      tableCell(documentRef, "Активность", site.active === true ? "Активен" : "Неактивен"),
+      tableCell(documentRef, "Просмотры", site.views ?? "")
     );
   }
 
   cells.push(createElement("td", {
     documentRef,
+    attributes: {
+      "data-label": "Действия"
+    },
     children: [
       createElement("div", {
         documentRef,
@@ -607,6 +616,30 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
     documentRef,
     children: cells
   });
+}
+
+function tableCell(documentRef, label, text) {
+  return createElement("td", {
+    documentRef,
+    attributes: {
+      "data-label": label
+    },
+    text
+  });
+}
+
+function siteStatusLabel(status) {
+  if (status === "draft") {
+    return "Черновик";
+  }
+  if (status === "published") {
+    return "Опубликован";
+  }
+  if (status === "archived") {
+    return "Архив";
+  }
+
+  return status ?? "";
 }
 
 function canManageSiteImages(site, role) {

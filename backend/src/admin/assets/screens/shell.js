@@ -17,7 +17,9 @@ export function createAuthenticatedShell(options) {
   const onLogout = typeof options?.onLogout === "function" ? options.onLogout : () => {};
   let activeSection = "sites";
 
-  const contentTitle = element(documentRef, "h2", {}, ["Сайты"]);
+  const contentTitle = element(documentRef, "h2", {
+    tabindex: "-1"
+  }, ["Сайты"]);
   const contentNote = element(documentRef, "p", {}, [
     "Раздел будет подключён на следующем этапе"
   ]);
@@ -49,8 +51,8 @@ export function createAuthenticatedShell(options) {
       setActiveSection(item.id);
       if (navigationResult !== true) {
         showPlaceholder(item.label);
+        content.focus();
       }
-      content.focus();
     });
 
     return button;
@@ -97,7 +99,7 @@ export function createAuthenticatedShell(options) {
   shell.showContent = (title, ...children) => {
     contentTitle.textContent = title;
     content.replaceChildren(contentTitle, ...children);
-    content.focus();
+    contentTitle.focus();
   };
   shell.showPlaceholder = showPlaceholder;
 
@@ -118,6 +120,7 @@ export function createAuthenticatedShell(options) {
     contentNote.textContent = "Раздел будет подключён на следующем этапе";
     content.replaceChildren(contentTitle, contentNote);
     status.textContent = `Открыт раздел: ${label}`;
+    contentTitle.focus();
   }
 }
 

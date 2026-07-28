@@ -321,6 +321,7 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
     documentRef,
     attributes: {
       autocomplete: "off",
+      maxlength: "100",
       name: "userSearch",
       placeholder: "Поиск",
       type: "search",
@@ -351,8 +352,10 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
   const pageInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       min: "1",
       name: "userPage",
+      step: "1",
       type: "number",
       value: String(filters.page)
     }
@@ -360,9 +363,11 @@ function createFilterForm({ documentRef, filters, onApply, onReset }) {
   const limitInput = createElement("input", {
     documentRef,
     attributes: {
+      inputmode: "numeric",
       max: "100",
       min: "1",
       name: "userLimit",
+      step: "1",
       type: "number",
       value: String(filters.limit)
     }
@@ -451,8 +456,8 @@ function renderUsers({ currentUser, documentRef, filters, onAction, onDetail, re
               createElement("th", { documentRef, text: "Роль", attributes: { scope: "col" } }),
               createElement("th", { documentRef, text: "Активность", attributes: { scope: "col" } }),
               createElement("th", { documentRef, text: "Последний вход", attributes: { scope: "col" } }),
-              createElement("th", { documentRef, text: "Created", attributes: { scope: "col" } }),
-              createElement("th", { documentRef, text: "Updated", attributes: { scope: "col" } }),
+              createElement("th", { documentRef, text: "Создано", attributes: { scope: "col" } }),
+              createElement("th", { documentRef, text: "Обновлено", attributes: { scope: "col" } }),
               createElement("th", { documentRef, text: "Действия", attributes: { scope: "col" } })
             ]
           })
@@ -559,10 +564,13 @@ function renderUserRow({ currentUser, documentRef, onAction, onDetail, role, use
   return createElement("tr", {
     documentRef,
     children: [
-      createElement("td", { documentRef, text: user.email ?? "" }),
-      createElement("td", { documentRef, text: user.id ?? "" }),
+      tableCell(documentRef, "Email", user.email ?? ""),
+      tableCell(documentRef, "ID", user.id ?? ""),
       createElement("td", {
         documentRef,
+        attributes: {
+          "data-label": "Роль"
+        },
         children: [
           createElement("span", {
             documentRef,
@@ -573,6 +581,9 @@ function renderUserRow({ currentUser, documentRef, onAction, onDetail, role, use
       }),
       createElement("td", {
         documentRef,
+        attributes: {
+          "data-label": "Активность"
+        },
         children: [
           createElement("span", {
             documentRef,
@@ -581,11 +592,14 @@ function renderUserRow({ currentUser, documentRef, onAction, onDetail, role, use
           })
         ]
       }),
-      createElement("td", { documentRef, text: user.lastLoginAt ?? "" }),
-      createElement("td", { documentRef, text: user.createdAt ?? "" }),
-      createElement("td", { documentRef, text: user.updatedAt ?? "" }),
+      tableCell(documentRef, "Последний вход", user.lastLoginAt ?? ""),
+      tableCell(documentRef, "Создано", user.createdAt ?? ""),
+      tableCell(documentRef, "Обновлено", user.updatedAt ?? ""),
       createElement("td", {
         documentRef,
+        attributes: {
+          "data-label": "Действия"
+        },
         children: [
           createElement("div", {
             documentRef,
@@ -614,10 +628,20 @@ function renderUserDetail(detailHost, documentRef, user) {
       createElement("p", { documentRef, text: `Роль: ${roleLabel(safeUser.role)}` }),
       createElement("p", { documentRef, text: `Активность: ${safeUser.active === false ? "Отключён" : "Активен"}` }),
       createElement("p", { documentRef, text: `Последний вход: ${safeUser.lastLoginAt ?? ""}` }),
-      createElement("p", { documentRef, text: `Created: ${safeUser.createdAt ?? ""}` }),
-      createElement("p", { documentRef, text: `Updated: ${safeUser.updatedAt ?? ""}` })
+      createElement("p", { documentRef, text: `Создано: ${safeUser.createdAt ?? ""}` }),
+      createElement("p", { documentRef, text: `Обновлено: ${safeUser.updatedAt ?? ""}` })
     ]
   }));
+}
+
+function tableCell(documentRef, label, text) {
+  return createElement("td", {
+    documentRef,
+    attributes: {
+      "data-label": label
+    },
+    text
+  });
 }
 
 function renderLoading(results, documentRef) {

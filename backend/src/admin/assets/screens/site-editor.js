@@ -8,12 +8,31 @@ import {
 } from "../dom.js";
 import {
   FormValidationError,
+  SITE_LIMITS,
   buildCreateSitePayload,
   buildUpdateSitePayload,
   mapValidationDetails
 } from "../forms.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
+const FIELD_MAX_LENGTHS = Object.freeze({
+  deliveryLabel: SITE_LIMITS.deliveryLabel,
+  demoLocalUrl: SITE_LIMITS.url,
+  demoMode: SITE_LIMITS.demoMode,
+  demoUrl: SITE_LIMITS.url,
+  externalDemoUrl: SITE_LIMITS.url,
+  fullDescription: SITE_LIMITS.fullDescription,
+  legacyTitle: SITE_LIMITS.legacyTitle,
+  originalDemoUrl: SITE_LIMITS.url,
+  previewType: SITE_LIMITS.previewType,
+  priceLabel: SITE_LIMITS.priceLabel,
+  shortDescription: SITE_LIMITS.shortDescription,
+  siteUrl: SITE_LIMITS.url,
+  slug: SITE_LIMITS.slug,
+  title: SITE_LIMITS.title
+});
+const URL_FIELDS = new Set(["demoLocalUrl", "demoUrl", "externalDemoUrl", "originalDemoUrl", "siteUrl"]);
+const REQUIRED_FIELDS = new Set(["categoryId", "shortDescription", "slug", "title"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function createSiteEditorScreen(options) {
@@ -59,7 +78,7 @@ export function createSiteEditorScreen(options) {
               }),
               createElement("h2", {
                 documentRef,
-                text: mode === "create" ? "Создать draft" : "Редактировать карточку"
+                text: mode === "create" ? "Создать черновик" : "Редактировать карточку"
               })
             ]
           })
@@ -224,11 +243,11 @@ export function createSiteEditorScreen(options) {
 
   function createLinksSection(errors) {
     return createSection("Ссылки", [
-      createField("demoUrl", "Demo URL", "input", errors, readValue("demoUrl")),
-      createField("demoLocalUrl", "Local demo URL", "input", errors, readValue("demoLocalUrl")),
-      createField("externalDemoUrl", "External demo URL", "input", errors, readValue("externalDemoUrl")),
-      createField("originalDemoUrl", "Original demo URL", "input", errors, readValue("originalDemoUrl")),
-      createField("siteUrl", "Site URL", "input", errors, readValue("siteUrl"))
+      createField("demoUrl", "Ссылка на демо", "input", errors, readValue("demoUrl")),
+      createField("demoLocalUrl", "Локальная ссылка", "input", errors, readValue("demoLocalUrl")),
+      createField("externalDemoUrl", "Внешняя ссылка", "input", errors, readValue("externalDemoUrl")),
+      createField("originalDemoUrl", "Исходная ссылка", "input", errors, readValue("originalDemoUrl")),
+      createField("siteUrl", "Ссылка на сайт", "input", errors, readValue("siteUrl"))
     ]);
   }
 
@@ -268,7 +287,7 @@ export function createSiteEditorScreen(options) {
           input,
           createElement("span", {
             documentRef,
-            text: "Featured"
+            text: "Выделять"
           })
         ]
       }),
@@ -333,13 +352,10 @@ export function createSiteEditorScreen(options) {
   }
 
   function createField(name, label, kind, errors, value, attributes = {}) {
+    const fieldAttributes = buildFieldAttributes(name, kind, attributes);
     const control = createElement(kind, {
       documentRef,
-      attributes: {
-        name,
-        type: attributes.type ?? "text",
-        ...(attributes.min === undefined ? {} : { min: attributes.min })
-      }
+      attributes: fieldAttributes
     });
 
     control.value = value === null || value === undefined ? "" : String(value);
@@ -359,9 +375,17 @@ export function createSiteEditorScreen(options) {
   }
 
   function createArrayField(name, label, errors, values) {
+    const limits = SITE_LIMITS[name];
+    const errorId = fieldErrorId(name);
+    const maxItems = typeof limits?.max === "number" ? limits.max : 30;
+    const itemMaxLength = typeof limits?.item === "number" ? limits.item : 160;
     const textarea = createElement("textarea", {
       documentRef,
       attributes: {
+        "aria-describedby": errorId,
+        "data-item-maxlength": String(itemMaxLength),
+        "data-max-items": String(maxItems),
+        maxlength: String((itemMaxLength * maxItems) + Math.max(0, maxItems - 1)),
         name,
         rows: "4"
       }
@@ -413,7 +437,9 @@ export function createSiteEditorScreen(options) {
     const select = createElement("select", {
       documentRef,
       attributes: {
-        name: "categoryId"
+        "aria-describedby": fieldErrorId("categoryId"),
+        name: "categoryId",
+        required: true
       },
       children: categories.map((category) => createElement("option", {
         documentRef,
@@ -443,7 +469,9 @@ export function createSiteEditorScreen(options) {
       className: "admin-field-error",
       attributes: {
         "aria-live": "polite",
-        "data-field-error": name
+        "data-field-error": name,
+        id: fieldErrorId(name),
+        role: "alert"
       },
       text: (errors?.[name] ?? []).join(" ")
     });
@@ -491,6 +519,42 @@ export function createSiteEditorScreen(options) {
 
     return Array.isArray(value) ? value : String(value).split(/\r?\n/);
   }
+}
+
+function buildFieldAttributes(name, kind, attributes) {
+  const type = attributes.type ?? (URL_FIELDS.has(name) ? "url" : "text");
+  const nextAttributes = {
+    "aria-describedby": fieldErrorId(name),
+    autocomplete: URL_FIELDS.has(name) ? "url" : "off",
+    name
+  };
+  const maxLength = FIELD_MAX_LENGTHS[name];
+
+  if (kind !== "textarea") {
+    nextAttributes.type = type;
+  }
+  if (maxLength !== undefined) {
+    nextAttributes.maxlength = String(maxLength);
+  }
+  if (REQUIRED_FIELDS.has(name)) {
+    nextAttributes.required = true;
+  }
+  if (type === "number") {
+    nextAttributes.inputmode = "numeric";
+    nextAttributes.step = "1";
+    if (attributes.min !== undefined) {
+      nextAttributes.min = attributes.min;
+    }
+    if (attributes.max !== undefined) {
+      nextAttributes.max = attributes.max;
+    }
+  }
+
+  return nextAttributes;
+}
+
+function fieldErrorId(name) {
+  return `admin-field-error-${name}`;
 }
 
 function readFormState(form) {

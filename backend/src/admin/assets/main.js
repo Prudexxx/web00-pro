@@ -149,7 +149,7 @@ export async function bootstrapAdminApp(options = {}) {
       role: currentUser.role,
       ...(siteId === undefined ? {} : { siteId })
     });
-    shellElement.showContent(mode === "create" ? "Создать draft" : "Редактировать карточку", currentScreen.element);
+    shellElement.showContent(mode === "create" ? "Создать черновик" : "Редактировать карточку", currentScreen.element);
     void currentScreen.load();
   }
 

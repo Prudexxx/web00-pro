@@ -46,7 +46,9 @@ const ALLOWED_ATTRIBUTES = new Set([
   "for",
   "href",
   "id",
+  "inputmode",
   "max",
+  "maxlength",
   "min",
   "multiple",
   "name",
@@ -66,7 +68,22 @@ const ALLOWED_ATTRIBUTES = new Set([
 ]);
 
 const ALLOWED_EVENTS = new Set(["change", "click", "input", "submit"]);
-const DEFAULT_JSON_TEXT_LIMIT = 4000;
+export const SAFE_JSON_LIMITS = Object.freeze({
+  maxDepth: 8,
+  maxNodes: 1000,
+  maxOutputLength: 20000
+});
+const DEFAULT_JSON_TEXT_LIMIT = SAFE_JSON_LIMITS.maxOutputLength;
+const JSON_MARKERS = Object.freeze({
+  circular: "[Circular]",
+  depth: "[Глубина ограничена]",
+  function: "[Функция]",
+  nodeBudget: "[Объём ограничен]",
+  symbol: "[Символ]",
+  unavailable: "[Недоступное значение]",
+  undefined: "[Не задано]",
+  unsupported: "[Неподдерживаемое значение]"
+});
 
 export function createElement(tagName, options = {}) {
   const normalizedTag = normalizeTagName(tagName);
@@ -168,28 +185,87 @@ export function createRequestIdControl(requestId, options = {}) {
   return control;
 }
 
+export function normalizeSafeJson(value, options = {}) {
+  const limits = normalizeSafeJsonLimits(options);
+  const seen = new WeakSet();
+  let visitedNodes = 0;
+
+  return normalizeJsonValue(value, 0);
+
+  function normalizeJsonValue(nextValue, depth) {
+    if (nextValue === undefined) {
+      return JSON_MARKERS.undefined;
+    }
+    if (typeof nextValue === "bigint") {
+      return `${nextValue.toString()}n`;
+    }
+    if (typeof nextValue === "function") {
+      return JSON_MARKERS.function;
+    }
+    if (typeof nextValue === "symbol") {
+      return JSON_MARKERS.symbol;
+    }
+    if (nextValue === null || typeof nextValue !== "object") {
+      return nextValue;
+    }
+    if (seen.has(nextValue)) {
+      return JSON_MARKERS.circular;
+    }
+    if (depth >= limits.maxDepth) {
+      return JSON_MARKERS.depth;
+    }
+
+    visitedNodes += 1;
+    if (visitedNodes > limits.maxNodes) {
+      return JSON_MARKERS.nodeBudget;
+    }
+
+    if (!Array.isArray(nextValue) && Object.prototype.toString.call(nextValue) !== "[object Object]") {
+      return JSON_MARKERS.unsupported;
+    }
+
+    seen.add(nextValue);
+    try {
+      if (Array.isArray(nextValue)) {
+        return nextValue.map((item) => normalizeJsonValue(item, depth + 1));
+      }
+
+      const normalized = {};
+      for (const key of Object.keys(nextValue)) {
+        try {
+          normalized[key] = normalizeJsonValue(nextValue[key], depth + 1);
+        } catch {
+          normalized[key] = JSON_MARKERS.unavailable;
+        }
+      }
+
+      return normalized;
+    } finally {
+      seen.delete(nextValue);
+    }
+  }
+}
+
 export function stringifySafeJson(value, options = {}) {
-  const maxLength = normalizeMaxLength(options.maxLength);
+  const maxOutputLength = normalizeMaxLength(options.maxOutputLength ?? options.maxLength);
   let serialized;
 
   try {
-    serialized = JSON.stringify(value === undefined ? null : value, createJsonReplacer(), 2);
-  } catch (error) {
+    serialized = JSON.stringify(value === undefined ? null : normalizeSafeJson(value, options), null, 2);
+  } catch {
     serialized = JSON.stringify({
-      error: "Unable to serialize value.",
-      message: error instanceof Error ? error.message : "Unknown serialization error."
+      error: "Unable to serialize value."
     }, null, 2);
   }
 
   if (serialized === undefined) {
     serialized = "null";
   }
-  if (serialized.length <= maxLength) {
+  if (serialized.length <= maxOutputLength) {
     return serialized;
   }
 
-  const remaining = serialized.length - maxLength;
-  return `${serialized.slice(0, maxLength)}\n... [truncated ${remaining} characters]`;
+  return truncateJsonText(serialized, maxOutputLength);
 }
 
 export function setBusy(element, busy) {
@@ -232,25 +308,33 @@ function normalizeMaxLength(value) {
     return DEFAULT_JSON_TEXT_LIMIT;
   }
 
-  return Math.max(100, Math.min(20000, Math.floor(value)));
+  return Math.max(100, Math.min(SAFE_JSON_LIMITS.maxOutputLength, Math.floor(value)));
 }
 
-function createJsonReplacer() {
-  const seen = new WeakSet();
-
-  return (_key, nextValue) => {
-    if (typeof nextValue === "bigint") {
-      return `${nextValue.toString()}n`;
-    }
-    if (typeof nextValue === "object" && nextValue !== null) {
-      if (seen.has(nextValue)) {
-        return "[Circular]";
-      }
-      seen.add(nextValue);
-    }
-
-    return nextValue;
+function normalizeSafeJsonLimits(options) {
+  return {
+    maxDepth: normalizePositiveInteger(options.maxDepth, SAFE_JSON_LIMITS.maxDepth),
+    maxNodes: normalizePositiveInteger(options.maxNodes, SAFE_JSON_LIMITS.maxNodes),
+    maxOutputLength: normalizeMaxLength(options.maxOutputLength ?? options.maxLength)
   };
+}
+
+function normalizePositiveInteger(value, fallback) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.floor(value));
+}
+
+function truncateJsonText(serialized, maxOutputLength) {
+  const marker = "\n... [Вывод ограничен; truncated]";
+
+  if (marker.length >= maxOutputLength) {
+    return marker.slice(0, maxOutputLength);
+  }
+
+  return `${serialized.slice(0, maxOutputLength - marker.length)}${marker}`;
 }
 
 function normalizeTagName(tagName) {
