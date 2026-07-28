@@ -214,6 +214,107 @@ describe("admin API client", () => {
     });
   });
 
+  it("accepts the current nested me response while bootstrapping after refresh", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "memory-token-me",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: safeUser("admin")
+          }
+        }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+    const api = createApiClient({ authStore, fetchImpl });
+
+    await expect(api.bootstrapSession()).resolves.toEqual(safeUser("admin"));
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/auth/refresh",
+      "/api/auth/me"
+    ]);
+    expect(authStore.getAccessToken()).toBe("memory-token-me");
+    expect(authStore.getSnapshot()).toEqual({
+      state: AUTH_STATES.AUTHENTICATED,
+      user: safeUser("admin")
+    });
+  });
+
+  it("rejects the legacy direct me user response shape", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "memory-token-legacy",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: safeUser("admin")
+        }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+    const api = createApiClient({ authStore, fetchImpl });
+
+    await expect(api.bootstrapSession()).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      message: "Invalid server response."
+    });
+    expect(authStore.getAccessToken()).toBeNull();
+    expect(authStore.getSnapshot()).toEqual({
+      state: AUTH_STATES.UNAUTHENTICATED,
+      user: null
+    });
+  });
+
+  it("returns a controlled INVALID_RESPONSE for malformed me payloads", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "memory-token-malformed",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: {
+              email: "admin@example.test",
+              id: "user-admin",
+              role: "viewer"
+            }
+          }
+        }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+    const api = createApiClient({ authStore, fetchImpl });
+
+    await expect(api.bootstrapSession()).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      status: 0
+    });
+  });
+
   it("normalizes backend errors without retaining raw response data or secrets", () => {
     const error = parseApiError({ status: 400 }, {
       accessToken: "must-not-leak",
