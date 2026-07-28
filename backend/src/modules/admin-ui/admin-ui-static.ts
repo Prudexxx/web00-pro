@@ -75,7 +75,15 @@ function hasDotPathSegment(requestPath: string): boolean {
   return requestPath
     .split("/")
     .filter(Boolean)
-    .some((segment) => decodeURIComponent(segment).startsWith("."));
+    .some(isUnsafePathSegment);
+}
+
+function isUnsafePathSegment(segment: string): boolean {
+  try {
+    return decodeURIComponent(segment).startsWith(".");
+  } catch {
+    return true;
+  }
 }
 
 function routeNotFoundError(): AppError {

@@ -95,20 +95,14 @@ export function createConfirmationDialog(options) {
       })
     ]
   });
-  const element = createElement("section", {
-    documentRef,
-    className: "admin-dialog",
-    attributes: {
-      "aria-describedby": descriptionId,
-      "aria-hidden": "true",
-      "aria-labelledby": titleId,
-      "aria-modal": "true",
-      "data-open": "false",
-      "data-variant": options?.destructive === true ? "destructive" : "default",
-      role: "dialog"
-    },
-    children: [form]
-  });
+  const element = documentRef.createElement("dialog");
+  element.setAttribute("class", "admin-dialog");
+  element.setAttribute("aria-describedby", descriptionId);
+  element.setAttribute("aria-labelledby", titleId);
+  element.setAttribute("data-open", "false");
+  element.setAttribute("data-variant", options?.destructive === true ? "destructive" : "default");
+  element.setAttribute("role", "dialog");
+  element.append(form);
 
   cancelButton.addEventListener("click", () => {
     if (busy) {
@@ -137,20 +131,26 @@ export function createConfirmationDialog(options) {
   };
 
   function open(nextInvoker) {
-    if (destroyed) {
+    if (destroyed || opened) {
       return;
     }
 
     invoker = nextInvoker ?? null;
     opened = true;
     element.setAttribute("data-open", "true");
-    element.setAttribute("aria-hidden", "false");
     clearError();
     if (typedInput !== null) {
       typedInput.value = "";
     }
     updateConfirmState();
-    documentRef.addEventListener?.("keydown", handleKeydown);
+    element.addEventListener("cancel", handleCancel);
+    element.addEventListener("close", handleNativeClose);
+    element.addEventListener("keydown", handleTabKeydown);
+    if (typeof element.showModal === "function") {
+      element.showModal();
+    } else {
+      element.setAttribute("open", "");
+    }
     focusInitialControl();
   }
 
@@ -159,24 +159,21 @@ export function createConfirmationDialog(options) {
       return;
     }
 
-    opened = false;
-    element.setAttribute("data-open", "false");
-    element.setAttribute("aria-hidden", "true");
-    documentRef.removeEventListener?.("keydown", handleKeydown);
-    clearError();
-    if (typedInput !== null) {
-      typedInput.value = "";
+    if (element.hasAttribute?.("open")) {
+      element.close();
+      if (!opened) {
+        return;
+      }
     }
-    updateConfirmState();
-    if (invoker !== null && typeof invoker.focus === "function") {
-      invoker.focus();
-    }
+    finalizeClose();
   }
 
   function destroy() {
-    destroyed = true;
     close();
-    documentRef.removeEventListener?.("keydown", handleKeydown);
+    destroyed = true;
+    element.removeEventListener?.("cancel", handleCancel);
+    element.removeEventListener?.("close", handleNativeClose);
+    element.removeEventListener?.("keydown", handleTabKeydown);
   }
 
   async function runConfirm(event) {
@@ -239,14 +236,66 @@ export function createConfirmationDialog(options) {
     return confirmationText === null || typedInput?.value === confirmationText;
   }
 
-  function handleKeydown(event) {
+  function handleCancel(event) {
     if (!opened || busy) {
+      event.preventDefault?.();
       return;
     }
-    if (event.key === "Escape") {
+    event.preventDefault?.();
+    close();
+    onCancel();
+  }
+
+  function handleNativeClose() {
+    finalizeClose();
+  }
+
+  function handleTabKeydown(event) {
+    if (!opened || event.key !== "Tab") {
+      return;
+    }
+
+    const controls = getFocusableControls();
+    if (controls.length === 0) {
       event.preventDefault?.();
-      close();
-      onCancel();
+      element.focus?.();
+      return;
+    }
+
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    const active = documentRef.activeElement;
+    if (event.shiftKey === true) {
+      if (active === first || !containsNode(element, active)) {
+        event.preventDefault?.();
+        last.focus?.();
+      }
+      return;
+    }
+
+    if (active === last || !containsNode(element, active)) {
+      event.preventDefault?.();
+      first.focus?.();
+    }
+  }
+
+  function finalizeClose() {
+    if (!opened) {
+      return;
+    }
+
+    opened = false;
+    element.setAttribute("data-open", "false");
+    element.removeEventListener?.("cancel", handleCancel);
+    element.removeEventListener?.("close", handleNativeClose);
+    element.removeEventListener?.("keydown", handleTabKeydown);
+    clearError();
+    if (typedInput !== null) {
+      typedInput.value = "";
+    }
+    updateConfirmState();
+    if (invoker !== null && typeof invoker.focus === "function") {
+      invoker.focus();
     }
   }
 
@@ -256,6 +305,38 @@ export function createConfirmationDialog(options) {
       target.focus();
     }
   }
+
+  function getFocusableControls() {
+    return [
+      ...form.querySelectorAll("input"),
+      ...form.querySelectorAll("button"),
+      ...form.querySelectorAll("select"),
+      ...form.querySelectorAll("textarea"),
+      ...form.querySelectorAll("a")
+    ].filter(isFocusableControl);
+  }
+}
+
+function isFocusableControl(node) {
+  return (
+    node !== null &&
+    node !== undefined &&
+    node.disabled !== true &&
+    node.getAttribute?.("disabled") === null &&
+    node.getAttribute?.("tabindex") !== "-1" &&
+    typeof node.focus === "function"
+  );
+}
+
+function containsNode(root, node) {
+  let current = node ?? null;
+  while (current !== null && current !== undefined) {
+    if (current === root) {
+      return true;
+    }
+    current = current.parentNode;
+  }
+  return false;
 }
 
 function safeMessage(error) {

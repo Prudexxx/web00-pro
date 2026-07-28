@@ -161,6 +161,8 @@ class FakeElement {
     this.files = [];
     this.focused = false;
     this.listeners = new Map();
+    this.closeCalls = 0;
+    this.showModalCalls = 0;
     this.parentNode = null;
     this.tagName = tagName.toLowerCase();
     this.value = "";
@@ -191,12 +193,22 @@ class FakeElement {
     return !event.defaultPrevented;
   }
 
+  close() {
+    this.closeCalls += 1;
+    this.removeAttribute("open");
+    this.dispatchEvent(fakeEvent("close"));
+  }
+
   focus() {
     this.focused = true;
   }
 
   getAttribute(name) {
     return this.attributes.get(name) ?? null;
+  }
+
+  hasAttribute(name) {
+    return this.attributes.has(name);
   }
 
   querySelector(selector) {
@@ -273,6 +285,12 @@ class FakeElement {
     if (name === "value") {
       this.value = String(value);
     }
+  }
+
+  showModal() {
+    this.showModalCalls += 1;
+    this.setAttribute("open", "");
+    this.focus();
   }
 
   get textContent() {

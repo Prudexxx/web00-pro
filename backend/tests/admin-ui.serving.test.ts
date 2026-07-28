@@ -82,6 +82,45 @@ describe("admin UI static serving", () => {
     expect(JSON.stringify(dotfile.body)).not.toContain("DATABASE");
   });
 
+  it("returns controlled 404 responses for malformed or unsafe encoded asset paths", async () => {
+    const app = createApp({
+      adminUiRoutes: createAdminUiRouter({
+        nodeEnv: "test",
+        storagePublicOrigin: "https://storage.example.test"
+      }),
+      env: testEnv
+    });
+    const malformedPaths = [
+      "/admin/assets/%",
+      "/admin/assets/%2",
+      "/admin/assets/%E0%A4%A",
+      "/admin/assets/%ZZ",
+      "/admin/assets/%2e%2e/secret"
+    ];
+
+    for (const requestPath of malformedPaths) {
+      const response = await request(app)
+        .get(requestPath)
+        .expect("Cache-Control", /no-store/)
+        .expect(404);
+
+      expect(response.body.error).toMatchObject({
+        code: "ROUTE_NOT_FOUND",
+        message: "Route not found."
+      });
+      expect(response.text).not.toContain("URIError");
+      expect(response.text).not.toContain("admin-ui-static");
+      expect(response.text).not.toContain("src/modules");
+    }
+
+    await request(app)
+      .get("/admin/assets/admin.css")
+      .expect("Cache-Control", /no-store/)
+      .expect("Content-Type", /text\/css/)
+      .expect(200);
+    await request(app).get("/api/missing-after-malformed-admin-asset").expect(404);
+  });
+
   it("does not expose directory listings or directory redirects", async () => {
     const app = createApp({
       adminUiRoutes: createAdminUiRouter({
