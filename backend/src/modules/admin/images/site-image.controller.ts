@@ -136,9 +136,20 @@ function createContext(request: AuthRequest, response: Response, now: () => Date
   return {
     actor: request.auth!,
     now: now(),
+    renderRequestIdPresent: hasRenderRequestId(request),
     requestId:
       typeof response.locals.requestId === "string" ? response.locals.requestId : "unknown"
   };
+}
+
+function hasRenderRequestId(request: AuthRequest): boolean {
+  const rndrId = request.get("rndr-id");
+  const renderRequestId = request.get("x-render-request-id");
+
+  return (
+    (typeof rndrId === "string" && rndrId.trim().length > 0) ||
+    (typeof renderRequestId === "string" && renderRequestId.trim().length > 0)
+  );
 }
 
 function isReadableEnded(request: NodeJS.ReadableStream): boolean {

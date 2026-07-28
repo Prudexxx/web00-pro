@@ -1,9 +1,18 @@
 import { AppError } from "../../../lib/errors.js";
+import type { AppLogger } from "../../../lib/logger.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import { createPermissionPolicy } from "../rbac.policy.js";
 import type { PermissionPolicy } from "../rbac.types.js";
 import type { StorageCleanupRepository } from "../../storage-cleanup/storage-cleanup.types.js";
 import { buildVariantPath } from "../../images/image-paths.js";
+import {
+  attachPreviewUploadDiagnostic,
+  createPreviewUploadCompletedEvent,
+  createPreviewUploadFailedEvent,
+  createPreviewUploadLogEntry,
+  type PreviewUploadDiagnostic,
+  type PreviewUploadStage
+} from "../../images/preview-upload-observability.js";
 import type {
   AssetUploadCoordinator,
   ImageProcessor,
@@ -50,6 +59,7 @@ export interface SiteImageRepository {
     assetId: string;
     cleanupPaths: string[];
     context: AdminMutationContext;
+    onStage?: (stage: PreviewUploadStage) => void;
     previewImageUrl: string;
     siteId: string;
     uploadReservationIds: string[];
@@ -87,6 +97,12 @@ export interface SiteImageService {
 export interface CreateSiteImageServiceOptions {
   cleanup: StorageCleanupRepository;
   coordinator: AssetUploadCoordinator;
+  diagnostics?: {
+    environment: string;
+    logger: AppLogger;
+    now: () => Date;
+    service: string;
+  };
   imageUrlPolicy: ManagedImageUrlPolicy;
   processor: ImageProcessor;
   repository: SiteImageRepository;
@@ -449,98 +465,167 @@ async function replacePreview(
   options: CreateSiteImageServiceOptions,
   input: SiteImageUploadInput
 ): Promise<PreviewImageResponse> {
-  return options.coordinator.runExclusive(
-    `${input.siteId}:preview:${input.file.assetId}`,
-    async () => {
-      const site = await loadMutationSite(options.repository, input.siteId);
+  let cleanupScheduled = false;
+  let processedWidthCount: number | undefined;
+  let stage: PreviewUploadStage = "REQUEST_ACCEPTED";
+  let uploadedVariantCount = 0;
+  const startedAt = Date.now();
+  const setStage = (nextStage: PreviewUploadStage): void => {
+    stage = nextStage;
+  };
 
-      assertCanMutateSiteImages(input.context.actor, site);
+  try {
+    const result = await options.coordinator.runExclusive(
+      `${input.siteId}:preview:${input.file.assetId}`,
+      async () => {
+        setStage("SITE_LOADED");
+        const site = await loadMutationSite(options.repository, input.siteId);
 
-      const currentPreview = parseCurrentPreview(options.imageUrlPolicy, site);
+        setStage("SITE_STATE_VALIDATED");
+        assertCanMutateSiteImages(input.context.actor, site);
 
-      if (currentPreview?.assetId === input.file.assetId) {
+        const currentPreview = parseCurrentPreview(options.imageUrlPolicy, site);
+
+        if (currentPreview?.assetId === input.file.assetId) {
+          return {
+            previewImage: toPublicPreview(currentPreview, options.imageUrlPolicy),
+            replaced: false,
+            replayed: true
+          };
+        }
+        if (
+          galleryHasAsset(
+            options.imageUrlPolicy,
+            site.galleryImages,
+            input.file.assetId,
+            input.siteId
+          )
+        ) {
+          throw uploadIdConflict();
+        }
+
+        setStage("IMAGE_PROCESS_STARTED");
+        const processed = await options.processor.process({
+          assetId: input.file.assetId,
+          declaredMimeType: input.file.declaredMimeType,
+          onStage: setStage,
+          siteId: input.siteId,
+          slot: "preview",
+          source: input.file.source
+        });
+        processedWidthCount = processed.widths.length;
+
+        setStage("PREUPLOAD_INSPECTION_STARTED");
+        await cleanUnattachedObjectsBeforeUpload(options, {
+          context: input.context,
+          paths: processed.variants.map((variant) => variant.path),
+          siteId: input.siteId
+        });
+        setStage("PREUPLOAD_INSPECTION_COMPLETED");
+
+        setStage("RESERVATIONS_CREATE_STARTED");
+        const reservationRunAfter = addMinutes(input.context.now, 15);
+        const reservations = await options.cleanup.createUploadReservations({
+          entityId: input.siteId,
+          paths: processed.variants.map((variant) => variant.path),
+          runAfter: reservationRunAfter
+        });
+        cleanupScheduled = reservations.length > 0;
+        setStage("RESERVATIONS_CREATED");
+
+        const uploaded = [];
+
+        setStage("STORAGE_UPLOAD_STARTED");
+        for (const variant of processed.variants) {
+          uploaded.push(
+            await options.storage.uploadObject({
+              body: variant.body,
+              cacheControl: "31536000",
+              contentType: variant.contentType,
+              path: variant.path,
+              upsert: false
+            })
+          );
+          uploadedVariantCount = uploaded.length;
+          setStage(
+            variant.format === "webp"
+              ? "STORAGE_UPLOAD_WEBP_COMPLETED"
+              : "STORAGE_UPLOAD_AVIF_COMPLETED"
+          );
+        }
+        setStage("STORAGE_UPLOAD_COMPLETED");
+
+        setStage("PREVIEW_URL_SELECTION_STARTED");
+        const largestWidth = Math.max(...processed.widths);
+        const previewImageUrl = uploaded.find(
+          (upload) => upload.path.endsWith(`/${largestWidth}.webp`)
+        )?.publicUrl;
+
+        if (previewImageUrl === undefined) {
+          const diagnostic: PreviewUploadDiagnostic = {
+            internalCode: "PREVIEW_CANONICAL_WEBP_NOT_FOUND",
+            largestWebpFound: false,
+            uploadedVariantCount
+          };
+
+          if (processedWidthCount !== undefined) {
+            diagnostic.processedWidthCount = processedWidthCount;
+          }
+
+          throw attachPreviewUploadDiagnostic(
+            new AppError({
+              code: "INTERNAL_ERROR",
+              message: "Internal server error.",
+              statusCode: 500
+            }),
+            diagnostic
+          );
+        }
+        setStage("PREVIEW_URL_SELECTED");
+
+        const updated = await options.repository.replacePreview({
+          assetId: input.file.assetId,
+          cleanupPaths:
+            currentPreview === null
+              ? []
+              : buildCleanupPaths(currentPreview.storagePath, currentPreview.widths),
+          context: input.context,
+          onStage: setStage,
+          previewImageUrl,
+          siteId: input.siteId,
+          uploadReservationIds: reservations.map((reservation) => reservation.id)
+        });
+        const preview = parseCurrentPreview(options.imageUrlPolicy, updated);
+
+        setStage("REQUEST_COMPLETED");
+
         return {
-          previewImage: toPublicPreview(currentPreview, options.imageUrlPolicy),
-          replaced: false,
-          replayed: true
+          previewImage: preview === null ? null : toPublicPreview(preview, options.imageUrlPolicy),
+          replaced: currentPreview !== null,
+          replayed: false
         };
       }
-      if (
-        galleryHasAsset(
-          options.imageUrlPolicy,
-          site.galleryImages,
-          input.file.assetId,
-          input.siteId
-        )
-      ) {
-        throw uploadIdConflict();
-      }
+    );
 
-      const processed = await options.processor.process({
-        assetId: input.file.assetId,
-        declaredMimeType: input.file.declaredMimeType,
-        siteId: input.siteId,
-        slot: "preview",
-        source: input.file.source
-      });
-      await cleanUnattachedObjectsBeforeUpload(options, {
-        context: input.context,
-        paths: processed.variants.map((variant) => variant.path),
-        siteId: input.siteId
-      });
-      const reservationRunAfter = addMinutes(input.context.now, 15);
-      const reservations = await options.cleanup.createUploadReservations({
-        entityId: input.siteId,
-        paths: processed.variants.map((variant) => variant.path),
-        runAfter: reservationRunAfter
-      });
-      const uploaded = [];
+    logPreviewUploadCompleted(options, {
+      elapsedMs: Date.now() - startedAt,
+      requestId: input.context.requestId,
+      variantCount: uploadedVariantCount
+    });
 
-      for (const variant of processed.variants) {
-        uploaded.push(
-          await options.storage.uploadObject({
-            body: variant.body,
-            cacheControl: "31536000",
-            contentType: variant.contentType,
-            path: variant.path,
-            upsert: false
-          })
-        );
-      }
+    return result;
+  } catch (error) {
+    logPreviewUploadFailed(options, {
+      cleanupScheduled,
+      elapsedMs: Date.now() - startedAt,
+      error,
+      renderRequestIdPresent: input.context.renderRequestIdPresent === true,
+      requestId: input.context.requestId,
+      stage
+    });
 
-      const largestWidth = Math.max(...processed.widths);
-      const previewImageUrl = uploaded.find(
-        (upload) => upload.path.endsWith(`/${largestWidth}.webp`)
-      )?.publicUrl;
-
-      if (previewImageUrl === undefined) {
-        throw new AppError({
-          code: "INTERNAL_ERROR",
-          message: "Internal server error.",
-          statusCode: 500
-        });
-      }
-
-      const updated = await options.repository.replacePreview({
-        assetId: input.file.assetId,
-        cleanupPaths:
-          currentPreview === null
-            ? []
-            : buildCleanupPaths(currentPreview.storagePath, currentPreview.widths),
-        context: input.context,
-        previewImageUrl,
-        siteId: input.siteId,
-        uploadReservationIds: reservations.map((reservation) => reservation.id)
-      });
-      const preview = parseCurrentPreview(options.imageUrlPolicy, updated);
-
-      return {
-        previewImage: preview === null ? null : toPublicPreview(preview, options.imageUrlPolicy),
-        replaced: currentPreview !== null,
-        replayed: false
-      };
-    }
-  );
+    throw error;
+  }
 }
 
 async function deletePreview(
@@ -916,6 +1001,63 @@ function toGalleryBatchFailure(
     index: file.index,
     message: error instanceof AppError ? error.message : "Internal server error."
   };
+}
+
+function logPreviewUploadFailed(
+  options: CreateSiteImageServiceOptions,
+  input: {
+    cleanupScheduled: boolean;
+    elapsedMs: number;
+    error: unknown;
+    renderRequestIdPresent: boolean;
+    requestId: string;
+    stage: PreviewUploadStage;
+  }
+): void {
+  if (options.diagnostics === undefined) {
+    return;
+  }
+
+  try {
+    options.diagnostics.logger.log(
+      createPreviewUploadLogEntry({
+        environment: options.diagnostics.environment,
+        event: createPreviewUploadFailedEvent(input),
+        level: "error",
+        service: options.diagnostics.service,
+        time: options.diagnostics.now()
+      })
+    );
+  } catch {
+    return;
+  }
+}
+
+function logPreviewUploadCompleted(
+  options: CreateSiteImageServiceOptions,
+  input: {
+    elapsedMs: number;
+    requestId: string;
+    variantCount: number;
+  }
+): void {
+  if (options.diagnostics === undefined || input.variantCount === 0) {
+    return;
+  }
+
+  try {
+    options.diagnostics.logger.log(
+      createPreviewUploadLogEntry({
+        environment: options.diagnostics.environment,
+        event: createPreviewUploadCompletedEvent(input),
+        level: "info",
+        service: options.diagnostics.service,
+        time: options.diagnostics.now()
+      })
+    );
+  } catch {
+    return;
+  }
 }
 
 async function loadMutationSite(

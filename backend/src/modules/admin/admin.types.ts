@@ -8,6 +8,7 @@ export interface AdminRequest extends Request {
 export interface AdminMutationContext {
   actor: AuthenticatedPrincipal;
   now: Date;
+  renderRequestIdPresent?: boolean;
   requestId: string;
 }
 

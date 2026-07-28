@@ -1,6 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import type { StorageConfig } from "../../config/storage-env.js";
 import { createImageAppError } from "./image.errors.js";
+import {
+  attachPreviewUploadDiagnostic,
+  createPreviewStorageDiagnostic,
+  type PreviewStorageDiagnosticCode
+} from "./preview-upload-observability.js";
 import type {
   ImageStorage,
   StorageBucketConfig,
@@ -63,7 +68,7 @@ export function createSupabaseImageStorage(
       const createBucket = client.storage.createBucket;
 
       if (createBucket === undefined) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
       const result = await createBucket(input.id, {
@@ -73,7 +78,7 @@ export function createSupabaseImageStorage(
       });
 
       if (result.error !== null) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION", result.error);
       }
 
       return { created: true };
@@ -89,7 +94,7 @@ export function createSupabaseImageStorage(
     },
     async inspectBucket(bucket) {
       if (bucket !== config.bucket) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
       const getBucket = client.storage.getBucket;
@@ -121,16 +126,18 @@ export function createSupabaseImageStorage(
       const list = client.storage.from(config.bucket).list;
 
       if (list === undefined) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
       const result = await list(prefix);
 
       if (result.error !== null || result.data === null) {
-        throw createImageAppError(
+        throw storageOperationFailed(
           "STORAGE_UNAVAILABLE",
           "Storage is unavailable.",
-          503
+          503,
+          "STORAGE_INSPECT",
+          result.error
         );
       }
 
@@ -158,16 +165,18 @@ export function createSupabaseImageStorage(
       const remove = client.storage.from(config.bucket).remove;
 
       if (remove === undefined) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
       const result = await remove([...paths]);
 
       if (result.error !== null) {
-        throw createImageAppError(
+        throw storageOperationFailed(
           "STORAGE_UNAVAILABLE",
           "Storage is unavailable.",
-          503
+          503,
+          "STORAGE_REMOVE",
+          result.error
         );
       }
 
@@ -178,7 +187,7 @@ export function createSupabaseImageStorage(
       const upload = client.storage.from(config.bucket).upload;
 
       if (upload === undefined) {
-        throw storageConfigurationInvalid();
+        throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
       }
 
       const result = await upload(input.path, input.body, {
@@ -188,10 +197,12 @@ export function createSupabaseImageStorage(
       });
 
       if (result.error !== null) {
-        throw createImageAppError(
+        throw storageOperationFailed(
           "STORAGE_WRITE_FAILED",
           "Storage write failed.",
-          503
+          503,
+          "STORAGE_UPLOAD",
+          result.error
         );
       }
 
@@ -211,13 +222,13 @@ function assertUploadInput(input: UploadImageObjectInput): void {
     input.upsert !== false ||
     (input.contentType !== "image/webp" && input.contentType !== "image/avif")
   ) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 }
 
 function assertVariantPath(path: string): void {
   if (!variantPathPattern.test(path)) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 }
 
@@ -233,12 +244,12 @@ function commonCanonicalPrefix(paths: readonly string[]): string {
       continue;
     }
     if (prefix !== nextPrefix) {
-      throw storageConfigurationInvalid();
+      throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
     }
   }
 
   if (prefix === undefined) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 
   return prefix;
@@ -258,7 +269,7 @@ function assertSafePublicUrl(
   try {
     url = new URL(publicUrl);
   } catch {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_PUBLIC_URL");
   }
 
   const expected = new URL(deterministicPublicUrl(config, path));
@@ -269,7 +280,7 @@ function assertSafePublicUrl(
     url.search !== "" ||
     url.hash !== ""
   ) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_PUBLIC_URL");
   }
 }
 
@@ -284,7 +295,7 @@ function assertBucketConfig(
     input.allowedMimeTypes[0] !== "image/webp" ||
     input.allowedMimeTypes[1] !== "image/avif"
   ) {
-    throw storageConfigurationInvalid();
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
   }
 }
 
@@ -308,10 +319,29 @@ function isCompatibleBucket(data: unknown): boolean {
   );
 }
 
-function storageConfigurationInvalid(): ReturnType<typeof createImageAppError> {
-  return createImageAppError(
-    "STORAGE_CONFIGURATION_INVALID",
-    "Storage configuration is invalid.",
-    503
+function storageOperationFailed(
+  code: "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED",
+  message: string,
+  statusCode: number,
+  operation: PreviewStorageDiagnosticCode,
+  providerError?: unknown
+): ReturnType<typeof createImageAppError> {
+  return attachPreviewUploadDiagnostic(
+    createImageAppError(code, message, statusCode),
+    createPreviewStorageDiagnostic(operation, providerError)
+  );
+}
+
+function storageConfigurationInvalid(
+  operation: PreviewStorageDiagnosticCode,
+  providerError?: unknown
+): ReturnType<typeof createImageAppError> {
+  return attachPreviewUploadDiagnostic(
+    createImageAppError(
+      "STORAGE_CONFIGURATION_INVALID",
+      "Storage configuration is invalid.",
+      503
+    ),
+    createPreviewStorageDiagnostic(operation, providerError)
   );
 }

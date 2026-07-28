@@ -148,6 +148,12 @@ export function startServer(options: StartServerOptions): StartedServer {
     imageService: createSiteImageService({
       cleanup: storageCleanupRepository,
       coordinator: createAssetUploadCoordinator(),
+      diagnostics: {
+        environment: options.env.NODE_ENV,
+        logger,
+        now: options.now ?? (() => new Date()),
+        service: options.env.SERVICE_NAME
+      },
       imageUrlPolicy,
       processor: createSharpImageProcessor(),
       repository: createPrismaSiteImageRepository({ prisma }),
