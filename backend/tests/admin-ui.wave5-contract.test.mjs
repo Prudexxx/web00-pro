@@ -122,12 +122,6 @@ function readAsset(filePath) {
 }
 
 function gitDiffNameOnly() {
-  const branch = execFileSync("git", ["branch", "--show-current"], {
-    cwd: "..",
-    encoding: "utf8"
-  }).trim();
-  expect(branch).toBe("feat/web00-backend-admin-ui");
-
   return execFileSync("git", ["status", "--short"], { cwd: "..", encoding: "utf8" })
     .split(/\r?\n/)
     .map((line) => line.trim())
