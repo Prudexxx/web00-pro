@@ -130,7 +130,7 @@ function createAdminFetch() {
       }));
     }
     if (requestPath === "/api/auth/me") {
-      return Promise.resolve(jsonResponse(200, { data: adminUser() }));
+      return Promise.resolve(jsonResponse(200, { data: { user: adminUser() } }));
     }
     if (requestPath === "/api/auth/logout") {
       return Promise.resolve(jsonResponse(200, { data: {} }));
@@ -157,7 +157,7 @@ function createEditorLoginFetch() {
       }));
     }
     if (requestPath === "/api/auth/me") {
-      return Promise.resolve(jsonResponse(200, { data: editorUser() }));
+      return Promise.resolve(jsonResponse(200, { data: { user: editorUser() } }));
     }
 
     return adminApiResponse(requestPath, options);

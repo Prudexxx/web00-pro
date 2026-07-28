@@ -1,9 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_STATES } from "../src/admin/assets/auth-store.js";
 import { bootstrapAdminApp } from "../src/admin/assets/main.js";
 import { createLoginView } from "../src/admin/assets/screens/login.js";
 import { createAuthenticatedShell } from "../src/admin/assets/screens/shell.js";
+
+const restoreGlobals = [];
+
+afterEach(() => {
+  while (restoreGlobals.length > 0) {
+    restoreGlobals.pop()();
+  }
+});
 
 describe("admin auth shell", () => {
   it("bootstraps with refresh then me and renders the authenticated shell", async () => {
@@ -23,7 +31,9 @@ describe("admin auth shell", () => {
       if (requestPath === "/api/auth/me") {
         expect(readHeader(options, "Authorization")).toBe("Bearer bootstrap-token");
         return Promise.resolve(jsonResponse(200, {
-          data: safeUser("admin")
+          data: {
+            user: safeUser("admin")
+          }
         }));
       }
 
@@ -68,6 +78,11 @@ describe("admin auth shell", () => {
   it("submits login credentials, clears the password field, calls me, and stores token only in memory", async () => {
     const documentRef = createFakeDocument();
     const root = documentRef.createElement("main");
+    const localStorage = installStorageTrap("localStorage");
+    const sessionStorage = installStorageTrap("sessionStorage");
+    const consoleLog = installConsoleTrap("log");
+    const consoleWarn = installConsoleTrap("warn");
+    const consoleError = installConsoleTrap("error");
     const fetchImpl = vi.fn((requestPath, options) => {
       if (requestPath === "/api/auth/refresh") {
         return Promise.resolve(jsonResponse(401, {
@@ -95,7 +110,9 @@ describe("admin auth shell", () => {
       if (requestPath === "/api/auth/me") {
         expect(readHeader(options, "Authorization")).toBe("Bearer login-token");
         return Promise.resolve(jsonResponse(200, {
-          data: safeUser("editor")
+          data: {
+            user: safeUser("editor")
+          }
         }));
       }
 
@@ -119,6 +136,12 @@ describe("admin auth shell", () => {
     ]);
     expect(app.authStore.getAccessToken()).toBe("login-token");
     expect(JSON.stringify(app.authStore.getSnapshot())).not.toContain("login-token");
+    expect(JSON.stringify(app.authStore.getSnapshot())).not.toContain("secret-password");
+    expect(countStorageCalls(localStorage)).toBe(0);
+    expect(countStorageCalls(sessionStorage)).toBe(0);
+    expect(consoleLog).not.toHaveBeenCalled();
+    expect(consoleWarn).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalled();
     expect(root.textContent).toContain("editor@example.test");
     expect(root.textContent).not.toContain("secret-password");
   });
@@ -176,7 +199,9 @@ describe("admin auth shell", () => {
       }
       if (requestPath === "/api/auth/me") {
         return Promise.resolve(jsonResponse(200, {
-          data: safeUser("admin")
+          data: {
+            user: safeUser("admin")
+          }
         }));
       }
       if (requestPath === "/api/auth/logout") {
@@ -413,6 +438,49 @@ function readHeader(options, name) {
   }
 
   return headers?.[name] ?? headers?.[name.toLowerCase()];
+}
+
+function installStorageTrap(name) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+  const storage = {
+    clear: vi.fn(),
+    getItem: vi.fn(),
+    removeItem: vi.fn(),
+    setItem: vi.fn()
+  };
+
+  Object.defineProperty(globalThis, name, {
+    configurable: true,
+    value: storage
+  });
+
+  restoreGlobals.push(() => {
+    if (descriptor === undefined) {
+      delete globalThis[name];
+      return;
+    }
+
+    Object.defineProperty(globalThis, name, descriptor);
+  });
+
+  return storage;
+}
+
+function installConsoleTrap(method) {
+  const spy = vi.spyOn(console, method).mockImplementation(() => {});
+  restoreGlobals.push(() => {
+    spy.mockRestore();
+  });
+  return spy;
+}
+
+function countStorageCalls(storage) {
+  return [
+    storage.clear,
+    storage.getItem,
+    storage.removeItem,
+    storage.setItem
+  ].reduce((total, method) => total + method.mock.calls.length, 0);
 }
 
 function safeUser(role) {

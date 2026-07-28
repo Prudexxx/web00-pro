@@ -110,7 +110,7 @@ export function createApiClient(options) {
     try {
       await refreshAccess({ signal });
       const me = await requestJson("/api/auth/me", { method: "GET", signal });
-      const user = readSafeUser(readData(me));
+      const user = readMeUser(me);
 
       authStore.setAuthenticated({
         accessToken: authStore.getAccessToken(),
@@ -141,7 +141,7 @@ export function createApiClient(options) {
     });
 
     const me = await requestJson("/api/auth/me", { method: "GET", signal });
-    const user = readSafeUser(readData(me));
+    const user = readMeUser(me);
 
     authStore.setAuthenticated({
       accessToken: nextAccessToken,
@@ -313,6 +313,26 @@ function readData(body) {
   }
 
   return body.data;
+}
+
+function readMeUser(body) {
+  const data = readData(body);
+
+  if (!isRecord(data.user)) {
+    throw invalidResponse();
+  }
+
+  return readSafeUser(data.user);
+}
+
+function invalidResponse() {
+  return new AdminApiError({
+    code: "INVALID_RESPONSE",
+    details: [],
+    message: "Invalid server response.",
+    requestId: null,
+    status: 0
+  });
 }
 
 function readAccessToken(data) {
