@@ -6,6 +6,8 @@ import {
   normalizeSitesListFilters
 } from "../src/admin/assets/screens/sites-list.js";
 
+const CLEANUP_SITE_SLUG = "codex-acceptance-site-20260728-1836";
+
 describe("admin sites list screen", () => {
   it("builds only approved query keys and resets page when filters change", () => {
     expect(buildSitesListPath({})).toBe("/api/admin/sites");
@@ -151,6 +153,79 @@ describe("admin sites list screen", () => {
     expect(screen.element.textContent).toContain("Network");
     expect(screen.element.textContent).toContain("req_list");
   });
+
+  it("submits browser NodeList-backed filters and replaces stale rows with deleted results", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        requests.push(requestPath);
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath.includes(`search=${CLEANUP_SITE_SLUG}`) && requestPath.includes("deleted=only")) {
+          return Promise.resolve({
+            data: [
+              siteFixture({
+                deletedAt: "2026-07-28T18:36:00.000Z",
+                slug: CLEANUP_SITE_SLUG,
+                title: "Temporary deleted cleanup site"
+              })
+            ],
+            meta: metaFixture(1)
+          });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: [siteFixture({ slug: "drova", title: "Original active draft row" })],
+            meta: metaFixture(1)
+          });
+        }
+
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSitesListScreen({
+      apiClient,
+      documentRef,
+      onCreate: vi.fn(),
+      onEdit: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    expect(screen.element.textContent).toContain("Original active draft row");
+
+    const namedFields = screen.element.querySelector("form").querySelectorAll("[name]");
+    expect(namedFields).toHaveLength(10);
+    expect(namedFields.item(0)).toBe(namedFields[0]);
+    expect([...namedFields]).toHaveLength(10);
+    expect(namedFields.map).toBeUndefined();
+
+    screen.element.querySelector('[name="search"]').value = CLEANUP_SITE_SLUG;
+    screen.element.querySelector('[name="deleted"]').value = "only";
+    screen.element.querySelector('[name="page"]').value = "7";
+
+    expect(() => {
+      screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    }).not.toThrow();
+
+    await waitFor(() => {
+      expect(requests.some((requestPath) => requestPath.includes(`search=${CLEANUP_SITE_SLUG}`))).toBe(true);
+      expect(screen.element.textContent).toContain("Temporary deleted cleanup site");
+    });
+    const filteredRequest = requests.find((requestPath) => requestPath.includes(`search=${CLEANUP_SITE_SLUG}`));
+
+    expect(filteredRequest).toContain(`search=${CLEANUP_SITE_SLUG}`);
+    expect(filteredRequest).toContain("deleted=only");
+    expect(filteredRequest).toContain("page=1");
+    expect(screen.element.textContent).toContain(CLEANUP_SITE_SLUG);
+    expect(screen.element.textContent).not.toContain("Original active draft row");
+    expect(screen.element.textContent).not.toContain("drova");
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "permanent-delete")).toHaveLength(1);
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "soft-delete")).toHaveLength(0);
+  });
 });
 
 function categoryFixture() {
@@ -254,7 +329,7 @@ class FakeElement {
         matches.push(node);
       }
     });
-    return matches;
+    return new FakeNodeList(matches);
   }
 
   matches(selector) {
@@ -295,11 +370,61 @@ class FakeElement {
   }
 }
 
+class FakeNodeList {
+  constructor(nodes) {
+    this.length = nodes.length;
+    nodes.forEach((node, index) => {
+      this[index] = node;
+    });
+  }
+
+  item(index) {
+    return this[index] ?? null;
+  }
+
+  values() {
+    return Array.prototype.values.call(this);
+  }
+
+  [Symbol.iterator]() {
+    return this.values();
+  }
+}
+
 function walk(node, visit) {
   visit(node);
   for (const child of node.children ?? []) {
     walk(child, visit);
   }
+}
+
+function elementsWithAttribute(root, name, value) {
+  const matches = [];
+
+  walk(root, (node) => {
+    if (node instanceof FakeElement && node.getAttribute(name) === value) {
+      matches.push(node);
+    }
+  });
+
+  return matches;
+}
+
+async function waitFor(assertion, timeoutMs = 1000) {
+  const startedAt = Date.now();
+  let lastError;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  throw lastError ?? new Error("Timed out waiting for assertion.");
 }
 
 function fakeEvent(type) {

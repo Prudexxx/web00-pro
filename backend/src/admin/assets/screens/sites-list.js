@@ -748,7 +748,10 @@ function createSelect(documentRef, name, options) {
 
 function readFilterState(form) {
   return Object.fromEntries(
-    form.querySelectorAll("[name]").map((field) => [field.name, field.value])
+    Array.from(
+      form.querySelectorAll("[name]"),
+      (field) => [field.name, field.value]
+    )
   );
 }
 
