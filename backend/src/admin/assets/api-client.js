@@ -87,12 +87,17 @@ export function createApiClient(options) {
     }
   }
 
-  async function requestMultipart(path, requestOptions) {
+  async function requestMultipart(path, requestOptions = {}, replayed = false) {
     assertApiPath(path);
 
     try {
       const response = await fetchImpl(path, toMultipartFetchOptions(requestOptions, authStore));
       const body = await readResponseBody(response);
+
+      if (isAuthExpiredResponse(response, body) && requestOptions.auth !== false && !replayed) {
+        await refreshAccess({ signal: requestOptions.signal });
+        return requestMultipart(path, requestOptions, true);
+      }
 
       if (!response.ok) {
         throw parseApiError(response, body);
@@ -261,14 +266,17 @@ function toMultipartFetchOptions(options = {}, authStore) {
     Accept: JSON_CONTENT_TYPE,
     ...headersToObject(options.headers)
   };
-  const accessToken = authStore.getAccessToken();
 
-  if (accessToken !== null) {
-    headers.Authorization = `Bearer ${accessToken}`;
+  if (options.auth !== false) {
+    const accessToken = authStore.getAccessToken();
+    if (accessToken !== null) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    }
   }
 
   return removeUndefinedValues({
     body: options.body,
+    credentials: options.credentials,
     headers,
     method: options.method ?? "POST",
     signal: options.signal

@@ -154,10 +154,20 @@ describe("admin API client", () => {
     expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/admin/sites")).toHaveLength(3);
   });
 
-  it("does not replay multipart requests and lets the browser set multipart content type", async () => {
+  it("refreshes auth once and replays multipart requests without changing the FormData body", async () => {
     const authStore = createAuthStore();
     const formData = new FormData();
-    const fetchImpl = vi.fn().mockResolvedValue(authExpiredResponse("req_upload"));
+    const signal = new AbortController().signal;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(authExpiredResponse("req_upload_expired"))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        data: {
+          accessToken: "memory-token-upload-new",
+          user: safeUser("admin")
+        }
+      }))
+      .mockResolvedValueOnce(jsonResponse(201, { data: { uploaded: true } }));
     const api = createApiClient({ authStore, fetchImpl });
 
     formData.append("clientFileId", "00000000-0000-4000-8000-000000000001");
@@ -169,17 +179,93 @@ describe("admin API client", () => {
     await expect(
       api.requestMultipart("/api/admin/sites/00000000-0000-4000-8000-000000000002/images/preview", {
         body: formData,
-        method: "PUT"
+        method: "PUT",
+        signal
       })
-    ).rejects.toMatchObject({
-      code: "UNAUTHORIZED",
-      requestId: "req_upload"
-    });
+    ).resolves.toEqual({ data: { uploaded: true } });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/admin/sites/00000000-0000-4000-8000-000000000002/images/preview",
+      "/api/auth/refresh",
+      "/api/admin/sites/00000000-0000-4000-8000-000000000002/images/preview"
+    ]);
     expect(readHeader(fetchImpl.mock.calls[0][1], "Authorization")).toBe(
       "Bearer memory-token-upload"
     );
+    expect(readHeader(fetchImpl.mock.calls[2][1], "Authorization")).toBe(
+      "Bearer memory-token-upload-new"
+    );
+    expect(readHeader(fetchImpl.mock.calls[0][1], "Content-Type")).toBeUndefined();
+    expect(readHeader(fetchImpl.mock.calls[2][1], "Content-Type")).toBeUndefined();
+    expect(fetchImpl.mock.calls[0][1].body).toBe(formData);
+    expect(fetchImpl.mock.calls[2][1].body).toBe(formData);
+    expect(fetchImpl.mock.calls[0][1].method).toBe("PUT");
+    expect(fetchImpl.mock.calls[2][1].method).toBe("PUT");
+    expect(fetchImpl.mock.calls[0][1].signal).toBe(signal);
+    expect(fetchImpl.mock.calls[2][1].signal).toBe(signal);
+    expect(authStore.getAccessToken()).toBe("memory-token-upload-new");
+  });
+
+  it("does not loop when a replayed multipart request is still unauthorized", async () => {
+    const authStore = createAuthStore();
+    const formData = new FormData();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(authExpiredResponse("req_upload_first"))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        data: {
+          accessToken: "memory-token-upload-new",
+          user: safeUser("admin")
+        }
+      }))
+      .mockResolvedValueOnce(authExpiredResponse("req_upload_second"));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    formData.append("clientFileId", "00000000-0000-4000-8000-000000000001");
+    authStore.setAuthenticated({
+      accessToken: "memory-token-upload-old",
+      user: safeUser("admin")
+    });
+
+    await expect(
+      api.requestMultipart("/api/admin/sites/00000000-0000-4000-8000-000000000002/images/gallery", {
+        body: formData
+      })
+    ).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+      requestId: "req_upload_second"
+    });
+
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/auth/refresh")).toHaveLength(1);
+    expect(fetchImpl.mock.calls.filter(([url]) => url.includes("/images/gallery"))).toHaveLength(2);
+  });
+
+  it("does not refresh or attach Authorization for auth-disabled multipart requests", async () => {
+    const authStore = createAuthStore();
+    const formData = new FormData();
+    const fetchImpl = vi.fn().mockResolvedValue(authExpiredResponse("req_upload_public"));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    authStore.setAuthenticated({
+      accessToken: "memory-token-upload",
+      user: safeUser("admin")
+    });
+
+    await expect(
+      api.requestMultipart("/api/admin/sites/00000000-0000-4000-8000-000000000002/images/gallery-batch", {
+        auth: false,
+        body: formData
+      })
+    ).rejects.toMatchObject({
+      code: "UNAUTHORIZED",
+      requestId: "req_upload_public"
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      "/api/admin/sites/00000000-0000-4000-8000-000000000002/images/gallery-batch"
+    );
+    expect(readHeader(fetchImpl.mock.calls[0][1], "Authorization")).toBeUndefined();
     expect(readHeader(fetchImpl.mock.calls[0][1], "Content-Type")).toBeUndefined();
     expect(fetchImpl.mock.calls[0][1].body).toBe(formData);
   });
