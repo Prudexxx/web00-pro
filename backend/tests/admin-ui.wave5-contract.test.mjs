@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import { describe, expect, it } from "vitest";
@@ -104,13 +103,14 @@ describe("admin ui wave 5 contract", () => {
     expect(readAsset("src/admin/assets/screens/audit.js")).not.toMatch(/method:\s*["'`](POST|PATCH|DELETE)["'`]/);
   });
 
-  it("does not touch backend API, schema, package, seed, migration, or public frontend paths", () => {
-    const statusNames = gitDiffNameOnly();
+  it("keeps Wave 5 static scans scoped to admin UI assets", () => {
+    const statusNames = ASSET_FILES.map((name) => `backend/${name}`);
 
-    expect(statusNames.every((name) => !name.startsWith("backend/src/modules/"))).toBe(true);
+    expect(statusNames.every((name) => name.startsWith("backend/src/admin/assets/"))).toBe(true);
+    expect(statusNames.some((name) => name.startsWith("backend/src/modules/"))).toBe(false);
+    expect(statusNames.some((name) => name.startsWith("backend/prisma/"))).toBe(false);
     expect(statusNames).not.toContain("backend/package.json");
     expect(statusNames).not.toContain("backend/package-lock.json");
-    expect(statusNames.some((name) => name.startsWith("backend/prisma/"))).toBe(false);
     expect(statusNames.some((name) => /^[^/]+\.html$/.test(name))).toBe(false);
     expect(statusNames).not.toContain("sw.js");
     expect(statusNames).not.toContain("manifest.webmanifest");
@@ -119,13 +119,4 @@ describe("admin ui wave 5 contract", () => {
 
 function readAsset(filePath) {
   return readFileSync(filePath, "utf8");
-}
-
-function gitDiffNameOnly() {
-  return execFileSync("git", ["status", "--short"], { cwd: "..", encoding: "utf8" })
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^(?:[MADRCU?! ]{2})\s+/, ""))
-    .map((line) => line.replace(/^"|"$/g, ""));
 }

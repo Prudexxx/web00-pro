@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
@@ -16,6 +17,22 @@ async function loadCatalog(options = {}) {
   await loadClassicScript("assets/js/catalog-api.js", browser);
   return browser.window.WEB00_CATALOG;
 }
+
+async function loadCatalogWithRepoStaticData(options = {}) {
+  const browser = createFakeBrowser(options);
+  browser.window.WEB00_TEST_MODE = true;
+  await loadClassicScript("assets/js/data.js", browser);
+  await loadClassicScript("assets/js/runtime-config.js", browser);
+  await loadClassicScript("assets/js/catalog-api.js", browser);
+  return browser.window.WEB00_CATALOG;
+}
+
+const unsafeDrovaDomains = [
+  ["дрова", "сухие.рф"].join(""),
+  ["www", ["дрова", "сухие.рф"].join("")].join("."),
+  ["xn--80adfgo7anlsu", "xn--p1ai"].join("."),
+  ["www", "xn--80adfgo7anlsu", "xn--p1ai"].join("."),
+];
 
 test("normalizes API site and keeps dangerous text as plain data", async () => {
   const catalog = await loadCatalog();
@@ -92,6 +109,44 @@ test("normalizes static catalog, excludes inactive records, and supports aliases
   assert.equal(result.items[0].previewImage.url, "assets/img/previews/furniture.png");
   assert.equal(catalog.findCatalogItem(result.items, "mebel"), result.items[0]);
   assert.equal(catalog.findCatalogItem(result.items, "Old Furniture"), result.items[0]);
+});
+
+test("repo static fallback keeps drova as a safe details-only catalog card", async () => {
+  const catalog = await loadCatalogWithRepoStaticData({ page: "solutions" });
+  const result = catalog.getStaticCatalog();
+  const drovaItems = result.items.filter((item) => item.slug === "drova");
+
+  assert.equal(result.items.length, 15);
+  assert.equal(result.items.some((item) => item.slug === "drova-test-copy-20260729"), false);
+  assert.equal(drovaItems.length, 1);
+
+  const [drova] = drovaItems;
+
+  assert.equal(drova.title, "Доставка и продажа дров");
+  assert.equal(drova.categorySlug, "delivery");
+  assert.equal(drova.demoMode, "none");
+  assert.equal(drova.demoUrl, "");
+  assert.equal(drova.siteUrl, "");
+  assert.equal(drova.previewImage.url, "assets/img/previews/drova-home.png");
+  assert.deepEqual(plain(drova.features), ["Ассортимент", "Зоны доставки", "Прайс", "Быстрый заказ"]);
+  assert.equal(drova.shortDescription, "Сайт для локальной продажи и доставки дров с ассортиментом, условиями и быстрым заказом.");
+  assert.equal(drova.galleryImages.length, 4);
+  assert.deepEqual(plain(drova.galleryImages.map((image) => image.url)), [
+    "assets/img/solution-gallery/drova-01.png",
+    "assets/img/solution-gallery/drova-02.png",
+    "assets/img/solution-gallery/drova-03.png",
+    "assets/img/solution-gallery/drova-04.png",
+  ]);
+
+  const drovaPayload = JSON.stringify(drova).toLowerCase();
+  for (const unsafeDomain of unsafeDrovaDomains) {
+    assert.equal(drovaPayload.includes(unsafeDomain.toLowerCase()), false, unsafeDomain);
+  }
+
+  const main = await readFile("assets/js/main.js", "utf8");
+  assert.match(main, /const hasDemo = Boolean\(solutionDemoUrl\(solution\)\);/);
+  assert.match(main, /data-card-action="\$\{hasDemo \? "demo" : "details"\}"/);
+  assert.match(main, /\$\{hasDemo \? "Смотреть демо" : "Подробнее"\}/);
 });
 
 test("rejects unsafe public URLs", async () => {

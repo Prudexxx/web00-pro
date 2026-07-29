@@ -2637,7 +2637,7 @@ Preview-файлы добавлены как собственные SVG-маке
    Каталог мебели, Магазин одежды, Сайт для клининга, Сайт для кровли, Сайт для массажа, Сайт для услуг, Сайт для доставки, Telegram-бот для заявок.
 
 2. **DemoUrl добавлены**
-   `MEBELPlanet`, `OdegdaPlanet`, `Klining`, `Krovla`, `m`, `MugNaChas`, `дровасухие.рф`, Telegram-бот `GarantiyWeb00bot`.
+   `MEBELPlanet`, `OdegdaPlanet`, `Klining`, `Krovla`, `m`, `MugNaChas`, Telegram-бот `GarantiyWeb00bot`; устаревший внешний demo-домен для дров удалён из активных источников.
 
 3. **PreviewImage добавлены**
    Созданы 8 lightweight SVG-preview в [assets/img/previews](D:/Backend/Сайт/assets/img/previews): нишевые мини-экраны в едином premium dark-tech стиле.
@@ -6307,7 +6307,7 @@ https://prudexxx.github.io/Dom/
 https://prudexxx.github.io/m/
 
 Доставка и продажа дров:
-https://www.xn--80adfgo7anlsu.xn--p1ai/
+фиксированного внешнего demoUrl нет; карточка использует безопасное действие подробностей.
 
 Сайт под заказ:
 нет фиксированного demoUrl.
@@ -6567,7 +6567,7 @@ D:\Backend\Сайт\solutions.html
 - Услуга клининга → открывается https://prudexxx.github.io/Klining/ внутри viewer;
 - Услуга кровли → открывается https://prudexxx.github.io/Krovla/ внутри viewer;
 - Массаж → открывается https://prudexxx.github.io/m/ внутри viewer;
-- Доставка и продажа дров → открывается https://www.xn--80adfgo7anlsu.xn--p1ai/ внутри viewer или аккуратный fallback.
+- Доставка и продажа дров → внешнее демо отключено; карточка должна открывать безопасные подробности или заявку.
 
 4. Проверить:
 - iframe скроллится;
