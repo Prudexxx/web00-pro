@@ -1,11 +1,13 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { CatalogSnapshot } from "../prisma/seed-web00-data.js";
 import { seedWeb00Catalog } from "../prisma/seed-web00-data.js";
 import { parseTestDatabaseEnv } from "../src/config/database-env.js";
 import { createPrismaClient } from "../src/db/prisma.js";
 
+const repositoryRoot = join(process.cwd(), "..");
 const snapshot = JSON.parse(
   readFileSync(join(process.cwd(), "prisma", "seed-data", "web00-catalog.json"), "utf8")
 ) as CatalogSnapshot;
@@ -14,11 +16,108 @@ const prisma = createPrismaClient({
   databaseUrl: databaseEnv.TEST_DATABASE_URL,
   poolMax: 1
 });
+const unsafeDrovaDomains = [
+  ["дрова", "сухие.рф"].join(""),
+  ["www", ["дрова", "сухие.рф"].join("")].join("."),
+  ["xn--80adfgo7anlsu", "xn--p1ai"].join("."),
+  ["www", "xn--80adfgo7anlsu", "xn--p1ai"].join(".")
+];
+const trackedTextExtensions = new Set([
+  ".css",
+  ".html",
+  ".js",
+  ".json",
+  ".md",
+  ".mjs",
+  ".sql",
+  ".ts",
+  ".txt",
+  ".webmanifest",
+  ".xml",
+  ".yaml",
+  ".yml"
+]);
+
+function trackedTextFiles(): string[] {
+  return execFileSync("git", ["-C", repositoryRoot, "ls-files"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"]
+  })
+    .split(/\r?\n/)
+    .filter((file) => file !== "" && trackedTextExtensions.has(extname(file)));
+}
 
 async function cleanCatalogTables(): Promise<void> {
   await prisma.site.deleteMany();
   await prisma.category.deleteMany();
 }
+
+describe("WEB00 canonical catalog safety", () => {
+  it("keeps canonical drova published and safe without obsolete external destinations", () => {
+    const drovaSites = snapshot.sites.filter((site) => site.slug === "drova");
+
+    expect(snapshot.sites).toHaveLength(15);
+    expect(snapshot.sites.filter((site) => site.slug === "drova-test-copy-20260729")).toHaveLength(0);
+    expect(drovaSites).toHaveLength(1);
+
+    const drova = drovaSites[0];
+
+    if (drova === undefined) {
+      throw new Error("Expected canonical drova site in snapshot.");
+    }
+
+    expect(drova).toMatchObject({
+      active: true,
+      categorySlug: "delivery",
+      deliveryLabel: "от 2 дней",
+      demoLocalUrl: null,
+      demoMode: "none",
+      demoUrl: "",
+      externalDemoUrl: null,
+      originalDemoUrl: null,
+      previewImageUrl: "assets/img/previews/drova-home.png",
+      previewType: "delivery",
+      priceLabel: "Стоимость после анкеты",
+      shortDescription: "Сайт для локальной продажи и доставки дров с ассортиментом, условиями и быстрым заказом.",
+      siteUrl: null,
+      sortOrder: 150,
+      status: "published",
+      title: "Доставка и продажа дров",
+      views: 0
+    });
+    expect(drova.features).toEqual(["Ассортимент", "Зоны доставки", "Прайс", "Быстрый заказ"]);
+    expect(drova.galleryImages).toHaveLength(4);
+    expect(drova.galleryImages.map((image) => image.sortOrder)).toEqual([0, 1, 2, 3]);
+    expect(drova.galleryImages.map((image) => image.url)).toEqual([
+      "assets/img/solution-gallery/drova-01.png",
+      "assets/img/solution-gallery/drova-02.png",
+      "assets/img/solution-gallery/drova-03.png",
+      "assets/img/solution-gallery/drova-04.png"
+    ]);
+
+    const drovaPayload = JSON.stringify(drova).toLowerCase();
+    for (const unsafeDomain of unsafeDrovaDomains) {
+      expect(drovaPayload).not.toContain(unsafeDomain.toLowerCase());
+    }
+  });
+
+  it("does not keep obsolete drova domains in tracked text sources", () => {
+    const matches: string[] = [];
+
+    for (const file of trackedTextFiles()) {
+      const source = readFileSync(join(repositoryRoot, file), "utf8").toLowerCase();
+
+      for (const unsafeDomain of unsafeDrovaDomains) {
+        if (source.includes(unsafeDomain.toLowerCase())) {
+          matches.push(file);
+          break;
+        }
+      }
+    }
+
+    expect(matches).toEqual([]);
+  });
+});
 
 describe("WEB00 catalog seed", () => {
   beforeEach(async () => {
