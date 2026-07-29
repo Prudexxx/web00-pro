@@ -1,10 +1,22 @@
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 const backendRoot = process.cwd();
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const prismaConfigPath = join(backendRoot, "prisma.config.ts");
+const testDatabaseUrl = "postgresql://user:pass@127.0.0.1:5432/web00_config_test?schema=public";
+const testShadowDatabaseUrl = "postgresql://user:pass@127.0.0.1:5432/web00_config_shadow?schema=public";
+
+type PrismaConfigForTest = {
+  datasource?: {
+    shadowDatabaseUrl?: string;
+    url?: string;
+  };
+};
 
 function readJsonFile<T>(path: string): T {
   return JSON.parse(readFileSync(path, "utf8")) as T;
@@ -35,6 +47,53 @@ function runNpmScriptWithoutDatabaseUrls(script: string): ReturnType<typeof spaw
     shell: npmExecPath === undefined && process.platform === "win32",
     timeout: 120_000
   });
+}
+
+async function loadPrismaConfigForTest(input: {
+  databaseUrl?: string;
+  shadowDatabaseUrl?: string;
+}): Promise<PrismaConfigForTest> {
+  const previousDatabaseUrl = process.env.DATABASE_URL;
+  const previousShadowDatabaseUrl = process.env.SHADOW_DATABASE_URL;
+  const previousDotenvConfigPath = process.env.DOTENV_CONFIG_PATH;
+
+  try {
+    process.env.DOTENV_CONFIG_PATH = join(backendRoot, ".env.prisma-config-test-missing");
+
+    if (input.databaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = input.databaseUrl;
+    }
+
+    if (input.shadowDatabaseUrl === undefined) {
+      delete process.env.SHADOW_DATABASE_URL;
+    } else {
+      process.env.SHADOW_DATABASE_URL = input.shadowDatabaseUrl;
+    }
+
+    const moduleUrl = `${pathToFileURL(prismaConfigPath).href}?case=${randomUUID()}`;
+    const loaded = (await import(moduleUrl)) as { default: PrismaConfigForTest };
+    return loaded.default;
+  } finally {
+    if (previousDatabaseUrl === undefined) {
+      delete process.env.DATABASE_URL;
+    } else {
+      process.env.DATABASE_URL = previousDatabaseUrl;
+    }
+
+    if (previousShadowDatabaseUrl === undefined) {
+      delete process.env.SHADOW_DATABASE_URL;
+    } else {
+      process.env.SHADOW_DATABASE_URL = previousShadowDatabaseUrl;
+    }
+
+    if (previousDotenvConfigPath === undefined) {
+      delete process.env.DOTENV_CONFIG_PATH;
+    } else {
+      process.env.DOTENV_CONFIG_PATH = previousDotenvConfigPath;
+    }
+  }
 }
 
 describe("Prisma toolchain contract", () => {
@@ -110,7 +169,11 @@ describe("Prisma toolchain contract", () => {
 
     expect(migrationConfig).toContain('import "dotenv/config";');
     expect(migrationConfig).toContain('url: env("DATABASE_URL")');
-    expect(migrationConfig).toContain('shadowDatabaseUrl: env("SHADOW_DATABASE_URL")');
+    expect(migrationConfig).toContain(
+      "const shadowDatabaseUrl = process.env.SHADOW_DATABASE_URL?.trim();"
+    );
+    expect(migrationConfig).toContain("...(shadowDatabaseUrl ? { shadowDatabaseUrl } : {})");
+    expect(migrationConfig).not.toContain('shadowDatabaseUrl: env("SHADOW_DATABASE_URL")');
 
     for (const scriptName of [
       "prisma:validate",
@@ -121,6 +184,30 @@ describe("Prisma toolchain contract", () => {
     ]) {
       expect(packageJson.scripts?.[scriptName]).not.toContain("prisma.generate.config.ts");
     }
+  });
+
+  it("loads migration config with DATABASE_URL and no SHADOW_DATABASE_URL", async () => {
+    const config = await loadPrismaConfigForTest({ databaseUrl: testDatabaseUrl });
+
+    expect(config.datasource?.url).toBe(testDatabaseUrl);
+    expect(config.datasource?.shadowDatabaseUrl).toBeUndefined();
+    expect(Object.hasOwn(config.datasource ?? {}, "shadowDatabaseUrl")).toBe(false);
+  });
+
+  it("loads migration config with explicit DATABASE_URL and SHADOW_DATABASE_URL", async () => {
+    const config = await loadPrismaConfigForTest({
+      databaseUrl: testDatabaseUrl,
+      shadowDatabaseUrl: testShadowDatabaseUrl
+    });
+
+    expect(config.datasource?.url).toBe(testDatabaseUrl);
+    expect(config.datasource?.shadowDatabaseUrl).toBe(testShadowDatabaseUrl);
+  });
+
+  it("keeps DATABASE_URL mandatory for migration config", async () => {
+    await expect(loadPrismaConfigForTest({ shadowDatabaseUrl: testShadowDatabaseUrl })).rejects.toThrow(
+      /DATABASE_URL/
+    );
   });
 
   it("generates Prisma client without database URLs in a Render-shaped build environment", () => {

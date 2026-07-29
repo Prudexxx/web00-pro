@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const backendRoot = process.cwd();
 
 describe("Prisma schema contract", () => {
-  it("configures Prisma CLI paths, seed, and shadow database URL", () => {
+  it("configures Prisma CLI paths, seed, and optional shadow database URL", () => {
     const config = readFileSync(join(backendRoot, "prisma.config.ts"), "utf8");
 
     expect(config).toContain('import "dotenv/config";');
@@ -14,7 +14,11 @@ describe("Prisma schema contract", () => {
     expect(config).toContain('path: "prisma/migrations"');
     expect(config).toContain('seed: "tsx prisma/seed.ts"');
     expect(config).toContain('url: env("DATABASE_URL")');
-    expect(config).toContain('shadowDatabaseUrl: env("SHADOW_DATABASE_URL")');
+    expect(config).toContain(
+      "const shadowDatabaseUrl = process.env.SHADOW_DATABASE_URL?.trim();"
+    );
+    expect(config).toContain("...(shadowDatabaseUrl ? { shadowDatabaseUrl } : {})");
+    expect(config).not.toContain('shadowDatabaseUrl: env("SHADOW_DATABASE_URL")');
   });
 
   it("declares the approved Prisma 7 generator and datasource", () => {
