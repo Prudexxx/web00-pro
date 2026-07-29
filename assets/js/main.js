@@ -1,6 +1,7 @@
 (function () {
   const DATA = window.WEB00_DATA;
   if (!DATA) return;
+  const CATALOG = window.WEB00_CATALOG || null;
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -9,6 +10,9 @@
   let activeSolution = (DATA.SOLUTIONS || []).find((item) => item.active !== false) || DATA.SOLUTIONS[0];
   let activeService = null;
   let bugAttachment = null;
+  let catalogState = null;
+  let popularCatalogState = null;
+  let catalogRetryUsed = false;
   const TITLE_ALIASES = new Map([
     ["Каталог мебели", "Мебельный магазин"],
     ["Сайт для клининга", "Услуга клининга"],
@@ -746,12 +750,47 @@
     });
   }
 
+  function catalogItems() {
+    return catalogState && Array.isArray(catalogState.items) ? catalogState.items : solutions();
+  }
+
+  function solutionIdentifier(solution) {
+    return solution?.key || solution?.id || solution?.slug || "";
+  }
+
+  function solutionDescription(solution) {
+    return solution?.shortDescription || solution?.description || solutionAudience(solution);
+  }
+
+  function imageUrl(image) {
+    return typeof image === "string" ? image : image?.url || "";
+  }
+
+  function renderCatalogImage(image, options = {}) {
+    const url = imageUrl(image);
+    if (!url) return "";
+    const alt = options.alt || (typeof image === "object" ? image.alt : "") || "";
+    const loading = options.loading || "lazy";
+    const attributes = String(options.attributes || "").trim();
+    const safeAttributes = /^(?:data|aria)-[a-z0-9-]+(?:\s+(?:data|aria)-[a-z0-9-]+)*$/i.test(attributes) ? ` ${attributes}` : "";
+    if (CATALOG && typeof image === "object") {
+      const model = CATALOG.buildResponsiveImageModel(image, { alt, loading });
+      return CATALOG.renderResponsiveImageHtml(model, { attributes, className: options.className || "" });
+    }
+    const className = options.className ? ` class="${attr(options.className)}"` : "";
+    return `<img${safeAttributes}${className} src="${attr(url)}" alt="${attr(alt)}" loading="${attr(loading)}" decoding="async">`;
+  }
+
+  function renderGalleryMainImage(image, title) {
+    return renderCatalogImage(image, { alt: `${title} - экран сайта`, loading: "eager", attributes: "data-solution-gallery-main" });
+  }
+
   function solutionFilter(solution) {
-    return solution.filter || solution.previewType || "services";
+    return solution.categorySlug || solution.filter || solution.previewType || "services";
   }
 
   function solutionPreviewType(solution) {
-    return solution.previewType || solution.tone || "services";
+    return solution.previewType || solution.tone || solution.categorySlug || "services";
   }
 
   function solutionFeatures(solution) {
@@ -759,31 +798,38 @@
   }
 
   function solutionPrice(solution) {
-    return solution.priceFrom || solution.price || "";
+    return solution.priceLabel || solution.priceFrom || solution.price || "";
   }
 
   function solutionTime(solution) {
-    return solution.deliveryTime || solution.term || "";
+    return solution.deliveryLabel || solution.deliveryTime || solution.term || "";
   }
 
   function solutionAudience(solution) {
-    return solution.audience || solution.description || "";
+    return solution.audience || solution.shortDescription || solution.description || "";
   }
 
   function solutionDemoUrl(solution) {
     if (!solution || solution.demoMode === "none") return "";
+    if (solution.demoUrl) return solution.demoUrl;
     if (solution.demoMode === "external-iframe" && solution.externalDemoUrl) return solution.externalDemoUrl;
     return solution.demoLocalUrl || "";
   }
 
   function solutionOriginalDemoUrl(solution) {
-    return solution.originalDemoUrl || solution.externalDemoUrl || solution.demoUrl || "";
+    return solution.siteUrl || solution.originalDemoUrl || solution.externalDemoUrl || solution.demoUrl || "";
   }
 
   function solutionGallery(solution) {
     const gallery = Array.isArray(solution?.galleryImages) ? solution.galleryImages.filter(Boolean) : [];
-    const fallback = solution?.previewImage ? [solution.previewImage] : [];
-    return [...new Set(gallery.length ? gallery : fallback)];
+    const fallback = solution?.previewImage ? [solution.previewImage] : (solution?.previewImageUrl ? [solution.previewImageUrl] : []);
+    const seen = new Set();
+    return (gallery.length ? gallery : fallback).filter((image) => {
+      const url = imageUrl(image);
+      if (!url || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
   }
 
   function modalIcon(type) {
@@ -800,16 +846,25 @@
     if (!url) {
       return `<a class="${className} is-disabled" aria-disabled="true" tabindex="-1">${esc(label)}</a>`;
     }
-    return `<a class="${className}" href="${attr(url)}" target="_blank" rel="noopener">${esc(label)}</a>`;
+    return `<a class="${className}" href="${attr(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
   }
 
   function solutionById(id) {
-    return solutions().find((item) => item.id === id) || solutions()[0] || DATA.SOLUTIONS[0];
+    return catalogItemById(id) || catalogItems()[0] || DATA.SOLUTIONS[0];
   }
 
   function solutionByIdStrict(id) {
+    return catalogItemById(id);
+  }
+
+  function catalogItemById(id) {
     const value = String(id || "").trim();
     if (!value) return null;
+    if (CATALOG) {
+      const popularItems = popularCatalogState && Array.isArray(popularCatalogState.items) ? popularCatalogState.items : [];
+      const found = CATALOG.findCatalogItem([...popularItems, ...catalogItems()], value);
+      if (found) return found;
+    }
     return solutions().find((item) => item.id === value || item.title === value || item.legacyTitle === value) || null;
   }
 
@@ -834,6 +889,82 @@
     if (!title) return "";
     const solution = DATA.SOLUTIONS.find((item) => item.title === title || item.legacyTitle === title || item.id === title);
     return solution?.title || TITLE_ALIASES.get(title) || title;
+  }
+
+  function setCatalogStateNode(selector, visible) {
+    const node = $(selector);
+    if (!node) return;
+    node.hidden = !visible;
+  }
+
+  function updateCatalogStateNodes(state, options = {}) {
+    const loading = options.loading === true;
+    setCatalogStateNode("[data-catalog-loading]", loading);
+    setCatalogStateNode("[data-catalog-fallback]", !loading && Boolean(state?.staticFallbackActive));
+    setCatalogStateNode("[data-catalog-empty]", !loading && state?.lifecycle === "empty");
+    setCatalogStateNode("[data-catalog-fatal]", !loading && state?.lifecycle === "fatal");
+    $$("[data-catalog-retry]").forEach((button) => {
+      button.disabled = loading || catalogRetryUsed;
+    });
+  }
+
+  async function initCatalogState() {
+    if (!CATALOG) {
+      catalogState = null;
+      updateCatalogStateNodes(null);
+      return catalogState;
+    }
+    catalogState = CATALOG.getStaticCatalog();
+    updateCatalogStateNodes(null, { loading: true });
+    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
+      if (nextCatalogState) {
+        catalogState = nextCatalogState;
+        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
+      }
+      updateCatalogStateNodes(catalogState);
+    }).catch(() => {
+      updateCatalogStateNodes(catalogState);
+    });
+    return catalogState;
+  }
+
+  async function initPopularCatalogState() {
+    if (!CATALOG || page !== "home") {
+      popularCatalogState = null;
+      return popularCatalogState;
+    }
+    CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3 }).then((nextPopularCatalogState) => {
+      if (nextPopularCatalogState) popularCatalogState = nextPopularCatalogState;
+      renderPopularSolutions();
+    }).catch(() => undefined);
+    return popularCatalogState;
+  }
+
+  async function initBriefCatalogState() {
+    if (!CATALOG || page !== "brief") return catalogState;
+    catalogState = CATALOG.getStaticCatalog();
+    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
+      if (nextCatalogState) catalogState = nextCatalogState;
+    }).catch(() => undefined);
+    return catalogState;
+  }
+
+  async function retryCatalogLoad(button) {
+    if (!CATALOG || page !== "solutions" || catalogRetryUsed) return;
+    catalogRetryUsed = true;
+    if (button) button.disabled = true;
+    updateCatalogStateNodes(catalogState, { loading: true });
+    try {
+      const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions" });
+      if (nextCatalogState) {
+        catalogState = nextCatalogState;
+        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
+      }
+    } catch (_) {
+      // Keep the currently visible saved catalog if the retry cannot complete.
+    } finally {
+      updateCatalogStateNodes(catalogState);
+    }
   }
 
   function setModal(name, open) {
@@ -926,6 +1057,13 @@
 
     document.addEventListener("click", (event) => {
       const leadButton = event.target.closest("[data-open-lead]");
+      const catalogRetryButton = event.target.closest("[data-catalog-retry]");
+      if (catalogRetryButton) {
+        event.preventDefault();
+        retryCatalogLoad(catalogRetryButton);
+        return;
+      }
+
       if (leadButton) {
         event.preventDefault();
         const solutionId = leadButton.dataset.solutionId;
@@ -969,21 +1107,23 @@
   function renderSolutions() {
     const grid = $("[data-solutions-grid]");
     if (!grid) return;
-    grid.innerHTML = solutions().map((solution) => {
+    const items = catalogItems();
+    grid.innerHTML = items.map((solution) => {
       const features = solutionFeatures(solution);
       const hasDemo = Boolean(solutionDemoUrl(solution));
       const tags = features.slice(0, 2);
+      const identifier = solutionIdentifier(solution);
       return `
-      <article class="solution-card" data-solution-card data-category="${esc(solutionFilter(solution))}" data-solution-id="${esc(solution.id)}" role="button" tabindex="0" aria-label="Смотреть решение: ${esc(solution.title)}">
+      <article class="solution-card" data-solution-card data-category="${esc(solutionFilter(solution))}" data-solution-id="${esc(identifier)}" role="button" tabindex="0" aria-label="Смотреть решение: ${esc(solution.title)}">
         ${solutionPreview(solution, { card: true })}
         <div class="solution-card__body">
           <div class="solution-card__tags">${tags.map((tag) => `<span>${esc(tag)}</span>`).join("")}</div>
           <h3>${esc(solution.title)}</h3>
-          <p>${esc(solution.description || solutionAudience(solution))}</p>
+          <p>${esc(solutionDescription(solution))}</p>
           <div class="solution-card__meta"><b>${esc(solutionPrice(solution))}</b><span>${esc(solutionTime(solution))}</span></div>
           <div class="solution-card__actions">
             <button class="solution-card__action solution-card__action--secondary" type="button" data-card-action="${hasDemo ? "demo" : "details"}">${hasDemo ? "Смотреть демо" : "Подробнее"}</button>
-            <a class="solution-card__action solution-card__action--primary" href="${attr(briefUrl({ solution: solution.id }))}">Запустить</a>
+            <a class="solution-card__action solution-card__action--primary" href="${attr(briefUrl({ solution: identifier }))}">Запустить</a>
           </div>
         </div>
       </article>
@@ -1020,6 +1160,43 @@
         });
       });
     });
+  }
+
+  function renderPopularSolutions() {
+    const grid = $("#popular-templates .mock-card-grid");
+    if (!grid || !popularCatalogState) return;
+    if (popularCatalogState.source === "api" && popularCatalogState.lifecycle === "empty") {
+      grid.innerHTML = `
+        <article class="mock-template-card mock-template-card--empty">
+          <div class="mock-card-body">
+            <h3>Популярные сайты скоро появятся</h3>
+            <p>Каталог подключён, но популярных решений пока нет.</p>
+            <div class="mock-card-actions"><a href="solutions.html">Открыть каталог</a></div>
+          </div>
+        </article>
+      `;
+      return;
+    }
+    if (!(popularCatalogState.source === "api" && popularCatalogState.lifecycle === "ready")) return;
+
+    grid.innerHTML = popularCatalogState.items.slice(0, 3).map((solution, index) => {
+      const identifier = solutionIdentifier(solution);
+      const features = solutionFeatures(solution).slice(0, 3);
+      const previewImage = solution.previewImage || solution.previewImageUrl || "";
+      return `
+        <article class="mock-template-card">
+          ${renderCatalogImage(previewImage, { alt: `Превью решения: ${solution.title}`, loading: index === 0 ? "eager" : "lazy" })}
+          <div class="mock-card-body">
+            <h3>${esc(solution.title)}</h3>
+            <strong>${esc(solutionPrice(solution) || "Готовое решение")}</strong>
+            <span class="mock-card-price-note">${esc(solutionTime(solution) || "Стоимость после анкеты")}</span>
+            <p>${esc(solutionDescription(solution))}</p>
+            <div class="mock-tags">${features.map((item) => `<span>${esc(item)}</span>`).join("")}</div>
+            <div class="mock-card-actions"><button type="button" data-open-demo-id="${esc(identifier)}">Смотреть пример</button><a href="${attr(briefUrl({ solution: identifier }))}">Запустить</a></div>
+          </div>
+        </article>
+      `;
+    }).join("");
   }
 
   function renderServices() {
@@ -1129,10 +1306,11 @@
   function solutionPreview(solution, options = {}) {
     const type = solutionPreviewType(solution);
     const viewButton = options.card ? '<span class="solution-card__view" aria-hidden="true">Смотреть</span>' : "";
-    if (solution.previewImage) {
+    const previewImage = solution.previewImage || solution.previewImageUrl || "";
+    if (previewImage) {
       return `
         <div class="solution-preview solution-preview--image solution-preview--${esc(type)}">
-          <img src="${attr(solution.previewImage)}" alt="Превью решения: ${attr(solution.title)}" loading="lazy">
+          ${renderCatalogImage(previewImage, { alt: `Превью решения: ${solution.title}`, loading: options.loading || "lazy" })}
           ${viewButton}
         </div>
       `;
@@ -1167,8 +1345,9 @@
     const time = solutionTime(solution);
     const hasDemo = Boolean(solutionDemoUrl(solution));
     const gallery = solutionGallery(solution);
-    const activeImage = gallery[0] || solution.previewImage || "";
+    const activeImage = gallery[0] || solution.previewImage || solution.previewImageUrl || "";
     const category = solution.category || "Бизнес";
+    const identifier = solutionIdentifier(solution);
     const bestForMap = {
       "Товары": "магазинам, шоурумам и локальным брендам, которым нужно показать ассортимент и быстро принимать заявки.",
       "Услуги": "специалистам и сервисным компаниям, которым важно понятно описать услуги и получать обращения клиентов.",
@@ -1188,13 +1367,13 @@
             <div class="template-detail__eyebrow">Готовый сайт · ${esc(category)}</div>
             <section class="solution-gallery template-detail__gallery" aria-label="Галерея решения ${esc(solution.title)}">
               <div class="solution-gallery__stage template-detail__stage">
-                ${activeImage ? `<img data-solution-gallery-main src="${attr(activeImage)}" alt="${attr(solution.title)} - экран сайта">` : `<div class="solution-gallery__empty">Preview готовится</div>`}
+                ${imageUrl(activeImage) ? renderGalleryMainImage(activeImage, solution.title) : `<div class="solution-gallery__empty">Preview готовится</div>`}
               </div>
               ${gallery.length > 1 ? `
                 <div class="solution-gallery__thumbs template-detail__thumbs" role="list" aria-label="Экраны сайта">
                   ${gallery.map((image, index) => `
-                    <button class="${index === 0 ? "is-active" : ""}" type="button" data-gallery-thumb data-gallery-image="${attr(image)}" aria-label="Показать экран ${index + 1}">
-                      <img src="${attr(image)}" alt="" loading="lazy">
+                    <button class="${index === 0 ? "is-active" : ""}" type="button" data-gallery-thumb data-gallery-index="${index}" aria-label="Показать экран ${index + 1}">
+                      ${renderCatalogImage(image, { alt: "", loading: "lazy" })}
                     </button>
                   `).join("")}
                 </div>
@@ -1205,7 +1384,7 @@
           <aside class="solution-detail template-detail__summary">
             <span class="solution-detail__tag">Сайт готов к адаптации</span>
             <h2 id="solution-title">${esc(solution.title)}</h2>
-            <p class="solution-detail__description">${esc(solution.description)}</p>
+            <p class="solution-detail__description">${esc(solutionDescription(solution))}</p>
             <div class="solution-detail__meta template-detail__meta">
               <article><span>Стоимость</span><strong>${esc(price)}</strong></article>
               <article><span>Запуск</span><strong>${esc(time)}</strong></article>
@@ -1216,8 +1395,8 @@
             </div>
             <ul class="check-list solution-detail__features">${features.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
             <div class="solution-detail__actions template-detail__actions">
-              <a class="btn btn--primary btn--full" href="${attr(briefUrl({ solution: solution.id }))}">Запустить этот сайт</a>
-              ${hasDemo ? `<button class="btn btn--secondary btn--full" type="button" data-open-demo="${esc(solution.id)}">Смотреть демо</button>` : `<p class="template-detail__demo-note">Демо подберём после короткой анкеты.</p>`}
+              <a class="btn btn--primary btn--full" href="${attr(briefUrl({ solution: identifier }))}">Запустить этот сайт</a>
+              ${hasDemo ? `<button class="btn btn--secondary btn--full" type="button" data-open-demo="${esc(identifier)}">Смотреть демо</button>` : `<p class="template-detail__demo-note">Демо подберём после короткой анкеты.</p>`}
             </div>
           </aside>
         </section>
@@ -1247,11 +1426,11 @@
     `;
     $$("[data-gallery-thumb]", target).forEach((button) => {
       button.addEventListener("click", () => {
-        const image = button.dataset.galleryImage;
-        const mainImage = $("[data-solution-gallery-main]", target);
-        if (!image || !mainImage) return;
-        mainImage.src = image;
-        mainImage.alt = `${solution.title} - экран сайта`;
+        const image = gallery[Number(button.dataset.galleryIndex || 0)];
+        const stage = $(".solution-gallery__stage", target);
+        const nextUrl = imageUrl(image);
+        if (!nextUrl || !stage) return;
+        stage.innerHTML = renderGalleryMainImage(image, solution.title);
         $$("[data-gallery-thumb]", target).forEach((item) => item.classList.toggle("is-active", item === button));
       });
     });
@@ -1275,18 +1454,19 @@
     const price = solutionPrice(solution);
     const time = solutionTime(solution);
     const originalDemoUrl = solutionOriginalDemoUrl(solution);
+    const identifier = solutionIdentifier(solution);
     target.innerHTML = `
       <div class="demo-modal ${isExternalFrame ? "demo-modal--external" : ""}">
         <div class="demo-modal__head">
           <div><h2 id="demo-title">${esc(isExternalFrame ? solution.title : `Демо: ${solution.title}`)}</h2><p>${isExternalFrame ? "Полный просмотр открывается отдельно." : "Локальная демо-страница открывается внутри WEB00 Pro."}</p></div>
           ${isExternalFrame ? "" : `<div class="segmented"><button class="is-active" type="button" data-demo-device="desktop">Desktop</button><button type="button" data-demo-device="mobile">Mobile</button></div>`}
           ${externalLink(originalDemoUrl, isExternalFrame ? "Открыть отдельно" : "Открыть оригинал")}
-          <a class="btn btn--primary btn--small" href="${attr(briefUrl({ solution: solution.id }))}">Хочу такой сайт</a>
+          <a class="btn btn--primary btn--small" href="${attr(briefUrl({ solution: identifier }))}">Хочу такой сайт</a>
         </div>
         <div class="demo-layout">
           <aside>
             <h3>О сайте</h3>
-            <p>${esc(solution.description)}</p>
+            <p>${esc(solutionDescription(solution))}</p>
             <ul class="check-list">${features.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>
             <div class="mini-meta"><span>${esc(price)}</span><span>${esc(time)}</span></div>
           </aside>
@@ -1351,7 +1531,7 @@
           <span class="brief-summary__eyebrow">Выбранный сайт</span>
           ${solutionPreview(solution)}
           <h3>${esc(solution.title)}</h3>
-          <p>${esc(solution.description)}</p>
+          <p>${esc(solutionDescription(solution))}</p>
           <div class="brief-summary__meta">
             <article><span>Запуск</span><strong>${esc(solutionTime(solution))}</strong></article>
             <article><span>Стоимость</span><strong>${esc(solutionPrice(solution))}</strong></article>
@@ -1699,7 +1879,7 @@
         <h2>Не получилось отправить анкету</h2>
         <p>Проверьте данные и попробуйте ещё раз. Если проблема повторится, напишите нам в Telegram.</p>
         <div class="success-box"><span>Выбранный сайт</span><strong>${esc(context.solution?.title || context.service || "Проект WEB00")}</strong></div>
-        <a class="btn btn--primary btn--full" href="${attr(DATA.CONTACTS?.telegram?.href || "https://t.me/GarantiyWeb00bot")}" target="_blank" rel="noopener">Открыть Telegram</a>
+        <a class="btn btn--primary btn--full" href="${attr(DATA.CONTACTS?.telegram?.href || "https://t.me/GarantiyWeb00bot")}" target="_blank" rel="noopener noreferrer">Открыть Telegram</a>
         <button class="btn btn--secondary btn--full" type="button" onclick="location.reload()">Попробовать ещё раз</button>
       </div>
     `;
@@ -2464,8 +2644,11 @@
     });
   }
 
-  function initHome() {
+  async function initHome() {
+    if (page === "solutions") await initCatalogState();
+    if (page === "home") await initPopularCatalogState();
     renderSolutions();
+    renderPopularSolutions();
     renderServices();
     renderPricing();
     initFaq();
@@ -2485,15 +2668,16 @@
     });
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
+  document.addEventListener("DOMContentLoaded", async () => {
     initShell();
     if (page === "status") {
       renderStatusPage();
       initStatusLookup();
     } else if (page === "brief") {
+      await initBriefCatalogState();
       initBriefPage();
     } else {
-      initHome();
+      await initHome();
     }
     registerServiceWorker();
   });

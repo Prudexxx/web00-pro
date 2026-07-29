@@ -2973,3 +2973,16 @@ body[data-page="home"] .hero-matryoshka img {
     width: min(76vw, 310px);
   }
 }
+
+body[data-page="home"] .mock-template-card--empty {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  text-align: center;
+}
+
+body[data-page="home"] .mock-template-card--empty .mock-card-actions {
+  justify-content: center;
+}

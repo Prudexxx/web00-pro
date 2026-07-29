@@ -1,0 +1,945 @@
+{
+  "categories": [
+    {
+      "active": true,
+      "description": null,
+      "slug": "individual",
+      "sortOrder": 10,
+      "title": "Индивидуально"
+    },
+    {
+      "active": true,
+      "description": null,
+      "slug": "goods",
+      "sortOrder": 20,
+      "title": "Товары"
+    },
+    {
+      "active": true,
+      "description": null,
+      "slug": "construction",
+      "sortOrder": 30,
+      "title": "Строительство"
+    },
+    {
+      "active": true,
+      "description": null,
+      "slug": "medicine",
+      "sortOrder": 40,
+      "title": "Медицина"
+    },
+    {
+      "active": true,
+      "description": null,
+      "slug": "services",
+      "sortOrder": 50,
+      "title": "Услуги"
+    },
+    {
+      "active": true,
+      "description": null,
+      "slug": "realty",
+      "sortOrder": 60,
+      "title": "Недвижимость"
+    },
+    {
+      "active": true,
+      "description": null,
+      "slug": "delivery",
+      "sortOrder": 70,
+      "title": "Доставка"
+    }
+  ],
+  "generatedAt": "2026-07-24T00:00:00.000Z",
+  "sites": [
+    {
+      "active": true,
+      "categorySlug": "individual",
+      "deliveryLabel": "по оценке задачи",
+      "demoLocalUrl": null,
+      "demoMode": "none",
+      "demoUrl": "",
+      "developmentDays": null,
+      "externalDemoUrl": null,
+      "featured": false,
+      "features": [
+        "Индивидуальная структура",
+        "Адаптив",
+        "Форма заявки",
+        "Подбор решения"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Сайт под заказ",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/site-custom/gallery/site-custom-01.png",
+          "url": "assets/img/solution-gallery/site-custom-01.png"
+        },
+        {
+          "alt": "Сайт под заказ",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/site-custom/gallery/site-custom-02.png",
+          "url": "assets/img/solution-gallery/site-custom-02.png"
+        },
+        {
+          "alt": "Сайт под заказ",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/site-custom/gallery/site-custom-03.png",
+          "url": "assets/img/solution-gallery/site-custom-03.png"
+        },
+        {
+          "alt": "Сайт под заказ",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/site-custom/gallery/site-custom-04.png",
+          "url": "assets/img/solution-gallery/site-custom-04.png"
+        }
+      ],
+      "legacyTitle": "Сайт под заказ",
+      "originalDemoUrl": null,
+      "previewImageUrl": "assets/img/previews/site-custom-home.png",
+      "previewType": "individual",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Индивидуальный сайт под задачу клиента: структура, дизайн, формы заявок и подготовка к запуску.",
+      "siteUrl": null,
+      "slug": "site-custom",
+      "sortOrder": 10,
+      "status": "published",
+      "tags": [],
+      "title": "Сайт под заказ",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "goods",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/MEBELPlanet/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/MEBELPlanet/",
+      "featured": false,
+      "features": [
+        "Каталог товаров",
+        "Категории",
+        "Карточки товаров",
+        "Заявка на расчёт"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Мебельный магазин",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/mebel/gallery/mebel-01.png",
+          "url": "assets/img/solution-gallery/mebel-01.png"
+        },
+        {
+          "alt": "Мебельный магазин",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/mebel/gallery/mebel-02.png",
+          "url": "assets/img/solution-gallery/mebel-02.png"
+        },
+        {
+          "alt": "Мебельный магазин",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/mebel/gallery/mebel-03.png",
+          "url": "assets/img/solution-gallery/mebel-03.png"
+        },
+        {
+          "alt": "Мебельный магазин",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/mebel/gallery/mebel-04.png",
+          "url": "assets/img/solution-gallery/mebel-04.png"
+        }
+      ],
+      "legacyTitle": "Мебельный магазин",
+      "originalDemoUrl": "https://prudexxx.github.io/MEBELPlanet/",
+      "previewImageUrl": "assets/img/previews/mebel-home.png",
+      "previewType": "goods",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Витрина мебельного магазина с категориями, карточками товаров, условиями доставки и заявкой на расчёт.",
+      "siteUrl": null,
+      "slug": "mebel",
+      "sortOrder": 20,
+      "status": "published",
+      "tags": [],
+      "title": "Мебельный магазин",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "goods",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/OdegdaPlanet/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/OdegdaPlanet/",
+      "featured": false,
+      "features": [
+        "Коллекции",
+        "Карточки товаров",
+        "Размеры",
+        "Заказ через форму"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Магазин одежды",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/odezhda/gallery/odezhda-01.png",
+          "url": "assets/img/solution-gallery/odezhda-01.png"
+        },
+        {
+          "alt": "Магазин одежды",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/odezhda/gallery/odezhda-02.png",
+          "url": "assets/img/solution-gallery/odezhda-02.png"
+        },
+        {
+          "alt": "Магазин одежды",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/odezhda/gallery/odezhda-03.png",
+          "url": "assets/img/solution-gallery/odezhda-03.png"
+        },
+        {
+          "alt": "Магазин одежды",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/odezhda/gallery/odezhda-04.png",
+          "url": "assets/img/solution-gallery/odezhda-04.png"
+        }
+      ],
+      "legacyTitle": "Магазин одежды",
+      "originalDemoUrl": "https://prudexxx.github.io/OdegdaPlanet/",
+      "previewImageUrl": "assets/img/previews/odezhda-home.png",
+      "previewType": "goods",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Мини-магазин для одежды, шоурума или локального бренда с коллекциями и быстрым заказом.",
+      "siteUrl": null,
+      "slug": "odezhda",
+      "sortOrder": 30,
+      "status": "published",
+      "tags": [],
+      "title": "Магазин одежды",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "construction",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/DomaBani/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/DomaBani/",
+      "featured": false,
+      "features": [
+        "Каталог проектов",
+        "Карточки объектов",
+        "Портфолио",
+        "Заявка на расчёт"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Дома, бани из сруба",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/doma-bani/gallery/doma-bani-01.png",
+          "url": "assets/img/solution-gallery/doma-bani-01.png"
+        },
+        {
+          "alt": "Дома, бани из сруба",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/doma-bani/gallery/doma-bani-02.png",
+          "url": "assets/img/solution-gallery/doma-bani-02.png"
+        },
+        {
+          "alt": "Дома, бани из сруба",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/doma-bani/gallery/doma-bani-03.png",
+          "url": "assets/img/solution-gallery/doma-bani-03.png"
+        },
+        {
+          "alt": "Дома, бани из сруба",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/doma-bani/gallery/doma-bani-04.png",
+          "url": "assets/img/solution-gallery/doma-bani-04.png"
+        }
+      ],
+      "legacyTitle": "Дома, бани из сруба",
+      "originalDemoUrl": "https://prudexxx.github.io/DomaBani/",
+      "previewImageUrl": "assets/img/previews/doma-bani-home.png",
+      "previewType": "construction",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для строительной компании с проектами домов и бань, преимуществами и заявкой на расчёт.",
+      "siteUrl": null,
+      "slug": "doma-bani",
+      "sortOrder": 40,
+      "status": "published",
+      "tags": [],
+      "title": "Дома, бани из сруба",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "medicine",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/MedizinaPlanet/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/MedizinaPlanet/",
+      "featured": false,
+      "features": [
+        "Описание услуг",
+        "Блок доверия",
+        "Запись",
+        "Контакты"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Медицина услуги",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/medicina/gallery/medicina-01.png",
+          "url": "assets/img/solution-gallery/medicina-01.png"
+        },
+        {
+          "alt": "Медицина услуги",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/medicina/gallery/medicina-02.png",
+          "url": "assets/img/solution-gallery/medicina-02.png"
+        },
+        {
+          "alt": "Медицина услуги",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/medicina/gallery/medicina-03.png",
+          "url": "assets/img/solution-gallery/medicina-03.png"
+        },
+        {
+          "alt": "Медицина услуги",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/medicina/gallery/medicina-04.png",
+          "url": "assets/img/solution-gallery/medicina-04.png"
+        }
+      ],
+      "legacyTitle": "Медицина услуги",
+      "originalDemoUrl": "https://prudexxx.github.io/MedizinaPlanet/",
+      "previewImageUrl": "assets/img/previews/medicina-home.png",
+      "previewType": "medicine",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт медицинской услуги с описанием направлений, доверием, записью и контактами.",
+      "siteUrl": null,
+      "slug": "medicina",
+      "sortOrder": 50,
+      "status": "published",
+      "tags": [],
+      "title": "Медицина услуги",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "medicine",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+      "featured": false,
+      "features": [
+        "Услуги клиники",
+        "Преимущества",
+        "Запись",
+        "Контакты"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Наркологическая медицина",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/narko-medicine/gallery/narko-medicine-01.png",
+          "url": "assets/img/solution-gallery/narko-medicine-01.png"
+        },
+        {
+          "alt": "Наркологическая медицина",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/narko-medicine/gallery/narko-medicine-02.png",
+          "url": "assets/img/solution-gallery/narko-medicine-02.png"
+        },
+        {
+          "alt": "Наркологическая медицина",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/narko-medicine/gallery/narko-medicine-03.png",
+          "url": "assets/img/solution-gallery/narko-medicine-03.png"
+        },
+        {
+          "alt": "Наркологическая медицина",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/narko-medicine/gallery/narko-medicine-04.png",
+          "url": "assets/img/solution-gallery/narko-medicine-04.png"
+        }
+      ],
+      "legacyTitle": "Наркологическая медицина",
+      "originalDemoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+      "previewImageUrl": "assets/img/previews/narko-home.png",
+      "previewType": "medicine",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Медицинский лендинг для консультаций, записи и аккуратной подачи услуг клиники.",
+      "siteUrl": null,
+      "slug": "narko-medicine",
+      "sortOrder": 60,
+      "status": "published",
+      "tags": [],
+      "title": "Наркологическая медицина",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "services",
+      "deliveryLabel": "от 2 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/MugNaChas/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/MugNaChas/",
+      "featured": false,
+      "features": [
+        "Список работ",
+        "Преимущества",
+        "Цены",
+        "Форма заявки"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Услуга муж на час",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/uslugi/gallery/uslugi-01.png",
+          "url": "assets/img/solution-gallery/uslugi-01.png"
+        },
+        {
+          "alt": "Услуга муж на час",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/uslugi/gallery/uslugi-02.png",
+          "url": "assets/img/solution-gallery/uslugi-02.png"
+        },
+        {
+          "alt": "Услуга муж на час",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/uslugi/gallery/uslugi-03.png",
+          "url": "assets/img/solution-gallery/uslugi-03.png"
+        },
+        {
+          "alt": "Услуга муж на час",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/uslugi/gallery/uslugi-04.png",
+          "url": "assets/img/solution-gallery/uslugi-04.png"
+        }
+      ],
+      "legacyTitle": "Услуга муж на час",
+      "originalDemoUrl": "https://prudexxx.github.io/MugNaChas/",
+      "previewImageUrl": "assets/img/previews/mug-na-chas-home.png",
+      "previewType": "services",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для мастера или небольшой команды: список работ, преимущества, цены и заявка.",
+      "siteUrl": null,
+      "slug": "uslugi",
+      "sortOrder": 70,
+      "status": "published",
+      "tags": [],
+      "title": "Услуга муж на час",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "services",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/Klining/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/Klining/",
+      "featured": false,
+      "features": [
+        "Виды уборки",
+        "Пакеты услуг",
+        "Форма расчёта",
+        "Telegram-уведомления"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Услуга клининга",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/cleaning/gallery/cleaning-01.png",
+          "url": "assets/img/solution-gallery/cleaning-01.png"
+        },
+        {
+          "alt": "Услуга клининга",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/cleaning/gallery/cleaning-02.png",
+          "url": "assets/img/solution-gallery/cleaning-02.png"
+        },
+        {
+          "alt": "Услуга клининга",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/cleaning/gallery/cleaning-03.png",
+          "url": "assets/img/solution-gallery/cleaning-03.png"
+        },
+        {
+          "alt": "Услуга клининга",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/cleaning/gallery/cleaning-04.png",
+          "url": "assets/img/solution-gallery/cleaning-04.png"
+        }
+      ],
+      "legacyTitle": "Услуга клининга",
+      "originalDemoUrl": "https://prudexxx.github.io/Klining/",
+      "previewImageUrl": "assets/img/previews/cleaning-home.png",
+      "previewType": "services",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Лендинг клининга с пакетами уборки, преимуществами, расчётом и заявкой.",
+      "siteUrl": null,
+      "slug": "cleaning",
+      "sortOrder": 80,
+      "status": "published",
+      "tags": [],
+      "title": "Услуга клининга",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "services",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/Advokat/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/Advokat/",
+      "featured": false,
+      "features": [
+        "Юридические услуги",
+        "Преимущества",
+        "Форма консультации",
+        "Контакты"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Услуга адвоката",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/advokat/gallery/advokat-01.png",
+          "url": "assets/img/solution-gallery/advokat-01.png"
+        },
+        {
+          "alt": "Услуга адвоката",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/advokat/gallery/advokat-02.png",
+          "url": "assets/img/solution-gallery/advokat-02.png"
+        },
+        {
+          "alt": "Услуга адвоката",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/advokat/gallery/advokat-03.png",
+          "url": "assets/img/solution-gallery/advokat-03.png"
+        },
+        {
+          "alt": "Услуга адвоката",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/advokat/gallery/advokat-04.png",
+          "url": "assets/img/solution-gallery/advokat-04.png"
+        }
+      ],
+      "legacyTitle": "Услуга адвоката",
+      "originalDemoUrl": "https://prudexxx.github.io/Advokat/",
+      "previewImageUrl": "assets/img/previews/advokat-home.png",
+      "previewType": "services",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Юридический сайт для консультаций, услуг адвоката, преимуществ и заявки на связь.",
+      "siteUrl": null,
+      "slug": "advokat",
+      "sortOrder": 90,
+      "status": "published",
+      "tags": [],
+      "title": "Услуга адвоката",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "construction",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/Krovla/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/Krovla/",
+      "featured": false,
+      "features": [
+        "Виды работ",
+        "Портфолио",
+        "Расчёт работ",
+        "Заявка на замер"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Услуга кровли",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/krovlya/gallery/krovlya-01.png",
+          "url": "assets/img/solution-gallery/krovlya-01.png"
+        },
+        {
+          "alt": "Услуга кровли",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/krovlya/gallery/krovlya-02.png",
+          "url": "assets/img/solution-gallery/krovlya-02.png"
+        },
+        {
+          "alt": "Услуга кровли",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/krovlya/gallery/krovlya-03.png",
+          "url": "assets/img/solution-gallery/krovlya-03.png"
+        },
+        {
+          "alt": "Услуга кровли",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/krovlya/gallery/krovlya-04.png",
+          "url": "assets/img/solution-gallery/krovlya-04.png"
+        }
+      ],
+      "legacyTitle": "Услуга кровли",
+      "originalDemoUrl": "https://prudexxx.github.io/Krovla/",
+      "previewImageUrl": "assets/img/previews/krovlya-home.png",
+      "previewType": "construction",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для кровельной бригады или компании: услуги, этапы, гарантии и заявка на замер.",
+      "siteUrl": null,
+      "slug": "krovlya",
+      "sortOrder": 100,
+      "status": "published",
+      "tags": [],
+      "title": "Услуга кровли",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "individual",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/ProektyPlanet/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/ProektyPlanet/",
+      "featured": false,
+      "features": [
+        "Оффер",
+        "Проекты",
+        "Портфолио",
+        "Заявка"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Цифровые проекты",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/digital-projects/gallery/digital-projects-01.png",
+          "url": "assets/img/solution-gallery/digital-projects-01.png"
+        },
+        {
+          "alt": "Цифровые проекты",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/digital-projects/gallery/digital-projects-02.png",
+          "url": "assets/img/solution-gallery/digital-projects-02.png"
+        },
+        {
+          "alt": "Цифровые проекты",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/digital-projects/gallery/digital-projects-03.png",
+          "url": "assets/img/solution-gallery/digital-projects-03.png"
+        },
+        {
+          "alt": "Цифровые проекты",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/digital-projects/gallery/digital-projects-04.png",
+          "url": "assets/img/solution-gallery/digital-projects-04.png"
+        }
+      ],
+      "legacyTitle": "Цифровые проекты",
+      "originalDemoUrl": "https://prudexxx.github.io/ProektyPlanet/",
+      "previewImageUrl": "assets/img/previews/digital-projects-home.png",
+      "previewType": "individual",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для цифровых услуг, проектной деятельности, портфолио и сбора заявок.",
+      "siteUrl": null,
+      "slug": "digital-projects",
+      "sortOrder": 110,
+      "status": "published",
+      "tags": [],
+      "title": "Цифровые проекты",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "construction",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/Ruberoid/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/Ruberoid/",
+      "featured": false,
+      "features": [
+        "Услуги",
+        "Материалы",
+        "Расчёт",
+        "Заявка"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Услуга кровли рубероида",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/ruberoid-roof/gallery/ruberoid-roof-01.png",
+          "url": "assets/img/solution-gallery/ruberoid-roof-01.png"
+        },
+        {
+          "alt": "Услуга кровли рубероида",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/ruberoid-roof/gallery/ruberoid-roof-02.png",
+          "url": "assets/img/solution-gallery/ruberoid-roof-02.png"
+        },
+        {
+          "alt": "Услуга кровли рубероида",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/ruberoid-roof/gallery/ruberoid-roof-03.png",
+          "url": "assets/img/solution-gallery/ruberoid-roof-03.png"
+        },
+        {
+          "alt": "Услуга кровли рубероида",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/ruberoid-roof/gallery/ruberoid-roof-04.png",
+          "url": "assets/img/solution-gallery/ruberoid-roof-04.png"
+        }
+      ],
+      "legacyTitle": "Услуга кровли рубероида",
+      "originalDemoUrl": "https://prudexxx.github.io/Ruberoid/",
+      "previewImageUrl": "assets/img/previews/ruberoid-home.png",
+      "previewType": "construction",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Узкий лендинг под кровлю рубероидом с описанием материалов, расчётом и заявкой.",
+      "siteUrl": null,
+      "slug": "ruberoid-roof",
+      "sortOrder": 120,
+      "status": "published",
+      "tags": [],
+      "title": "Услуга кровли рубероида",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "realty",
+      "deliveryLabel": "от 3 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/Dom/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/Dom/",
+      "featured": false,
+      "features": [
+        "Описание объекта",
+        "Условия",
+        "Галерея",
+        "Заявка"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Дом под сдачу",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/rental-house/gallery/rental-house-01.png",
+          "url": "assets/img/solution-gallery/rental-house-01.png"
+        },
+        {
+          "alt": "Дом под сдачу",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/rental-house/gallery/rental-house-02.png",
+          "url": "assets/img/solution-gallery/rental-house-02.png"
+        },
+        {
+          "alt": "Дом под сдачу",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/rental-house/gallery/rental-house-03.png",
+          "url": "assets/img/solution-gallery/rental-house-03.png"
+        },
+        {
+          "alt": "Дом под сдачу",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/rental-house/gallery/rental-house-04.png",
+          "url": "assets/img/solution-gallery/rental-house-04.png"
+        }
+      ],
+      "legacyTitle": "Дом под сдачу",
+      "originalDemoUrl": "https://prudexxx.github.io/Dom/",
+      "previewImageUrl": "assets/img/previews/dom-arenda-home.png",
+      "previewType": "realty",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для сдачи дома: описание объекта, условия, галерея и заявка на бронирование.",
+      "siteUrl": null,
+      "slug": "rental-house",
+      "sortOrder": 130,
+      "status": "published",
+      "tags": [],
+      "title": "Дом под сдачу",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "services",
+      "deliveryLabel": "от 2 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://prudexxx.github.io/m/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://prudexxx.github.io/m/",
+      "featured": false,
+      "features": [
+        "Услуги и цены",
+        "Онлайн-запись",
+        "Отзывы",
+        "Блок доверия"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Массаж",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/massage/gallery/massage-01.png",
+          "url": "assets/img/solution-gallery/massage-01.png"
+        },
+        {
+          "alt": "Массаж",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/massage/gallery/massage-02.png",
+          "url": "assets/img/solution-gallery/massage-02.png"
+        },
+        {
+          "alt": "Массаж",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/massage/gallery/massage-03.png",
+          "url": "assets/img/solution-gallery/massage-03.png"
+        },
+        {
+          "alt": "Массаж",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/massage/gallery/massage-04.png",
+          "url": "assets/img/solution-gallery/massage-04.png"
+        }
+      ],
+      "legacyTitle": "Массаж",
+      "originalDemoUrl": "https://prudexxx.github.io/m/",
+      "previewImageUrl": "assets/img/previews/massage-home.png",
+      "previewType": "services",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для специалиста или салона с услугами массажа, записью, акциями и отзывами.",
+      "siteUrl": null,
+      "slug": "massage",
+      "sortOrder": 140,
+      "status": "published",
+      "tags": [],
+      "title": "Массаж",
+      "views": 0
+    },
+    {
+      "active": true,
+      "categorySlug": "delivery",
+      "deliveryLabel": "от 2 дней",
+      "demoLocalUrl": null,
+      "demoMode": "external-iframe",
+      "demoUrl": "https://www.xn--80adfgo7anlsu.xn--p1ai/",
+      "developmentDays": null,
+      "externalDemoUrl": "https://www.xn--80adfgo7anlsu.xn--p1ai/",
+      "featured": false,
+      "features": [
+        "Ассортимент",
+        "Зоны доставки",
+        "Прайс",
+        "Быстрый заказ"
+      ],
+      "fullDescription": null,
+      "galleryImages": [
+        {
+          "alt": "Доставка и продажа дров",
+          "sortOrder": 0,
+          "storagePath": "catalog/sites/drova/gallery/drova-01.png",
+          "url": "assets/img/solution-gallery/drova-01.png"
+        },
+        {
+          "alt": "Доставка и продажа дров",
+          "sortOrder": 1,
+          "storagePath": "catalog/sites/drova/gallery/drova-02.png",
+          "url": "assets/img/solution-gallery/drova-02.png"
+        },
+        {
+          "alt": "Доставка и продажа дров",
+          "sortOrder": 2,
+          "storagePath": "catalog/sites/drova/gallery/drova-03.png",
+          "url": "assets/img/solution-gallery/drova-03.png"
+        },
+        {
+          "alt": "Доставка и продажа дров",
+          "sortOrder": 3,
+          "storagePath": "catalog/sites/drova/gallery/drova-04.png",
+          "url": "assets/img/solution-gallery/drova-04.png"
+        }
+      ],
+      "legacyTitle": "Доставка и продажа дров",
+      "originalDemoUrl": "https://www.xn--80adfgo7anlsu.xn--p1ai/",
+      "previewImageUrl": "assets/img/previews/drova-home.png",
+      "previewType": "delivery",
+      "priceAmountCents": null,
+      "priceLabel": "Стоимость после анкеты",
+      "publishedAt": "2026-07-24T00:00:00.000Z",
+      "shortDescription": "Сайт для локальной продажи и доставки дров с ассортиментом, условиями и быстрым заказом.",
+      "siteUrl": null,
+      "slug": "drova",
+      "sortOrder": 150,
+      "status": "published",
+      "tags": [],
+      "title": "Доставка и продажа дров",
+      "views": 0
+    }
+  ],
+  "sourceCommit": "f74e4d72ad178baee74cfc859a391fe5570f0179",
+  "sourceFile": "assets/js/data.js",
+  "sourceRepository": "https://github.com/Prudexxx/web00-pro.git",
+  "sourceSha256": "fe7fe6dda6ca19c89a29821132c23703ac245fb21eb38eb1042e1bc053dfaf39"
+}
