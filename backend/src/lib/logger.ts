@@ -31,7 +31,25 @@ export interface AuthSecurityLogEntry {
   time: string;
 }
 
-export type AppLogEntry = AuthSecurityLogEntry | LifecycleLogEntry | RequestLogEntry;
+export interface SiteCreateDraftFailedLogEntry {
+  elapsedMs: number;
+  environment: AppEnv["NODE_ENV"] | string;
+  errorClass: string;
+  event: "site.create_draft.failed";
+  level: "error";
+  prismaCode: string | null;
+  requestId: string;
+  service: string;
+  stage: string;
+  time: string;
+  transactionCallbackCompleted: boolean;
+}
+
+export type AppLogEntry =
+  | AuthSecurityLogEntry
+  | LifecycleLogEntry
+  | RequestLogEntry
+  | SiteCreateDraftFailedLogEntry;
 
 export interface AppLogger {
   log(entry: AppLogEntry): void;

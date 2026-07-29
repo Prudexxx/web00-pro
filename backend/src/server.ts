@@ -143,7 +143,15 @@ export function startServer(options: StartServerOptions): StartedServer {
       repository: createPrismaAdminCategoryRepository({ prisma })
     }),
     siteService: createAdminSiteService({
-      repository: createPrismaAdminSiteRepository({ prisma })
+      repository: createPrismaAdminSiteRepository({
+        diagnostics: {
+          environment: options.env.NODE_ENV,
+          logger,
+          now: options.now ?? (() => new Date()),
+          service: options.env.SERVICE_NAME
+        },
+        prisma
+      })
     }),
     imageParser: createBusboyMultipartImageParser(),
     imageService: createSiteImageService({
