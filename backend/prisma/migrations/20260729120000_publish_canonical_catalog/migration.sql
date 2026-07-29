@@ -23,8 +23,7 @@ BEGIN
     UPDATE "sites"
     SET
       "status" = 'published',
-      "published_at" = CURRENT_TIMESTAMP,
-      "updated_at" = CURRENT_TIMESTAMP
+      "published_at" = CURRENT_TIMESTAMP
     WHERE "slug" = ANY(canonical_slugs)
       AND "status" = 'draft'
       AND "published_at" IS NULL
