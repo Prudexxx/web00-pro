@@ -280,11 +280,11 @@ export function getAvailableLifecycleActions(site, role) {
   if (role !== "admin" || typeof site !== "object" || site === null) {
     return [];
   }
-  if ("active" in site && site.active !== true) {
-    return [];
-  }
   if (site.deletedAt !== undefined && site.deletedAt !== null) {
     return [actionDescriptor("restore"), actionDescriptor("permanent-delete")];
+  }
+  if ("active" in site && site.active !== true) {
+    return [];
   }
   if (site.status === "draft") {
     return [actionDescriptor("publish"), actionDescriptor("soft-delete")];

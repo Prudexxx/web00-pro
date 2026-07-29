@@ -25,6 +25,58 @@ describe("admin site lifecycle UI", () => {
     expect(getAvailableLifecycleActions(siteFixture({ status: "archived" }), "admin")).toEqual([]);
   });
 
+  it("prefers deleted lifecycle actions before inactive site gating", () => {
+    const softDeletedSite = siteFixture({
+      active: false,
+      deletedAt: "2026-07-29T01:06:16.000Z",
+      status: "draft"
+    });
+
+    expect(getAvailableLifecycleActions(softDeletedSite, "admin").map((item) => item.id)).toEqual([
+      "restore",
+      "permanent-delete"
+    ]);
+    expect(getAvailableLifecycleActions(siteFixture({
+      active: false,
+      deletedAt: null,
+      status: "draft"
+    }), "admin")).toEqual([]);
+    expect(getAvailableLifecycleActions(softDeletedSite, "editor")).toEqual([]);
+  });
+
+  it("renders only restore and permanent delete for soft-deleted inactive admin rows", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = createListApi(siteFixture({
+      active: false,
+      deletedAt: "2026-07-29T01:06:16.000Z",
+      status: "draft"
+    }));
+    const screen = createSitesListScreen({
+      apiClient,
+      documentRef,
+      onCreate: vi.fn(),
+      onEdit: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+
+    expect(lifecycleActionIds(screen.element)).toEqual(["restore", "permanent-delete"]);
+    expect(screen.element.querySelector('[data-lifecycle-action="restore"]').getAttribute("data-site-id")).toBe(
+      "00000000-0000-4000-8000-000000000101"
+    );
+    expect(screen.element.querySelector('[data-lifecycle-action="permanent-delete"]').getAttribute("data-site-id")).toBe(
+      "00000000-0000-4000-8000-000000000101"
+    );
+    expect(screen.element.textContent).toContain("Восстановить");
+    expect(screen.element.textContent).toContain("Удалить навсегда");
+    expect(screen.element.querySelector('[data-lifecycle-action="soft-delete"]')).toBeNull();
+    expect(screen.element.querySelector('[data-lifecycle-action="publish"]')).toBeNull();
+    expect(screen.element.querySelector('[data-lifecycle-action="unpublish"]')).toBeNull();
+    expect(screen.element.querySelector('[data-action="manage-images"]')).toBeNull();
+  });
+
   it("does not render lifecycle buttons for editors", async () => {
     const documentRef = createFakeDocument();
     const screen = createSitesListScreen({
@@ -443,6 +495,10 @@ function walk(node, visit) {
   for (const child of node.children ?? []) {
     walk(child, visit);
   }
+}
+
+function lifecycleActionIds(root) {
+  return root.querySelectorAll("[data-lifecycle-action]").map((element) => element.getAttribute("data-lifecycle-action"));
 }
 
 function fakeEvent(type) {
