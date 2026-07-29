@@ -42,7 +42,7 @@ export interface CatalogSnapshotSite {
   siteUrl: string | null;
   slug: string;
   sortOrder: number;
-  status: "draft";
+  status: "draft" | "published";
   tags: string[];
   title: string;
   views: number;
@@ -129,6 +129,7 @@ function validateSites(snapshot: CatalogSnapshot, repositoryRoot: string, issues
       issues.push(`Duplicate site slug: ${site.slug}.`);
     }
     siteSlugs.add(site.slug);
+    validateSitePublication(site, snapshot.generatedAt, issues);
 
     if (site.previewImageUrl !== null) {
       validateImagePath(site.previewImageUrl, repositoryRoot, issues);
@@ -137,6 +138,36 @@ function validateSites(snapshot: CatalogSnapshot, repositoryRoot: string, issues
     for (const image of site.galleryImages) {
       validateImagePath(image.url, repositoryRoot, issues);
     }
+  }
+}
+
+function validateSitePublication(
+  site: CatalogSnapshotSite,
+  generatedAt: string,
+  issues: string[]
+): void {
+  if (site.status !== "draft" && site.status !== "published") {
+    issues.push(`Site ${site.slug} has invalid status.`);
+    return;
+  }
+
+  if (site.status !== "published") {
+    return;
+  }
+
+  if (typeof site.publishedAt !== "string" || site.publishedAt.trim() === "") {
+    issues.push(`Published site ${site.slug} is missing publishedAt.`);
+    return;
+  }
+
+  const parsed = new Date(site.publishedAt);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== site.publishedAt) {
+    issues.push(`Published site ${site.slug} has invalid publishedAt.`);
+    return;
+  }
+
+  if (site.publishedAt !== generatedAt) {
+    issues.push(`Published site ${site.slug} publishedAt must match generatedAt.`);
   }
 }
 

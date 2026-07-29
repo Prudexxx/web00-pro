@@ -113,8 +113,7 @@ test("frontend B8 uses one canonical live API config and avoids production secre
   assert.match(runtimeConfig, /apiBaseUrl: "https:\/\/web00-backend-production\.onrender\.com"/);
   assert.equal((combined.match(/https:\/\/web00-backend-production\.onrender\.com/g) || []).length, 1);
   assert.doesNotMatch(combined, /https:\/\/api\.|Authorization|credentials:\s*"include"|document\.cookie|\.env|TODO|TBD/i);
-  assert.doesNotMatch(catalogApi, /localStorage|document\.querySelector/);
-  assert.match(catalogApi, /sessionStorage/);
+  assert.doesNotMatch(catalogApi, /localStorage|sessionStorage|document\.querySelector/);
   assert.doesNotMatch(main, /target="_blank" rel="noopener"(?! noreferrer)/);
 });
 

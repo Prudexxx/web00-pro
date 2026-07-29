@@ -18,6 +18,11 @@ import type {
   CreateAdminSiteInput,
   UpdateAdminSiteInput
 } from "./site.types.js";
+import {
+  reportSiteCreateDraftFailure,
+  type SiteCreateDraftDiagnostics,
+  type SiteCreateDraftStage
+} from "./site-create-observability.js";
 
 export interface AdminSiteRepository {
   createDraft(input: CreateAdminSiteInput, context: AdminMutationContext): Promise<AdminSiteRecord>;
@@ -80,15 +85,26 @@ const siteSelect = {
 } satisfies Prisma.SiteSelect;
 
 export function createPrismaAdminSiteRepository(
-  options: { prisma: PrismaClient }
+  options: { diagnostics?: SiteCreateDraftDiagnostics; prisma: PrismaClient }
 ): AdminSiteRepository {
   const prisma = options.prisma;
 
   return {
     async createDraft(input, context) {
+      let stage: SiteCreateDraftStage = "CATEGORY_LOOKUP_STARTED";
+      let transactionCallbackCompleted = false;
+      const startedAt = Date.now();
+      const setStage = (nextStage: SiteCreateDraftStage): void => {
+        stage = nextStage;
+      };
+
       try {
-        return await prisma.$transaction(async (tx) => {
+        const site = await prisma.$transaction(async (tx) => {
+          setStage("CATEGORY_LOOKUP_STARTED");
           await assertCategoryIsActive(tx, input.categoryId);
+          setStage("CATEGORY_LOOKUP_COMPLETED");
+
+          setStage("SITE_INSERT_STARTED");
           const site = await tx.site.create({
             data: {
               active: true,
@@ -122,7 +138,9 @@ export function createPrismaAdminSiteRepository(
             },
             select: siteSelect
           });
+          setStage("SITE_INSERT_COMPLETED");
 
+          setStage("AUDIT_INSERT_STARTED");
           await createSiteAudit(tx, {
             action: "site.create_draft",
             afterJson: siteSnapshot(site),
@@ -130,10 +148,25 @@ export function createPrismaAdminSiteRepository(
             context,
             entityId: site.id
           });
+          setStage("AUDIT_INSERT_COMPLETED");
 
+          setStage("TRANSACTION_COMMIT_PENDING");
+          transactionCallbackCompleted = true;
           return site as AdminSiteRecord;
         });
+
+        setStage("REQUEST_COMPLETED");
+
+        return site;
       } catch (error) {
+        reportSiteCreateDraftFailure(options.diagnostics, {
+          elapsedMs: Date.now() - startedAt,
+          error,
+          requestId: context.requestId,
+          stage,
+          transactionCallbackCompleted
+        });
+
         if (isUniqueConflict(error)) {
           throw slugConflict();
         }

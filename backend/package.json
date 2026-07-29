@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "node --import tsx src/server.ts",
-    "build": "npm run prisma:generate && tsc -p tsconfig.build.json",
+    "build": "npm run prisma:generate && tsc -p tsconfig.build.json && node scripts/copy-admin-assets.mjs",
     "start": "node dist/server.js",
     "admin:bootstrap": "node dist/cli/admin-bootstrap.command.js",
     "storage:bootstrap": "node dist/cli/storage-bootstrap.command.js",
@@ -39,6 +39,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "8.6.0",
+    "helmet": "8.3.0",
     "jose": "6.2.3",
     "pg": "^8.22.0",
     "sharp": "0.35.3",

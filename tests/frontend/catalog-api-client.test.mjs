@@ -65,7 +65,7 @@ test("loadAllSites fetches paginated API pages with safe request options", async
   assert.equal(fetch.calls[0].init.headers, undefined);
 });
 
-test("valid empty API result uses static catalog fallback with explicit source state", async () => {
+test("valid empty API result stays empty without static catalog fallback", async () => {
   const fetch = createFakeFetch(() => jsonResponse({
     data: [],
     meta: { page: 1, limit: 20, total: 0, totalPages: 0 },
@@ -85,12 +85,12 @@ test("valid empty API result uses static catalog fallback with explicit source s
 
   const pageResult = await catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(pageResult.source, "API_EMPTY_FALLBACK");
-  assert.equal(pageResult.lifecycle, "fallback");
-  assert.equal(pageResult.errorCode, "WEB00_API_EMPTY");
-  assert.equal(pageResult.staticFallbackActive, true);
+  assert.equal(pageResult.source, "api");
+  assert.equal(pageResult.lifecycle, "empty");
+  assert.equal(pageResult.errorCode, "");
+  assert.equal(pageResult.staticFallbackActive, false);
   assert.equal(pageResult.apiAvailable, true);
-  assert.deepEqual(plain(pageResult.items.map((item) => item.slug)), ["static-site"]);
+  assert.deepEqual(plain(pageResult.items), []);
 });
 
 test("API client rejects unsafe envelopes and duplicate slugs", async () => {
@@ -156,7 +156,7 @@ test("invalid runtime config disables API and keeps static mode safe", async () 
     apiBaseUrl: "",
     apiEnabled: false,
     requestTimeoutMs: 8000,
-    staticFallbackEnabled: true,
+    staticFallbackEnabled: false,
     valid: false,
   });
 
@@ -168,7 +168,7 @@ test("invalid runtime config disables API and keeps static mode safe", async () 
   assert.equal(fetch.calls.length, 0);
 });
 
-test("configured API failure uses static fallback only when enabled", async () => {
+test("configured API failure returns a fatal API state even when static data exists", async () => {
   const failingFetch = createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 }));
   const enabled = await loadCatalog({
     fetch: failingFetch,
@@ -178,10 +178,10 @@ test("configured API failure uses static fallback only when enabled", async () =
 
   const fallback = await enabled.catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(fallback.source, "static-fallback");
-  assert.equal(fallback.lifecycle, "fallback");
-  assert.equal(fallback.staticFallbackActive, true);
-  assert.equal(fallback.items[0].slug, "static-site");
+  assert.equal(fallback.source, "api");
+  assert.equal(fallback.lifecycle, "fatal");
+  assert.equal(fallback.staticFallbackActive, false);
+  assert.deepEqual(plain(fallback.items), []);
 
   const disabled = await loadCatalog({
     fetch: createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 })),
@@ -197,9 +197,13 @@ test("configured API failure uses static fallback only when enabled", async () =
   assert.equal(fatal.items.length, 0);
 });
 
-test("successful API page result is cached in sessionStorage", async () => {
-  const fetch = createFakeFetch(() => jsonResponse({
-    data: [{ slug: "cached-site", title: "Cached", category: { slug: "goods", title: "Goods" } }],
+test("successful API page result is fetched fresh on repeated resolution", async () => {
+  const fetch = createFakeFetch((_url, _init, callNumber) => jsonResponse({
+    data: [{
+      slug: callNumber === 1 ? "fresh-one" : "fresh-two",
+      title: callNumber === 1 ? "Fresh One" : "Fresh Two",
+      category: { slug: "goods", title: "Goods" }
+    }],
     meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
   }));
   const { catalog } = await loadCatalog({
@@ -212,10 +216,11 @@ test("successful API page result is cached in sessionStorage", async () => {
 
   assert.equal(first.source, "api");
   assert.equal(first.lifecycle, "ready");
-  assert.equal(second.source, "api-cache");
+  assert.equal(second.source, "api");
   assert.equal(second.lifecycle, "ready");
-  assert.deepEqual(plain(second.items.map((item) => item.slug)), ["cached-site"]);
-  assert.equal(fetch.calls.length, 1);
+  assert.deepEqual(plain(first.items.map((item) => item.slug)), ["fresh-one"]);
+  assert.deepEqual(plain(second.items.map((item) => item.slug)), ["fresh-two"]);
+  assert.equal(fetch.calls.length, 2);
 });
 
 test("configured API failure without valid static data resolves fatal state", async () => {
@@ -235,7 +240,7 @@ test("configured API failure without valid static data resolves fatal state", as
   assert.equal(result.items.length, 0);
 });
 
-test("API timeout uses static fallback and reports timeout code", async () => {
+test("API timeout reports fatal API state without static fallback", async () => {
   const fetch = createFakeFetch((_url, init) => new Promise((_resolve, reject) => {
     init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
   }));
@@ -247,10 +252,10 @@ test("API timeout uses static fallback and reports timeout code", async () => {
 
   const result = await catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(result.source, "static-fallback");
-  assert.equal(result.lifecycle, "fallback");
+  assert.equal(result.source, "api");
+  assert.equal(result.lifecycle, "fatal");
   assert.equal(result.errorCode, "WEB00_API_TIMEOUT");
-  assert.equal(result.staticFallbackActive, true);
+  assert.equal(result.staticFallbackActive, false);
   assert.equal(fetch.calls.length, 1);
 });
 

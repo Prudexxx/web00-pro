@@ -36,6 +36,7 @@ import { createPrismaAdminUserRepository } from "./modules/admin/users/user.repo
 import { createAdminUserService } from "./modules/admin/users/user.service.js";
 import { createSiteImageService } from "./modules/admin/images/site-image.service.js";
 import { createPrismaSiteImageRepository } from "./modules/admin/images/site-image.repository.js";
+import { createAdminUiRouter } from "./modules/admin-ui/admin-ui.routes.js";
 import { createAssetUploadCoordinator } from "./modules/images/asset-upload-coordinator.js";
 import { createManagedImageUrlPolicy } from "./modules/images/image-paths.js";
 import { createSharpImageProcessor } from "./modules/images/image-processor.js";
@@ -142,7 +143,15 @@ export function startServer(options: StartServerOptions): StartedServer {
       repository: createPrismaAdminCategoryRepository({ prisma })
     }),
     siteService: createAdminSiteService({
-      repository: createPrismaAdminSiteRepository({ prisma })
+      repository: createPrismaAdminSiteRepository({
+        diagnostics: {
+          environment: options.env.NODE_ENV,
+          logger,
+          now: options.now ?? (() => new Date()),
+          service: options.env.SERVICE_NAME
+        },
+        prisma
+      })
     }),
     imageParser: createBusboyMultipartImageParser(),
     imageService: createSiteImageService({
@@ -168,8 +177,13 @@ export function startServer(options: StartServerOptions): StartedServer {
       ? adminRouterOptions
       : { ...adminRouterOptions, now: options.now }
   );
+  const adminUiRoutes = createAdminUiRouter({
+    nodeEnv: options.env.NODE_ENV,
+    storagePublicOrigin: new URL(options.storageConfig.publicBaseUrl).origin
+  });
   const createAppOptions = {
     adminRoutes,
+    adminUiRoutes,
     authRoutes,
     env: options.env,
     logger,
