@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Client } from "pg";
 import { describe, expect, it } from "vitest";
 import { withTestClient } from "./test-database.js";
@@ -24,6 +26,30 @@ const requiredCheckConstraints = [
   "storage_cleanup_jobs_attempts_non_negative_check",
   "audit_logs_entity_type_check"
 ];
+const canonicalSlugs = [
+  "site-custom",
+  "mebel",
+  "odezhda",
+  "doma-bani",
+  "medicina",
+  "narko-medicine",
+  "uslugi",
+  "cleaning",
+  "advokat",
+  "krovlya",
+  "digital-projects",
+  "ruberoid-roof",
+  "rental-house",
+  "massage",
+  "drova"
+];
+const publishCanonicalMigrationPath = join(
+  process.cwd(),
+  "prisma",
+  "migrations",
+  "20260729120000_publish_canonical_catalog",
+  "migration.sql"
+);
 
 describe("B2 PostgreSQL migration", () => {
   it("creates the six approved B0 tables", async () => {
@@ -339,6 +365,88 @@ describe("B2 PostgreSQL migration", () => {
 
         expect(sessions.rows[0]?.count).toBe("0");
         expect(auditLogs.rows[0]?.actor_user_id).toBeNull();
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+    });
+  });
+});
+
+describe("canonical catalog publish migration", () => {
+  it("publishes exactly 15 eligible canonical draft rows and leaves the owner test clone untouched", async () => {
+    const migrationSql = readFileSync(publishCanonicalMigrationPath, "utf8");
+
+    await withTestClient(async (client) => {
+      await client.query("BEGIN");
+
+      try {
+        const categoryId = await createCategory(client, `canonical-publish-${randomUUID()}`);
+
+        await client.query("DELETE FROM sites WHERE slug = ANY($1::text[])", [
+          [...canonicalSlugs, "drova-test-copy-20260729"]
+        ]);
+        for (const slug of canonicalSlugs) {
+          await client.query(
+            `
+              INSERT INTO sites (slug, title, category_id, short_description, status, active, published_at, deleted_at, updated_at)
+              VALUES ($1, $2, $3, $4, 'draft', true, NULL, NULL, now())
+            `,
+            [slug, `Canonical ${slug}`, categoryId, "Canonical short"]
+          );
+        }
+        await client.query(
+          `
+            INSERT INTO sites (slug, title, category_id, short_description, status, active, published_at, deleted_at, updated_at)
+            VALUES ('drova-test-copy-20260729', 'Owner clone', $1, 'Clone short', 'draft', true, NULL, NULL, now())
+          `,
+          [categoryId]
+        );
+
+        await client.query(migrationSql);
+
+        const canonical = await client.query<{ count: string }>(
+          `
+            SELECT count(*)
+            FROM sites
+            WHERE slug = ANY($1::text[])
+              AND status = 'published'
+              AND active = true
+              AND published_at IS NOT NULL
+              AND deleted_at IS NULL
+          `,
+          [canonicalSlugs]
+        );
+        const clone = await client.query<{ status: string; published_at: Date | null }>(
+          "SELECT status, published_at FROM sites WHERE slug = 'drova-test-copy-20260729'"
+        );
+
+        expect(canonical.rows[0]?.count).toBe("15");
+        expect(clone.rows[0]).toEqual({ status: "draft", published_at: null });
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+    });
+  });
+
+  it("rejects partial canonical promotion counts instead of leaving a half-published catalog", async () => {
+    const migrationSql = readFileSync(publishCanonicalMigrationPath, "utf8");
+
+    await withTestClient(async (client) => {
+      await client.query("BEGIN");
+
+      try {
+        const categoryId = await createCategory(client, `canonical-partial-${randomUUID()}`);
+
+        await client.query("DELETE FROM sites WHERE slug = ANY($1::text[])", [canonicalSlugs]);
+        await client.query(
+          `
+            INSERT INTO sites (slug, title, category_id, short_description, status, active, published_at, deleted_at, updated_at)
+            VALUES ('mebel', 'Canonical mebel', $1, 'Canonical short', 'draft', true, NULL, NULL, now())
+          `,
+          [categoryId]
+        );
+
+        await expect(client.query(migrationSql)).rejects.toThrow(/Expected to publish either 0 or 15 canonical sites/);
       } finally {
         await client.query("ROLLBACK").catch(() => undefined);
       }

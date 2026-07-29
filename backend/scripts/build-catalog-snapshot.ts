@@ -69,7 +69,7 @@ export interface CatalogSnapshotSite {
   siteUrl: string | null;
   slug: string;
   sortOrder: number;
-  status: "draft";
+  status: "draft" | "published";
   tags: string[];
   title: string;
   views: number;
@@ -94,6 +94,7 @@ const categoryOrder = [
   "realty",
   "delivery"
 ];
+const SNAPSHOT_GENERATED_AT = "2026-07-24T00:00:00.000Z";
 
 export function parseLegacyCatalogSource(sourceText: string): LegacyCatalogData {
   const sourceFile = ts.createSourceFile(
@@ -131,7 +132,7 @@ export function buildCatalogSnapshot(options: {
 
   return {
     categories,
-    generatedAt: "2026-07-24T00:00:00.000Z",
+    generatedAt: SNAPSHOT_GENERATED_AT,
     sites,
     sourceCommit: options.sourceCommit,
     sourceFile: "assets/js/data.js",
@@ -321,12 +322,12 @@ function buildSite(
     previewType: solution.previewType ?? null,
     priceAmountCents: null,
     priceLabel: solution.priceFrom ?? null,
-    publishedAt: null,
+    publishedAt: SNAPSHOT_GENERATED_AT,
     shortDescription: solution.description,
     siteUrl: null,
     slug: solution.id,
     sortOrder,
-    status: "draft",
+    status: "published",
     tags: [],
     title: solution.title,
     views: 0

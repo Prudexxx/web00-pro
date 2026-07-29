@@ -44,12 +44,12 @@ function createSnapshot(): CatalogSnapshot {
         previewType: "goods",
         priceAmountCents: null,
         priceLabel: "Стоимость после анкеты",
-        publishedAt: null,
+        publishedAt: "2026-07-24T00:00:00.000Z",
         shortDescription: "Описание",
         siteUrl: null,
         slug: "mebel",
         sortOrder: 20,
-        status: "draft",
+        status: "published",
         tags: [],
         title: "Мебельный магазин",
         views: 0
@@ -106,6 +106,21 @@ describe("catalog snapshot verifier", () => {
 
     expect(validateCatalogSnapshot(snapshot, { repositoryRoot: mkdtempSync(join(tmpdir(), "web00-empty-")), sourceSha256: "hash" })).toContain(
       "Missing image path: assets/img/previews/mebel-home.png."
+    );
+  });
+
+  it("rejects published snapshot sites without a deterministic publishedAt value", () => {
+    const snapshot = createSnapshot();
+    const site = snapshot.sites[0];
+
+    if (site === undefined) {
+      throw new Error("Expected snapshot fixture.");
+    }
+
+    site.publishedAt = null;
+
+    expect(validateCatalogSnapshot(snapshot, { repositoryRoot: createImageRoot(), sourceSha256: "hash" })).toContain(
+      "Published site mebel is missing publishedAt."
     );
   });
 });

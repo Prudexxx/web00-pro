@@ -35,6 +35,16 @@ describe("WEB00 catalog seed", () => {
 
     await expect(prisma.category.count()).resolves.toBe(7);
     await expect(prisma.site.count()).resolves.toBe(15);
+    await expect(
+      prisma.site.count({
+        where: {
+          active: true,
+          deletedAt: null,
+          publishedAt: { not: null },
+          status: "published"
+        }
+      })
+    ).resolves.toBe(15);
     expect(result.summary).toEqual({
       categories: { conflicts: 0, created: 7, unchanged: 0 },
       sites: { conflicts: 0, created: 15, unchanged: 0 }
@@ -72,6 +82,34 @@ describe("WEB00 catalog seed", () => {
     ]);
     expect(result.summary.sites.conflicts).toBe(1);
     expect(site.title).toBe("Owner edited title");
+  });
+
+  it("does not republish or reactivate a soft-deleted canonical site on repeated seed", async () => {
+    await seedWeb00Catalog(prisma, snapshot);
+    await prisma.site.update({
+      data: {
+        active: false,
+        deletedAt: new Date("2026-07-29T00:00:00.000Z"),
+        publishedAt: null,
+        status: "draft"
+      },
+      where: { slug: "drova" }
+    });
+
+    const result = await seedWeb00Catalog(prisma, snapshot);
+    const site = await prisma.site.findUniqueOrThrow({ where: { slug: "drova" } });
+
+    expect(result.conflicts).toEqual([
+      {
+        fields: ["status", "active", "publishedAt"],
+        slug: "drova",
+        type: "site"
+      }
+    ]);
+    expect(site.status).toBe("draft");
+    expect(site.active).toBe(false);
+    expect(site.deletedAt).not.toBeNull();
+    expect(site.publishedAt).toBeNull();
   });
 
   it("never deletes extra category or site records", async () => {

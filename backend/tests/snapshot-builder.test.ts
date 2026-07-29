@@ -65,8 +65,9 @@ describe("catalog snapshot builder", () => {
           url: "assets/img/solution-gallery/mebel-01.png"
         }
       ],
+      publishedAt: "2026-07-24T00:00:00.000Z",
       slug: "mebel",
-      status: "draft"
+      status: "published"
     });
   });
 
