@@ -41,7 +41,7 @@ describe("admin UI final security audit", () => {
     expect(audit).not.toMatch(/method:\s*["'`](POST|PATCH|DELETE)["'`]/);
   });
 
-  it("keeps multipart uploads free of manual Content-Type and automatic replay", () => {
+  it("keeps multipart uploads free of manual Content-Type and unsafe replay loops", () => {
     const apiClient = readFileSync(path.join(ADMIN_SRC, "assets", "api-client.js"), "utf8");
     const imageManager = readFileSync(path.join(ADMIN_SRC, "assets", "screens", "image-manager.js"), "utf8");
     const multipartBlock = apiClient.slice(
@@ -51,7 +51,9 @@ describe("admin UI final security audit", () => {
 
     expect(multipartBlock).not.toContain("Content-Type");
     expect(imageManager).not.toContain("Content-Type");
-    expect(apiClient).not.toMatch(/requestMultipart\([^)]*,\s*true/);
+    expect(apiClient).toMatch(/async function requestMultipart\(path, requestOptions = \{\}, replayed = false\)/);
+    expect(apiClient).toMatch(/isAuthExpiredResponse\(response, body\)[\s\S]+requestOptions\.auth !== false[\s\S]+!replayed/);
+    expect(apiClient.match(/return requestMultipart\(path, requestOptions, true\);/g)).toHaveLength(1);
     expect(multipartBlock).not.toMatch(/\breplayed\b/);
   });
 });
