@@ -167,6 +167,7 @@ describe("admin sites list screen", () => {
           return Promise.resolve({
             data: [
               siteFixture({
+                active: false,
                 deletedAt: "2026-07-28T18:36:00.000Z",
                 slug: CLEANUP_SITE_SLUG,
                 title: "Temporary deleted cleanup site"
@@ -223,8 +224,12 @@ describe("admin sites list screen", () => {
     expect(screen.element.textContent).toContain(CLEANUP_SITE_SLUG);
     expect(screen.element.textContent).not.toContain("Original active draft row");
     expect(screen.element.textContent).not.toContain("drova");
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "restore")).toHaveLength(1);
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "permanent-delete")).toHaveLength(1);
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "soft-delete")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "publish")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "unpublish")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-action", "manage-images")).toHaveLength(0);
   });
 });
 
