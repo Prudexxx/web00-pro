@@ -883,10 +883,10 @@
       "categorySlug": "delivery",
       "deliveryLabel": "от 2 дней",
       "demoLocalUrl": null,
-      "demoMode": "external-iframe",
-      "demoUrl": "https://www.xn--80adfgo7anlsu.xn--p1ai/",
+      "demoMode": "none",
+      "demoUrl": "",
       "developmentDays": null,
-      "externalDemoUrl": "https://www.xn--80adfgo7anlsu.xn--p1ai/",
+      "externalDemoUrl": null,
       "featured": false,
       "features": [
         "Ассортимент",
@@ -922,7 +922,7 @@
         }
       ],
       "legacyTitle": "Доставка и продажа дров",
-      "originalDemoUrl": "https://www.xn--80adfgo7anlsu.xn--p1ai/",
+      "originalDemoUrl": null,
       "previewImageUrl": "assets/img/previews/drova-home.png",
       "previewType": "delivery",
       "priceAmountCents": null,
@@ -941,5 +941,5 @@
   "sourceCommit": "f74e4d72ad178baee74cfc859a391fe5570f0179",
   "sourceFile": "assets/js/data.js",
   "sourceRepository": "https://github.com/Prudexxx/web00-pro.git",
-  "sourceSha256": "fe7fe6dda6ca19c89a29821132c23703ac245fb21eb38eb1042e1bc053dfaf39"
+  "sourceSha256": "ff3d3ac7d64e12dc613f7ede6c1b4f2146fd90ce516fca6dc0e6f0fc92a68d4e"
 }
