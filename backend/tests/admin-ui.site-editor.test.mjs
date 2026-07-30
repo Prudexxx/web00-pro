@@ -10,6 +10,9 @@ describe("admin site editor screen", () => {
         if (requestPath === "/api/admin/categories?limit=100&page=1") {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
         if (requestPath === "/api/admin/sites") {
           return Promise.resolve({
             data: {
@@ -22,17 +25,27 @@ describe("admin site editor screen", () => {
       })
     };
     const onSaved = vi.fn();
+    const onImages = vi.fn();
     const screen = createSiteEditorScreen({
       apiClient,
       documentRef,
       mode: "create",
       onCancel: vi.fn(),
+      onImages,
       onSaved,
       onStatus: vi.fn(),
       role: "editor"
     });
 
     await screen.load();
+    const advanced = screen.element.querySelector('[data-section="advanced-site-settings"]');
+    expect(advanced.tagName).toBe("details");
+    expect(advanced.getAttribute("open")).toBeNull();
+    expect(screen.element.textContent).toContain("Адрес карточки");
+    expect(screen.element.textContent).toContain("Создаётся автоматически. Менять обычно не нужно.");
+    expect(screen.element.textContent).toContain("Цена, ₽");
+    expect(screen.element.textContent).not.toContain("Цена в копейках");
+
     const demoMode = screen.element.querySelector('[name="demoMode"]');
     expect(demoMode.tagName).toBe("select");
     expect(demoMode.getAttribute("type")).toBeNull();
@@ -41,49 +54,84 @@ describe("admin site editor screen", () => {
       "none",
       "external-iframe"
     ]);
+    expect(screen.element.querySelector('[name="demoUrlSimple"]')).not.toBeNull();
 
     setValue(screen.element, "title", " Новый сайт ");
-    setValue(screen.element, "slug", " New-Site ");
+    expect(screen.element.querySelector('[name="slug"]').value).toBe("novyi-sait");
     setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
     setValue(screen.element, "shortDescription", " Short ");
     setValue(screen.element, "demoMode", "external-iframe");
+    setValue(screen.element, "demoUrlSimple", "https://demo.example.test/new");
     setValue(screen.element, "features", "Fast\n\nSafe");
     setValue(screen.element, "tags", "cms\nadmin");
-    setValue(screen.element, "sortOrder", "0");
+    setValue(screen.element, "priceRubles", "15 000,50");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
     await waitFor(() => onSaved.mock.calls.length === 1);
+    expect(screen.element.textContent).toContain("Черновик сохранён");
+    expect(screen.element.textContent).toContain("Перейти к изображениям");
+    expect(screen.element.querySelector("form")).toBeNull();
+    screen.element.querySelector('[data-action="manage-images"]').dispatchEvent(fakeEvent("click"));
+    expect(onImages).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000101");
 
     expect(apiClient.requestJson.mock.calls[0][0]).toBe("/api/admin/categories?limit=100&page=1");
-    expect(apiClient.requestJson.mock.calls[1]).toEqual([
+    expect(apiClient.requestJson.mock.calls[1][0]).toBe("/api/ready");
+    expect(apiClient.requestJson.mock.calls[2]).toEqual([
       "/api/admin/sites",
       expect.objectContaining({
         body: {
           categoryId: "00000000-0000-4000-8000-000000000001",
           deliveryLabel: null,
-          demoLocalUrl: null,
           demoMode: "external-iframe",
-          demoUrl: null,
+          demoUrl: "https://demo.example.test/new",
           developmentDays: null,
-          externalDemoUrl: null,
+          externalDemoUrl: "https://demo.example.test/new",
           features: ["Fast", "Safe"],
           fullDescription: null,
-          legacyTitle: null,
-          originalDemoUrl: null,
-          previewType: null,
-          priceAmountCents: null,
+          originalDemoUrl: "https://demo.example.test/new",
+          priceAmountCents: 1500050,
           priceLabel: null,
           shortDescription: "Short",
-          siteUrl: null,
-          slug: "new-site",
-          sortOrder: 0,
+          slug: "novyi-sait",
           tags: ["cms", "admin"],
           title: "Новый сайт"
         },
         method: "POST"
       })
     ]);
-    expect(apiClient.requestJson.mock.calls[1][1].body).not.toHaveProperty("status");
-    expect(apiClient.requestJson.mock.calls[1][1].body).not.toHaveProperty("previewImageUrl");
+    expect(apiClient.requestJson.mock.calls[2][1].body).not.toHaveProperty("status");
+    expect(apiClient.requestJson.mock.calls[2][1].body).not.toHaveProperty("previewImageUrl");
+  });
+
+  it("stops slug auto-generation after manual edits and regenerates on demand", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Магазин одежды — тест");
+    expect(screen.element.querySelector('[name="slug"]').value).toBe("magazin-odezhdy-test");
+
+    setValue(screen.element, "slug", "manual-slug");
+    setValue(screen.element, "title", "Сайт салона красоты");
+    expect(screen.element.querySelector('[name="slug"]').value).toBe("manual-slug");
+
+    screen.element.querySelector('[data-action="regenerate-slug"]').dispatchEvent(fakeEvent("click"));
+    expect(screen.element.querySelector('[name="slug"]').value).toBe("sait-salona-krasoty");
   });
 
   it("displays existing null demo mode as the approved none option", async () => {
@@ -127,6 +175,9 @@ describe("admin site editor screen", () => {
         if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
           return Promise.resolve({ data: siteFixture() });
         }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
         if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "PATCH") {
           return Promise.resolve({ data: { ...siteFixture(), ...options.body } });
         }
@@ -148,6 +199,7 @@ describe("admin site editor screen", () => {
     await screen.load();
     expect(screen.element.querySelector('[name="slug"]')).toBeNull();
     expect(screen.element.querySelector('[name="featured"]')).toBeNull();
+    expect(screen.element.querySelector('[name="priceRubles"]').value).toBe("");
 
     setValue(screen.element, "title", "Editor title");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
@@ -185,6 +237,7 @@ describe("admin site editor screen", () => {
     });
 
     await screen.load();
+    screen.element.querySelector('[data-section="advanced-site-settings"]').setAttribute("open", "");
     setValue(screen.element, "slug", "admin-slug");
     const featured = screen.element.querySelector('[name="featured"]');
     featured.checked = true;
@@ -205,6 +258,9 @@ describe("admin site editor screen", () => {
       requestJson: vi.fn((requestPath) => {
         if (requestPath.startsWith("/api/admin/categories")) {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
         }
         saveCalls += 1;
         return Promise.reject({
@@ -230,10 +286,10 @@ describe("admin site editor screen", () => {
     setValue(screen.element, "title", "Saved title");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
     await flushPromises();
-    expect(screen.element.textContent).toContain("Slug is required.");
+    expect(screen.element.textContent).toContain("Short Description is required.");
     expect(screen.element.querySelector('[name="title"]').value).toBe("Saved title");
 
-    setValue(screen.element, "slug", "conflict");
+    setValue(screen.element, "title", "Conflict");
     setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
     setValue(screen.element, "shortDescription", "Short");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
@@ -241,8 +297,9 @@ describe("admin site editor screen", () => {
     await waitFor(() => screen.element.textContent.includes("req_conflict"));
 
     expect(saveCalls).toBe(1);
-    expect(screen.element.textContent).toContain("Slug already exists.");
-    expect(screen.element.querySelector('[name="title"]').value).toBe("Saved title");
+    expect(screen.element.textContent).toContain("Адрес карточки уже занят.");
+    expect(screen.element.textContent).not.toContain("Slug already exists.");
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Conflict");
 
     screen.element.querySelector('[data-action="cancel-editor"]').dispatchEvent(fakeEvent("click"));
     expect(onCancel).toHaveBeenCalledTimes(1);
@@ -254,6 +311,9 @@ describe("admin site editor screen", () => {
       requestJson: vi.fn((requestPath) => {
         if (requestPath.startsWith("/api/admin/categories")) {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
         }
         return Promise.reject({
           code: "VALIDATION_ERROR",
@@ -299,7 +359,7 @@ describe("admin site editor screen", () => {
         }
         return Promise.reject({
           code: "VALIDATION_ERROR",
-          details: [{ message: "Must be at most 2147483647.", path: "priceAmountCents" }],
+          details: [{ message: "Цена слишком большая для сохранения.", path: "priceRubles" }],
           message: "Invalid request.",
           requestId: "req_price_overflow"
         });
@@ -317,19 +377,188 @@ describe("admin site editor screen", () => {
 
     await screen.load();
     setValue(screen.element, "title", "Saved title");
-    setValue(screen.element, "slug", "price-overflow");
     setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
     setValue(screen.element, "shortDescription", "Short");
-    setValue(screen.element, "priceAmountCents", "2147483648");
+    setValue(screen.element, "priceRubles", "21474836,48");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
-    await waitFor(() => screen.element.textContent.includes("Must be at most 2147483647."));
+    await waitFor(() => screen.element.textContent.includes("Цена слишком большая для сохранения."));
 
-    const price = screen.element.querySelector('[name="priceAmountCents"]');
+    const price = screen.element.querySelector('[name="priceRubles"]');
     expect(price.focused).toBe(true);
-    expect(price.value).toBe("2147483648");
-    expect(screen.element.textContent).toContain("Must be at most 2147483647.");
+    expect(price.value).toBe("21474836,48");
+    expect(screen.element.textContent).toContain("Цена слишком большая для сохранения.");
     expect(screen.element.querySelector('[name="title"]').value).toBe("Saved title");
     expect(apiClient.requestJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("autosaves form drafts, restores them on demand, and clears only after successful save", async () => {
+    const documentRef = createFakeDocument();
+    const storage = createMemoryStorage();
+    const windowRef = createFakeWindow();
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({ data: { id: "00000000-0000-4000-8000-000000000202", ...options.body } });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      draftAutosaveMs: 1,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      storage,
+      windowRef
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Черновик формы");
+    await waitFor(() => storage.setItem.mock.calls.length > 0);
+    const blockedUnload = fakeEvent("beforeunload");
+    windowRef.dispatchEvent(blockedUnload);
+    expect(blockedUnload.defaultPrevented).toBe(true);
+    expect(blockedUnload.returnValue).toBe("");
+
+    const [draftKey, draftText] = storage.setItem.mock.calls.at(-1);
+    expect(draftKey).toContain("web00_admin_site_form_draft_v1");
+    expect(draftText).toContain("Черновик формы");
+    expect(draftText).not.toMatch(/accessToken|Authorization|cookie|password|token/i);
+
+    const restored = createSiteEditorScreen({
+      apiClient: {
+        requestJson: vi.fn((requestPath) => {
+          if (requestPath.startsWith("/api/admin/categories")) {
+            return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+          }
+          throw new Error(`Unexpected path ${requestPath}`);
+        })
+      },
+      documentRef: createFakeDocument(),
+      draftAutosaveMs: 1,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      storage
+    });
+
+    await restored.load();
+    expect(restored.element.textContent).toContain("Найдены несохранённые данные. Восстановить?");
+    restored.element.querySelector('[data-action="restore-site-draft"]').dispatchEvent(fakeEvent("click"));
+    expect(restored.element.querySelector('[name="title"]').value).toBe("Черновик формы");
+
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => storage.removeItem.mock.calls.length > 0);
+    const allowedUnload = fakeEvent("beforeunload");
+    windowRef.dispatchEvent(allowedUnload);
+    expect(allowedUnload.defaultPrevented).toBe(false);
+  });
+
+  it("verifies a network-failed create by exact slug before allowing retry", async () => {
+    const documentRef = createFakeDocument();
+    const onSaved = vi.fn();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.reject({ code: "NETWORK_ERROR", message: "Unable to reach the server.", status: 0 });
+        }
+        if (requestPath === "/api/admin/sites?search=magazin-odezhdy-test&deleted=without") {
+          return Promise.resolve({
+            data: [siteFixture({
+              id: "00000000-0000-4000-8000-000000000303",
+              slug: "magazin-odezhdy-test",
+              title: "Магазин одежды — тест"
+            })],
+            meta: metaFixture(1)
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Магазин одежды — тест");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => onSaved.mock.calls.length === 1);
+
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+    expect(requests.some((request) => request.requestPath.includes("search=magazin-odezhdy-test"))).toBe(true);
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({
+      slug: "magazin-odezhdy-test"
+    }));
+    expect(screen.element.textContent).toContain("Перейти к изображениям");
+    expect(screen.element.querySelector("form")).toBeNull();
+  });
+
+  it("keeps local form data and does not submit while the browser reports offline", async () => {
+    const documentRef = createFakeDocument();
+    const windowRef = createFakeWindow();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      windowRef
+    });
+
+    await screen.load();
+    windowRef.dispatchEvent(fakeEvent("offline"));
+    setValue(screen.element, "title", "Offline title");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await flushPromises();
+
+    expect(screen.element.textContent).toContain("Соединение нестабильно. Форма сохранена локально.");
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Offline title");
+    expect(apiClient.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      "/api/admin/categories?limit=100&page=1"
+    ]);
   });
 });
 
@@ -337,6 +566,8 @@ function setValue(root, name, value) {
   const input = root.querySelector(`[name="${name}"]`);
   expect(input).not.toBeNull();
   input.value = value;
+  input.dispatchEvent(fakeEvent("input"));
+  input.dispatchEvent(fakeEvent("change"));
 }
 
 function categoryFixture() {
@@ -432,9 +663,14 @@ class FakeElement {
   }
 
   dispatchEvent(event) {
-    event.target = this;
+    if (event.target === null || event.target === undefined) {
+      event.target = this;
+    }
     for (const listener of this.listeners.get(event.type) ?? []) {
       listener.call(this, event);
+    }
+    if (!event.defaultPrevented && event.bubbles !== false && this.parentNode?.dispatchEvent !== undefined) {
+      this.parentNode.dispatchEvent(event);
     }
     return !event.defaultPrevented;
   }
@@ -445,6 +681,10 @@ class FakeElement {
 
   getAttribute(name) {
     return this.attributes.get(name) ?? null;
+  }
+
+  hasAttribute(name) {
+    return this.attributes.has(name);
   }
 
   querySelector(selector) {
@@ -485,6 +725,11 @@ class FakeElement {
     if (name === "name") this.name = String(value);
     if (name === "type") this.type = String(value);
     if (name === "value") this.value = String(value);
+  }
+
+  removeAttribute(name) {
+    this.attributes.delete(name);
+    if (name === "disabled") this.disabled = false;
   }
 
   get textContent() {
@@ -533,4 +778,42 @@ async function waitFor(predicate) {
 async function flushPromises() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function createMemoryStorage() {
+  const values = new Map();
+
+  return {
+    getItem: vi.fn((key) => values.get(key) ?? null),
+    removeItem: vi.fn((key) => {
+      values.delete(key);
+    }),
+    setItem: vi.fn((key, value) => {
+      values.set(key, String(value));
+    })
+  };
+}
+
+function createFakeWindow() {
+  const listeners = new Map();
+
+  return {
+    addEventListener(type, listener) {
+      const items = listeners.get(type) ?? [];
+      items.push(listener);
+      listeners.set(type, items);
+    },
+    dispatchEvent(event) {
+      for (const listener of listeners.get(event.type) ?? []) {
+        listener.call(this, event);
+      }
+    },
+    removeEventListener(type, listener) {
+      const items = listeners.get(type) ?? [];
+      listeners.set(type, items.filter((item) => item !== listener));
+    },
+    navigator: {
+      onLine: true
+    }
+  };
 }

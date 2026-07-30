@@ -183,7 +183,7 @@ export function createPrismaAdminSiteRepository(
       return site as AdminSiteRecord | null;
     },
     async listSites(query, includeDeleted) {
-      const where = createListWhere(query, includeDeleted);
+      const where = createAdminSiteListWhere(query, includeDeleted);
       const orderBy = [
         { [query.sort]: query.direction },
         { id: query.direction }
@@ -411,7 +411,7 @@ async function lifecycleUpdate(
   });
 }
 
-function createListWhere(
+export function createAdminSiteListWhere(
   query: AdminSiteListQuery,
   includeDeleted: boolean
 ): Prisma.SiteWhereInput {
@@ -432,7 +432,8 @@ function createListWhere(
       : {
           OR: [
             { title: { contains: query.search, mode: "insensitive" } },
-            { shortDescription: { contains: query.search, mode: "insensitive" } }
+            { shortDescription: { contains: query.search, mode: "insensitive" } },
+            { slug: { contains: query.search, mode: "insensitive" } }
           ]
         })
   };

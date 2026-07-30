@@ -44,6 +44,7 @@ const ALLOWED_ATTRIBUTES = new Set([
   "class",
   "disabled",
   "for",
+  "hidden",
   "href",
   "id",
   "inputmode",

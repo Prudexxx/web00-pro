@@ -40,13 +40,16 @@ describe("admin UI browser form constraints", () => {
     expectTextLimit(screen.element, "deliveryLabel", "80");
     expectTextLimit(screen.element, "priceLabel", "80");
     expectSelectOptions(screen.element, "demoMode", ["none", "external-iframe"]);
+    expectTextLimit(screen.element, "demoUrlSimple", "2048");
     expectTextLimit(screen.element, "previewType", "40");
+    expect(screen.element.querySelector('[data-section="advanced-site-settings"]').tagName).toBe("details");
+    expect(screen.element.querySelector('[data-section="advanced-site-settings"]').getAttribute("open")).toBeNull();
     for (const name of ["demoUrl", "demoLocalUrl", "externalDemoUrl", "originalDemoUrl", "siteUrl"]) {
       expectTextLimit(screen.element, name, "2048");
     }
     expectItemLimit(screen.element, "features", "160", "30");
     expectItemLimit(screen.element, "tags", "80", "30");
-    expectNumeric(screen.element, "priceAmountCents", { inputmode: "numeric", step: "1" });
+    expectDecimalMoney(screen.element, "priceRubles");
     expectNumeric(screen.element, "developmentDays", { inputmode: "numeric", step: "1" });
     expectNumeric(screen.element, "sortOrder", { inputmode: "numeric", min: "0", step: "1" });
   });
@@ -175,6 +178,13 @@ function expectNumeric(root, name, expected) {
   if (expected.max !== undefined) {
     expect(control.getAttribute("max")).toBe(expected.max);
   }
+}
+
+function expectDecimalMoney(root, name) {
+  const control = field(root, name);
+  expect(control.getAttribute("type")).toBe("text");
+  expect(control.getAttribute("inputmode")).toBe("decimal");
+  expect(control.getAttribute("maxlength")).toBe("20");
 }
 
 function expectSelectOptions(root, name, values) {

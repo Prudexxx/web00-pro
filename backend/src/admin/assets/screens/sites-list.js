@@ -69,6 +69,11 @@ const LIFECYCLE_ACTIONS = {
     success: "Сайт удалён навсегда."
   }
 };
+const LIFECYCLE_ERROR_MESSAGES = Object.freeze({
+  SITE_NOT_DRAFT: "Опубликовать можно только черновик.",
+  SITE_NOT_PUBLISHED: "Снять с публикации можно только опубликованную карточку.",
+  SITE_PREVIEW_REQUIRED: "Перед публикацией добавьте preview-изображение."
+});
 
 export function createSitesListScreen(options) {
   const documentRef = options?.documentRef ?? document;
@@ -685,7 +690,11 @@ function validateUuid(value, label) {
   return value;
 }
 
-function lifecycleErrorMessage(error) {
+export function lifecycleErrorMessage(error) {
+  if (typeof error?.code === "string" && LIFECYCLE_ERROR_MESSAGES[error.code] !== undefined) {
+    return LIFECYCLE_ERROR_MESSAGES[error.code];
+  }
+
   return [
     typeof error?.code === "string" ? error.code : null,
     typeof error?.message === "string" ? error.message : "Не удалось выполнить действие."

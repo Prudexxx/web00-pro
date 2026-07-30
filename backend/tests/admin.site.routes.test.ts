@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { AppError } from "../src/lib/errors.js";
 import { requestIdMiddleware } from "../src/lib/request-id.js";
 import { errorHandler } from "../src/middleware/error-handler.js";
 import { createAdminSiteRouter } from "../src/modules/admin/sites/site.routes.js";
@@ -73,6 +74,69 @@ describe("admin site route validation", () => {
       });
       expect(service.createDraft).not.toHaveBeenCalled();
     }
+  });
+
+  it("returns field validation before create service for invalid URLs", async () => {
+    const service = createSiteService();
+    const response = await request(createApp(service))
+      .post("/api/admin/sites")
+      .send({
+        ...validCreatePayload(),
+        demoUrl: "javascript:alert(1)"
+      })
+      .expect(400);
+
+    expect(response.body.error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [
+        {
+          path: "demoUrl"
+        }
+      ]
+    });
+    expect(service.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("returns conflict without leaking raw database details for duplicate slug", async () => {
+    const service = createSiteService();
+
+    vi.mocked(service.createDraft).mockRejectedValue(new AppError({
+      code: "SLUG_CONFLICT",
+      message: "Slug already exists.",
+      statusCode: 409
+    }));
+
+    const response = await request(createApp(service))
+      .post("/api/admin/sites")
+      .send(validCreatePayload())
+      .expect(409);
+
+    expect(response.body.error).toMatchObject({
+      code: "SLUG_CONFLICT",
+      message: "Slug already exists."
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/duplicate key|sites_slug_key|SQL|valid-site/i);
+  });
+
+  it("returns safe internal error with requestId for unknown database failures", async () => {
+    const service = createSiteService();
+
+    vi.mocked(service.createDraft).mockRejectedValue(new Error(
+      "INSERT INTO sites VALUES ('secret-title', 'https://private.example.test') failed"
+    ));
+
+    const response = await request(createApp(service))
+      .post("/api/admin/sites")
+      .set("X-Request-Id", "req_unknown_db")
+      .send(validCreatePayload())
+      .expect(500);
+
+    expect(response.body.error).toEqual({
+      code: "INTERNAL_ERROR",
+      message: "Internal server error.",
+      requestId: "req_unknown_db"
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/INSERT|secret-title|private\.example|valid-site/i);
   });
 });
 
