@@ -8,6 +8,7 @@ import { createImageManagerScreen } from "./screens/image-manager.js";
 import { createSiteEditorScreen } from "./screens/site-editor.js";
 import { createSitesListScreen } from "./screens/sites-list.js";
 import { createUsersScreen } from "./screens/users.js";
+import { createRequestIdControl } from "./dom.js";
 
 const ADMIN_READY_PATH = "/api/ready";
 const ADMIN_READY_TIMEOUT_MS = ADMIN_REQUEST_TIMEOUTS.readinessTotal;
@@ -290,9 +291,8 @@ export async function bootstrapAdminApp(options = {}) {
   try {
     const user = await api.bootstrapSession();
     showShell(user);
-  } catch {
-    authStore.clear();
-    showLogin();
+  } catch (error) {
+    handleBootstrapFailure(error);
   }
 
   return appHandle();
@@ -349,9 +349,8 @@ export async function bootstrapAdminApp(options = {}) {
       try {
         const user = await api.bootstrapSession();
         showShell(user);
-      } catch {
-        authStore.clear();
-        showLogin();
+      } catch (error) {
+        handleBootstrapFailure(error);
       }
     });
 
@@ -366,6 +365,57 @@ export async function bootstrapAdminApp(options = {}) {
     );
     root.focus();
   }
+
+  function showBootstrapDiagnostic(error) {
+    abortScreenRequests();
+    destroyCurrentScreen();
+    shellElement = null;
+    currentUser = null;
+    const retryButton = element(documentRef, "button", {
+      "data-action": "retry-readiness",
+      type: "button"
+    }, ["Повторить проверку"]);
+    const children = [
+      element(documentRef, "p", { class: "admin-kicker" }, ["WEB00"]),
+      element(documentRef, "h1", {}, ["Панель временно недоступна"]),
+      element(documentRef, "p", {}, ["Не удалось завершить запуск панели. Передайте requestId разработчику."])
+    ];
+
+    if (typeof error?.requestId === "string" && error.requestId.length > 0) {
+      children.push(createRequestIdControl(error.requestId, { documentRef }));
+    }
+
+    retryButton.addEventListener("click", async () => {
+      showReadinessWait();
+      try {
+        await markBackendReady({ force: true, visible: false });
+        const user = await api.bootstrapSession();
+        showShell(user);
+      } catch (nextError) {
+        handleBootstrapFailure(nextError);
+      }
+    });
+    children.push(retryButton);
+
+    root.replaceChildren(
+      element(documentRef, "section", { class: "admin-bootstrap admin-bootstrap-error" }, children)
+    );
+    root.focus();
+  }
+
+  function handleBootstrapFailure(error) {
+    authStore.clear();
+    if (isBootstrapNetworkFailure(error)) {
+      showReadinessUnavailable(error);
+      return;
+    }
+    if (isBootstrapUnauthenticated(error)) {
+      showLogin();
+      return;
+    }
+
+    showBootstrapDiagnostic(error);
+  }
 }
 
 export async function waitForAdminBackendReady(api, options = {}) {
@@ -375,26 +425,32 @@ export async function waitForAdminBackendReady(api, options = {}) {
   const startedAt = Date.now();
   let lastError = null;
 
-  do {
+  while (true) {
+    const elapsedMs = Date.now() - startedAt;
+    const remainingMs = timeoutMs - elapsedMs;
+
+    if (remainingMs <= 0) {
+      throw lastError ?? readinessTimeoutError();
+    }
+
     try {
-      const elapsedMs = Date.now() - startedAt;
-      const remainingMs = Math.max(0, timeoutMs - elapsedMs);
+      const nextAttemptTimeoutMs = Math.min(attemptTimeoutMs, remainingMs);
       await api.requestJson(ADMIN_READY_PATH, {
         auth: false,
         method: "GET",
-        timeoutMs: Math.max(1, Math.min(attemptTimeoutMs, remainingMs || attemptTimeoutMs))
+        timeoutMs: Math.max(1, nextAttemptTimeoutMs)
       });
       return true;
     } catch (error) {
       lastError = error;
-      if (Date.now() - startedAt >= timeoutMs) {
+      const nextElapsedMs = Date.now() - startedAt;
+      const nextRemainingMs = timeoutMs - nextElapsedMs;
+      if (nextRemainingMs <= 0) {
         throw error;
       }
-      await wait(Math.min(retryMs, Math.max(0, timeoutMs - (Date.now() - startedAt))));
+      await wait(Math.min(retryMs, Math.max(0, nextRemainingMs)));
     }
-  } while (Date.now() - startedAt <= timeoutMs);
-
-  throw lastError ?? new Error("Backend readiness timed out.");
+  }
 }
 
 export async function logoutAdminSession({ abortController, api, authStore, destroyCurrentScreen, showLogin }) {
@@ -446,6 +502,27 @@ function readinessFailureMessage(error) {
   }
 
   return "Панель не будет входить в систему, пока backend не ответит.";
+}
+
+function isBootstrapNetworkFailure(error) {
+  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT" || error?.status === 0;
+}
+
+function isBootstrapUnauthenticated(error) {
+  const code = String(error?.code ?? "");
+
+  return error?.status === 401 ||
+    code === "UNAUTHORIZED" ||
+    code === "REFRESH_REQUIRED" ||
+    code.startsWith("REFRESH_");
+}
+
+function readinessTimeoutError() {
+  const error = new Error("Backend readiness timed out.");
+  error.code = "REQUEST_TIMEOUT";
+  error.status = 0;
+
+  return error;
 }
 
 function element(documentRef, tagName, attributes = {}, children = []) {

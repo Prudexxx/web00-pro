@@ -99,6 +99,63 @@ describe("admin site create durable idempotency", () => {
     expect(calls.siteCreate).toHaveBeenCalledTimes(2);
     expect(calls.auditCreate).toHaveBeenCalledTimes(1);
   });
+
+  it("serializes concurrent same-operation create calls through the advisory-lock contract", async () => {
+    const { calls, gates, repository } = createLockedRepository();
+
+    const first = repository.createDraft(validInput(), context);
+    await waitForPredicate(() => calls.siteCreate.mock.calls.length === 1);
+
+    const second = repository.createDraft(validInput(), context);
+    await gates.secondLockEntered.promise;
+    await flushPromises();
+
+    expect(calls.auditFindFirst).toHaveBeenCalledTimes(1);
+    expect(calls.siteCreate).toHaveBeenCalledTimes(1);
+    expect(calls.auditCreate).not.toHaveBeenCalled();
+
+    gates.firstCreateCanComplete.resolve();
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(secondResult).toEqual(firstResult);
+    expect(calls.queryRaw).toHaveBeenCalledTimes(2);
+    expect(calls.auditFindFirst).toHaveBeenCalledTimes(2);
+    expect(calls.siteCreate).toHaveBeenCalledTimes(1);
+    expect(calls.auditCreate).toHaveBeenCalledTimes(1);
+    expect(calls.siteFindUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes concurrent reused-key create calls and rejects the second different payload", async () => {
+    const { calls, gates, repository } = createLockedRepository();
+
+    const first = repository.createDraft(validInput(), context);
+    await waitForPredicate(() => calls.siteCreate.mock.calls.length === 1);
+
+    const second = repository.createDraft({
+      ...validInput(),
+      title: "Different concurrent payload"
+    }, context);
+    await gates.secondLockEntered.promise;
+    await flushPromises();
+
+    expect(calls.auditFindFirst).toHaveBeenCalledTimes(1);
+    expect(calls.siteCreate).toHaveBeenCalledTimes(1);
+
+    gates.firstCreateCanComplete.resolve();
+
+    await expect(first).resolves.toMatchObject({
+      slug: "site-create-idempotency"
+    });
+    await expect(second).rejects.toMatchObject({
+      code: "IDEMPOTENCY_KEY_REUSED",
+      statusCode: 409
+    });
+
+    expect(calls.auditFindFirst).toHaveBeenCalledTimes(2);
+    expect(calls.siteCreate).toHaveBeenCalledTimes(1);
+    expect(calls.auditCreate).toHaveBeenCalledTimes(1);
+  });
 });
 
 function createStatefulRepository(options: { failFirstSiteCreate?: boolean } = {}) {
@@ -170,6 +227,95 @@ function createStatefulRepository(options: { failFirstSiteCreate?: boolean } = {
   };
 }
 
+function createLockedRepository() {
+  const state = {
+    audits: [] as Array<Record<string, unknown>>,
+    sites: new Map<string, AdminSiteRecord>()
+  };
+  const calls = {
+    auditCreate: vi.fn(),
+    auditFindFirst: vi.fn(),
+    categoryFindUnique: vi.fn(),
+    queryRaw: vi.fn(),
+    siteCreate: vi.fn(),
+    siteFindUnique: vi.fn()
+  };
+  const gates = {
+    firstCreateCanComplete: createDeferred<void>(),
+    secondLockEntered: createDeferred<void>()
+  };
+  let lockHeld = false;
+  const lockWaiters: Array<() => void> = [];
+  const releaseLock = (): void => {
+    lockHeld = false;
+    while (lockWaiters.length > 0) {
+      lockWaiters.shift()?.();
+    }
+  };
+  const acquireLock = async (): Promise<unknown[]> => {
+    if (!lockHeld) {
+      lockHeld = true;
+      return [{ pg_advisory_xact_lock: "" }];
+    }
+
+    gates.secondLockEntered.resolve();
+    await new Promise<void>((resolve) => {
+      lockWaiters.push(resolve);
+    });
+    lockHeld = true;
+
+    return [{ pg_advisory_xact_lock: "" }];
+  };
+  const tx = {
+    $queryRaw: calls.queryRaw.mockImplementation(acquireLock),
+    auditLog: {
+      create: calls.auditCreate.mockImplementation(async ({ data }) => {
+        state.audits.push({ ...data });
+        releaseLock();
+        return data;
+      }),
+      findFirst: calls.auditFindFirst.mockImplementation(async ({ where }) => (
+        state.audits.find((audit) => (
+          audit.actorUserId === where.actorUserId &&
+          audit.requestId === where.requestId &&
+          audit.action === where.action &&
+          audit.entityType === where.entityType
+        )) ?? null
+      ))
+    },
+    category: {
+      findUnique: calls.categoryFindUnique.mockResolvedValue({ active: true })
+    },
+    site: {
+      create: calls.siteCreate.mockImplementation(async ({ data }) => {
+        if (calls.siteCreate.mock.calls.length === 1) {
+          await gates.firstCreateCanComplete.promise;
+        }
+
+        const site = siteRecord({
+          ...data,
+          id: `33333333-3333-4333-8333-${String(state.sites.size + 1).padStart(12, "0")}`
+        });
+        state.sites.set(site.id, site);
+        return site;
+      }),
+      findUnique: calls.siteFindUnique.mockImplementation(async ({ where }) => (
+        state.sites.get(where.id) ?? null
+      ))
+    }
+  };
+  const prisma = {
+    $transaction: vi.fn(async (operation: (transaction: typeof tx) => Promise<unknown>) => operation(tx))
+  };
+
+  return {
+    calls,
+    gates,
+    repository: createPrismaAdminSiteRepository({ prisma: prisma as never }),
+    state
+  };
+}
+
 function validInput(): CreateAdminSiteInput {
   return {
     categoryId: "11111111-1111-4111-8111-111111111111",
@@ -226,4 +372,35 @@ function siteRecord(overrides: Partial<AdminSiteRecord> & Record<string, unknown
     updatedAt: new Date("2026-07-30T00:00:00.000Z"),
     views: 0
   };
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return {
+    promise,
+    reject,
+    resolve
+  };
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+async function waitForPredicate(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await flushPromises();
+  }
+
+  throw new Error("Timed out waiting for repository concurrency test.");
 }

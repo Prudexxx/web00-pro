@@ -19,6 +19,11 @@ Login also performs a readiness preflight when the previous readiness result is
 stale. Keep-warm remains limited to authenticated visible online admin tabs and
 stops on logout/destroy.
 
+After readiness succeeds, bootstrap failures are separated by cause:
+missing/rejected refresh session shows login, network/timeout keeps the backend
+unavailable retry screen, and unexpected server failure shows a controlled
+diagnostic screen with requestId when available.
+
 ## Timeout Model
 
 Admin requests use an AbortController-based timeout helper that combines an
@@ -32,6 +37,9 @@ Budgets:
 - readiness attempt: 15 seconds
 - readiness total: 90 seconds
 - multipart upload: 120 seconds
+
+The readiness total budget is strict. Attempts receive only the remaining
+budget, and no new readiness fetch starts after the budget is exhausted.
 
 Normalized client errors:
 
@@ -48,6 +56,7 @@ draft immediately on:
 - `pagehide`
 - browser offline
 - internal dirty cancel/back
+- screen destroy/internal navigation while dirty
 
 The draft stores fields, mode, siteId, updatedAt, stable create
 `clientRequestId`, and whether image files had been selected. It does not store
@@ -69,6 +78,15 @@ operation. The backend implements durable replay without schema changes:
 - missing replay site returns `409 IDEMPOTENCY_REPLAY_UNAVAILABLE`.
 
 Existing duplicate slug behavior remains `409 SLUG_CONFLICT`.
+
+Client operation IDs are `req_<uuid-v4>`. UUID generation prefers
+`crypto.randomUUID()` and falls back to `crypto.getRandomValues()` with v4
+version/variant bits. There is no `Math.random` fallback.
+
+The concurrency regression test for create idempotency is a deterministic
+repository contract test with a controllable advisory-lock queue. It verifies
+the repository ordering contract and is not reported as a PostgreSQL
+integration test.
 
 ## Safe Create Retry
 
@@ -106,6 +124,8 @@ successful/failed images, requestId when available, and actions:
 - `К списку`
 
 Retry uploads only failed/not-completed images and never repeats create POST.
+Preview retry reuses the original preview `clientFileId`; gallery retry keeps
+the existing failed-file `clientFileId` mapping.
 
 ## Safety Boundaries
 

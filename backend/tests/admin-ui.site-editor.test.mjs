@@ -307,6 +307,66 @@ describe("admin site editor screen", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("classifies only SLUG_CONFLICT as an address conflict", async () => {
+    for (const scenario of [
+      {
+        code: "IDEMPOTENCY_KEY_REUSED",
+        expected: "Эта операция уже использована с другими данными.",
+        message: "Операция сохранения уже использована с другими данными."
+      },
+      {
+        code: "IDEMPOTENCY_REPLAY_UNAVAILABLE",
+        expected: "Не удалось восстановить результат предыдущего сохранения.",
+        message: "Не удалось восстановить результат предыдущего сохранения."
+      },
+      {
+        code: "SITE_PREVIEW_REQUIRED",
+        expected: "Preview required before publish.",
+        message: "Preview required before publish."
+      }
+    ]) {
+      const documentRef = createFakeDocument();
+      const apiClient = {
+        requestJson: vi.fn((requestPath) => {
+          if (requestPath.startsWith("/api/admin/categories")) {
+            return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+          }
+          if (requestPath === "/api/ready") {
+            return Promise.resolve({ status: "ready" });
+          }
+          return Promise.reject({
+            code: scenario.code,
+            details: [],
+            message: scenario.message,
+            requestId: `req_${scenario.code.toLowerCase()}`,
+            status: 409
+          });
+        })
+      };
+      const screen = createSiteEditorScreen({
+        apiClient,
+        documentRef,
+        mode: "create",
+        onCancel: vi.fn(),
+        onSaved: vi.fn(),
+        onStatus: vi.fn(),
+        role: "editor"
+      });
+
+      await screen.load();
+      setValue(screen.element, "title", "Conflict shape");
+      setValue(screen.element, "slug", "conflict-shape");
+      setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+      setValue(screen.element, "shortDescription", "Short");
+      screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+      await waitFor(() => screen.element.textContent.includes(`req_${scenario.code.toLowerCase()}`));
+
+      expect(screen.element.textContent).toContain(scenario.expected);
+      expect(screen.element.textContent).not.toContain("Адрес карточки уже занят");
+      expect(screen.element.querySelector('[name="slug"]').focused).not.toBe(true);
+    }
+  });
+
   it("binds demo mode API validation errors to the select without clearing the form", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {
@@ -628,6 +688,86 @@ describe("admin site editor screen", () => {
     expect(windowRef.listenerCount("offline")).toBe(0);
   });
 
+  it("persists the latest dirty draft synchronously when the screen is destroyed", async () => {
+    const documentRef = createFakeDocument();
+    const storage = createMemoryStorage();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      draftAutosaveMs: 1000,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      storage
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Latest value before navigation");
+    screen.destroy();
+
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+    const draft = JSON.parse(storage.setItem.mock.calls[0][1]);
+    expect(draft.fields.title).toBe("Latest value before navigation");
+  });
+
+  it("does not recreate a local draft when a saved screen is destroyed", async () => {
+    const documentRef = createFakeDocument();
+    const storage = createMemoryStorage();
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000909",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      draftAutosaveMs: 1000,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      storage
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Saved no recreate");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => storage.removeItem.mock.calls.length === 1);
+
+    storage.setItem.mockClear();
+    screen.destroy();
+
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
   it("reuses one stable X-Request-Id for a safe timeout retry before exact slug verification", async () => {
     const documentRef = createFakeDocument();
     const requests = [];
@@ -919,7 +1059,20 @@ describe("admin site editor screen", () => {
 
     screen.element.querySelector('[data-action="retry-image-upload"]').dispatchEvent(fakeEvent("click"));
     await waitFor(() => previewAttempts === 2);
+    await waitFor(() => requests.filter((request) => request.requestPath.endsWith("/images/gallery/batch")).length === 2);
 
+    const previewRequests = requests.filter((request) => request.requestPath.endsWith("/images/preview"));
+    expect(previewRequests).toHaveLength(2);
+    expect(previewRequests[0].options.body.get("clientFileId")).toBe("00000000-0000-4000-8000-000000000301");
+    expect(previewRequests[1].options.body.get("clientFileId")).toBe(previewRequests[0].options.body.get("clientFileId"));
+
+    const galleryRequests = requests.filter((request) => request.requestPath.endsWith("/images/gallery/batch"));
+    expect(JSON.parse(galleryRequests[1].options.body.get("metadata"))).toEqual([
+      {
+        alt: "",
+        clientFileId: "00000000-0000-4000-8000-000000000402"
+      }
+    ]);
     expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
   });
 });

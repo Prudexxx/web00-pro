@@ -1,3 +1,5 @@
+import { isStableClientRequestId } from "./random-id.js";
+
 export const SITE_FORM_DRAFT_KEY_PREFIX = "web00_admin_site_form_draft_v1";
 
 const SECRET_FIELD_PATTERN = /token|authorization|cookie|password|secret|jwt/i;
@@ -95,7 +97,7 @@ function isValidDraft(input) {
 }
 
 function sanitizeClientRequestId(value) {
-  return typeof value === "string" && /^req_[0-9a-f-]{36}$/i.test(value) ? value : null;
+  return isStableClientRequestId(value) ? value : null;
 }
 
 function isStorageLike(storage) {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_STATES } from "../src/admin/assets/auth-store.js";
-import { bootstrapAdminApp } from "../src/admin/assets/main.js";
+import { bootstrapAdminApp, waitForAdminBackendReady } from "../src/admin/assets/main.js";
 import { createLoginView } from "../src/admin/assets/screens/login.js";
 import { createAuthenticatedShell } from "../src/admin/assets/screens/shell.js";
 
@@ -186,7 +186,7 @@ describe("admin auth shell", () => {
       enableReadinessCheck: true,
       fetchImpl,
       readinessRetryMs: 0,
-      readinessTimeoutMs: 0,
+      readinessTimeoutMs: 1,
       root
     });
 
@@ -199,6 +199,149 @@ describe("admin auth shell", () => {
     await flushPromises();
 
     expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(2);
+  });
+
+  it("keeps the readiness total budget strict and does not start a new attempt at zero remaining time", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    const timeline = [
+      1_000,
+      1_000,
+      1_000,
+      1_030,
+      1_030,
+      1_030,
+      1_031
+    ];
+    nowSpy.mockImplementation(() => timeline.shift() ?? 1_031);
+    const api = {
+      requestJson: vi.fn((_path, options = {}) => {
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        return Promise.reject({
+          code: "REQUEST_TIMEOUT",
+          message: "Сервер не ответил вовремя.",
+          status: 0
+        });
+      })
+    };
+
+    await expect(waitForAdminBackendReady(api, {
+      readinessAttemptTimeoutMs: 100,
+      readinessRetryMs: 0,
+      readinessTimeoutMs: 30
+    })).rejects.toMatchObject({
+      code: "REQUEST_TIMEOUT"
+    });
+
+    expect(api.requestJson).toHaveBeenCalledTimes(1);
+    expect(api.requestJson.mock.calls[0][1].timeoutMs).toBeLessThanOrEqual(30);
+
+    nowSpy.mockRestore();
+  });
+
+  it("shows login after readiness when bootstrap has no active authenticated session", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(401, {
+          error: {
+            code: "REFRESH_REQUIRED",
+            message: "Refresh token is required.",
+            requestId: "req_no_session"
+          }
+        }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      root
+    });
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/ready",
+      "/api/auth/refresh"
+    ]);
+    expect(root.textContent).toContain("Вход");
+    expect(root.textContent).not.toContain("Backend пока недоступен");
+  });
+
+  it("keeps bootstrap network failures on the backend unavailable screen instead of showing login", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      root
+    });
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/ready",
+      "/api/auth/refresh"
+    ]);
+    expect(root.textContent).toContain("Backend пока недоступен");
+    expect(root.textContent).toContain("Введённые данные не потеряны");
+    expect(root.textContent).not.toContain("Вход");
+  });
+
+  it("shows a controlled diagnostic screen for unknown bootstrap server failures", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(500, {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "Prisma stack trace must not be shown.",
+            requestId: "req_bootstrap_500"
+          }
+        }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      root
+    });
+
+    expect(root.textContent).toContain("Панель временно недоступна");
+    expect(root.textContent).toContain("Передайте requestId разработчику.");
+    expect(root.textContent).toContain("req_bootstrap_500");
+    expect(root.textContent).toContain("Скопировать requestId");
+    expect(root.textContent).not.toContain("Prisma stack trace");
+    expect(root.textContent).not.toContain("Вход");
   });
 
   it("runs a readiness preflight before login when readiness is stale", async () => {
@@ -381,6 +524,40 @@ describe("admin auth shell", () => {
     expect(consoleError).not.toHaveBeenCalled();
     expect(root.textContent).toContain("editor@example.test");
     expect(root.textContent).not.toContain("secret-password");
+  });
+
+  it("keeps login values after a network failure and does not show a wrong-password error", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(401, {
+          error: {
+            code: "REFRESH_REQUIRED",
+            message: "Refresh token is required.",
+            requestId: "req_refresh_required"
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/login") {
+        return Promise.reject(new TypeError("Failed to fetch"));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({ documentRef, fetchImpl, root });
+    const emailInput = root.querySelector("[name=email]");
+    const passwordInput = root.querySelector("[name=password]");
+
+    emailInput.value = "editor@example.test";
+    passwordInput.value = "still-needed-password";
+    root.querySelector("form").dispatchEvent(createFakeEvent("submit"));
+    await waitFor(() => root.textContent.includes("Не удалось связаться с сервером."));
+
+    expect(emailInput.value).toBe("editor@example.test");
+    expect(passwordInput.value).toBe("still-needed-password");
+    expect(root.textContent).not.toContain("Почта или пароль указаны неверно.");
   });
 
   it("keeps editor navigation away from admin-only and mutation actions", () => {

@@ -1,3 +1,5 @@
+import { createRandomUuid } from "./random-id.js";
+
 export const IMAGE_UPLOAD_LIMITS = Object.freeze({
   batchBytes: 30 * 1024 * 1024,
   batchFiles: 10,
@@ -168,13 +170,7 @@ export function selectedNames(files) {
   return Array.from(files ?? []).map((file) => file.name).join(", ");
 }
 
-export function createRandomUuid() {
-  if (globalThis.crypto !== undefined && typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-
-  throw new Error("Browser UUID support is required.");
-}
+export { createRandomUuid };
 
 export function validateUuid(value, label) {
   if (typeof value !== "string" || !UUID_PATTERN.test(value)) {

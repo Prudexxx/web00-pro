@@ -12,6 +12,11 @@ shows a dedicated retry screen: `Backend пока недоступен`,
 `Введённые данные не потеряны`, and `Повторить проверку`. This state is distinct
 from an unauthenticated session or a login error.
 
+After readiness succeeds, auth bootstrap failures are classified separately:
+missing or rejected refresh session shows login, network/timeout failure returns
+to the backend unavailable screen, and unexpected server failure shows a
+controlled diagnostic screen with requestId when available.
+
 Login submission also performs a readiness preflight when readiness is stale.
 
 ## 2. Controlled Request Timeouts
@@ -28,6 +33,10 @@ Default budgets:
 - total readiness budget: 90 seconds;
 - multipart upload: 120 seconds.
 
+The readiness total budget is strict: each attempt receives only the remaining
+budget, and no new readiness request starts when the remaining budget is zero
+or negative.
+
 Timeout, caller abort, and network failure are normalized separately:
 
 - `REQUEST_TIMEOUT`: `Сервер не ответил вовремя.`
@@ -42,6 +51,11 @@ Normal typing keeps the 1-second debounced autosave. The same local draft is
 written immediately when the page becomes hidden, `pagehide` fires, the browser
 goes offline, or the user presses an internal cancel/back action while the form
 is dirty.
+
+Any screen destruction, including internal navigation away from a dirty editor,
+also synchronously persists the latest form state before timers/listeners are
+removed. After successful save, `dirty=false`, so destroy does not recreate a
+saved draft.
 
 The local draft stores:
 
@@ -66,10 +80,16 @@ tabs may discard local drafts.
 Create uses a stable client-generated logical operation ID:
 
 - generated once when a create form starts;
-- formatted as `req_<uuid>`;
+- formatted as `req_<uuid-v4>`;
 - persisted with the local form draft;
 - reused for retry and recovery of the same logical create;
 - replaced after successful create or explicit draft discard.
+
+UUID generation prefers `crypto.randomUUID()` and falls back to
+`crypto.getRandomValues()` with UUID v4 version/variant bits. There is no
+`Math.random` fallback; without secure browser randomness the UI shows a
+controlled browser capability error and does not start a create/upload with a
+weak ID.
 
 Server-side create idempotency uses existing `audit_logs.request_id`, the
 existing create+audit transaction, and a PostgreSQL transaction advisory lock.
@@ -121,6 +141,15 @@ It preserves:
 
 Retry uploads only failed or not-yet-completed images. Gallery batch retry uses
 clientFileId mapping to avoid uploading successful files twice.
+
+Preview upload retry preserves the preview `clientFileId` generated for the
+original selected preview file, so a timeout retry does not create a different
+logical file operation.
+
+The concurrency regression coverage for idempotency is a deterministic
+repository contract test with a controllable advisory-lock queue. It verifies
+that a second same-key create cannot pass replay detection before the first
+create/audit completes. It is not a PostgreSQL integration test.
 
 ## 7. No Migration And No Tariff Change
 

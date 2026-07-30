@@ -37,6 +37,10 @@ import {
   validateBatch,
   validateImageFile
 } from "../site-image-upload.js";
+import {
+  createRandomUuid,
+  createStableClientRequestId
+} from "../random-id.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
 const READY_PATH = "/api/ready";
@@ -100,7 +104,8 @@ export function createSiteEditorScreen(options) {
   let pendingDraft = null;
   let imageRecoveryNotice = false;
   let imageRetryPlan = null;
-  let clientRequestId = mode === "create" ? createStableClientRequestId() : null;
+  let clientRequestId = null;
+  let clientRequestIdError = null;
   let draftSaveTimer = null;
   let dirty = false;
   let networkOnline = windowRef?.navigator?.onLine !== false;
@@ -146,6 +151,9 @@ export function createSiteEditorScreen(options) {
 
   registerNetworkListeners();
   registerLifecycleListeners();
+  if (mode === "create") {
+    resetClientRequestId();
+  }
 
   async function load() {
     abortActiveRequest();
@@ -179,8 +187,11 @@ export function createSiteEditorScreen(options) {
       pendingDraft = readSiteFormDraft(storage, draftKey);
       if (mode === "create" && typeof pendingDraft?.clientRequestId === "string") {
         clientRequestId = pendingDraft.clientRequestId;
+        clientRequestIdError = null;
       }
-      renderForm({});
+      renderForm(clientRequestIdError === null ? {} : {
+        _form: [safeMessage(clientRequestIdError)]
+      });
       statusRegion.textContent = "Форма готова.";
       onStatus("Форма готова.");
     } catch (error) {
@@ -193,6 +204,7 @@ export function createSiteEditorScreen(options) {
   }
 
   function destroy() {
+    persistCurrentDraftImmediately();
     destroyed = true;
     abortActiveRequest();
     clearDraftSaveTimer();
@@ -388,7 +400,7 @@ export function createSiteEditorScreen(options) {
     return apiClient.requestJson("/api/admin/sites", {
       body: payload,
       headers: {
-        "X-Request-Id": clientRequestId
+        "X-Request-Id": ensureClientRequestId()
       },
       method: "POST"
     });
@@ -434,12 +446,13 @@ export function createSiteEditorScreen(options) {
       setSaveState(form, "uploadingPreview");
       statusRegion.textContent = "Загружаем preview...";
       onStatus("Загружаем preview...");
+      const previewClientFileId = createClientFileId(uuidFactory);
 
       try {
         await apiClient.requestMultipart(buildImagePath(siteIdForUpload, "preview"), {
           body: buildPreviewFormData({
             alt: imageSelection.previewAlt,
-            clientFileId: createClientFileId(uuidFactory),
+            clientFileId: previewClientFileId,
             file: imageSelection.previewFile
           }),
           method: "PUT"
@@ -450,6 +463,7 @@ export function createSiteEditorScreen(options) {
         requestId ??= readRequestId(error);
         retryPlan.preview = {
           alt: imageSelection.previewAlt,
+          clientFileId: previewClientFileId,
           file: imageSelection.previewFile
         };
       }
@@ -652,7 +666,7 @@ export function createSiteEditorScreen(options) {
           await apiClient.requestMultipart(buildImagePath(plan.siteId, "preview"), {
             body: buildPreviewFormData({
               alt: plan.preview.alt,
-              clientFileId: createClientFileId(uuidFactory),
+              clientFileId: plan.preview.clientFileId,
               file: plan.preview.file
             }),
             method: "PUT"
@@ -1216,6 +1230,7 @@ export function createSiteEditorScreen(options) {
               lastFormState = { ...pendingDraft?.fields };
               if (mode === "create" && typeof pendingDraft?.clientRequestId === "string") {
                 clientRequestId = pendingDraft.clientRequestId;
+                clientRequestIdError = null;
               }
               imageRecoveryNotice = pendingDraft?.hadImageSelection === true;
               pendingDraft = null;
@@ -1235,7 +1250,7 @@ export function createSiteEditorScreen(options) {
             click: () => {
               clearDraft();
               if (mode === "create") {
-                clientRequestId = createStableClientRequestId();
+                resetClientRequestId();
               }
               imageRecoveryNotice = false;
               pendingDraft = null;
@@ -1380,6 +1395,29 @@ export function createSiteEditorScreen(options) {
       temporaryClientId: mode === "create" ? "new" : null,
       updatedAt: new Date().toISOString()
     });
+  }
+
+  function resetClientRequestId() {
+    try {
+      clientRequestId = createStableClientRequestId();
+      clientRequestIdError = null;
+    } catch (error) {
+      clientRequestId = null;
+      clientRequestIdError = error;
+    }
+  }
+
+  function ensureClientRequestId() {
+    if (mode !== "create") {
+      return createStableClientRequestId();
+    }
+    if (typeof clientRequestId === "string" && clientRequestId.length > 0) {
+      return clientRequestId;
+    }
+
+    clientRequestId = createStableClientRequestId();
+    clientRequestIdError = null;
+    return clientRequestId;
   }
 
   function clearDraft() {
@@ -1732,6 +1770,9 @@ function sitePath(siteId) {
 }
 
 function safeMessage(error) {
+  if (error?.code === "BROWSER_CRYPTO_UNAVAILABLE") {
+    return "Браузер не может создать безопасный идентификатор операции.";
+  }
   if (error?.code === "REQUEST_TIMEOUT") {
     return "Сервер не ответил вовремя. Данные формы сохранены.";
   }
@@ -1787,7 +1828,7 @@ function isRetryableCreateFailure(error) {
 }
 
 function isSlugConflict(error) {
-  return error?.code === "SLUG_CONFLICT" || error?.status === 409;
+  return error?.code === "SLUG_CONFLICT";
 }
 
 function saveStateForError(error) {
@@ -1806,24 +1847,6 @@ function saveStateForError(error) {
 
 function readRequestId(error) {
   return typeof error?.requestId === "string" && error.requestId.length > 0 ? error.requestId : null;
-}
-
-function createStableClientRequestId() {
-  const random = globalThis.crypto?.randomUUID?.();
-
-  return typeof random === "string"
-    ? `req_${random}`
-    : `req_${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
-}
-
-function createRandomUuid() {
-  const random = globalThis.crypto?.randomUUID?.();
-
-  if (typeof random === "string") {
-    return random;
-  }
-
-  throw new Error("Browser UUID support is required.");
 }
 
 function wait(ms) {
