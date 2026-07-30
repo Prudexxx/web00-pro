@@ -8,6 +8,9 @@ import type {
 } from "./site.types.js";
 
 const slugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const int32Max = 2_147_483_647;
+const int32MaxMessage = "Must be at most 2147483647.";
+const demoModeMessage = "Выберите допустимый режим демо.";
 const slugSchema = z.string().trim().toLowerCase().min(1).max(120).regex(slugPattern);
 const uuidSchema = z.string().uuid();
 const nullableText = (max: number) =>
@@ -15,25 +18,53 @@ const nullableText = (max: number) =>
 const optionalUrl = z.string().trim().url().max(2048).nullable();
 const stringArraySchema = (maxItems: number, maxLength: number) =>
   z.array(z.string().trim().min(1).max(maxLength)).max(maxItems);
+const demoModeSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+
+    const trimmed = value.trim();
+
+    return trimmed.length === 0 ? null : trimmed;
+  },
+  z
+    .custom<"none" | "external-iframe" | null>(
+      (value) => value === null || value === "none" || value === "external-iframe",
+      { message: demoModeMessage }
+    )
+);
 
 const siteMutableFields = {
   categoryId: uuidSchema,
   deliveryLabel: nullableText(80).optional(),
   demoLocalUrl: optionalUrl.optional(),
-  demoMode: nullableText(40).optional(),
+  demoMode: demoModeSchema.optional(),
   demoUrl: optionalUrl.optional(),
-  developmentDays: z.number().int().positive().nullable().optional(),
+  developmentDays: z
+    .number()
+    .int()
+    .positive()
+    .max(int32Max, { message: int32MaxMessage })
+    .nullable()
+    .optional(),
   externalDemoUrl: optionalUrl.optional(),
   features: stringArraySchema(30, 160).optional(),
   fullDescription: nullableText(5000).optional(),
   legacyTitle: nullableText(160).optional(),
   originalDemoUrl: optionalUrl.optional(),
   previewType: nullableText(40).optional(),
-  priceAmountCents: z.number().int().positive().nullable().optional(),
+  priceAmountCents: z
+    .number()
+    .int()
+    .positive()
+    .max(int32Max, { message: int32MaxMessage })
+    .nullable()
+    .optional(),
   priceLabel: nullableText(80).optional(),
   shortDescription: z.string().trim().min(1).max(500),
   siteUrl: optionalUrl.optional(),
-  sortOrder: z.number().int().min(0).optional(),
+  sortOrder: z.number().int().min(0).max(int32Max, { message: int32MaxMessage }).optional(),
   tags: stringArraySchema(30, 80).optional(),
   title: z.string().trim().min(1).max(160)
 } satisfies z.ZodRawShape;
