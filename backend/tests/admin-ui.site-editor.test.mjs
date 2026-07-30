@@ -33,10 +33,20 @@ describe("admin site editor screen", () => {
     });
 
     await screen.load();
+    const demoMode = screen.element.querySelector('[name="demoMode"]');
+    expect(demoMode.tagName).toBe("select");
+    expect(demoMode.getAttribute("type")).toBeNull();
+    expect(demoMode.value).toBe("none");
+    expect(demoMode.querySelectorAll("option").map((option) => option.getAttribute("value"))).toEqual([
+      "none",
+      "external-iframe"
+    ]);
+
     setValue(screen.element, "title", " Новый сайт ");
     setValue(screen.element, "slug", " New-Site ");
     setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
     setValue(screen.element, "shortDescription", " Short ");
+    setValue(screen.element, "demoMode", "external-iframe");
     setValue(screen.element, "features", "Fast\n\nSafe");
     setValue(screen.element, "tags", "cms\nadmin");
     setValue(screen.element, "sortOrder", "0");
@@ -51,7 +61,7 @@ describe("admin site editor screen", () => {
           categoryId: "00000000-0000-4000-8000-000000000001",
           deliveryLabel: null,
           demoLocalUrl: null,
-          demoMode: null,
+          demoMode: "external-iframe",
           demoUrl: null,
           developmentDays: null,
           externalDemoUrl: null,
@@ -74,6 +84,37 @@ describe("admin site editor screen", () => {
     ]);
     expect(apiClient.requestJson.mock.calls[1][1].body).not.toHaveProperty("status");
     expect(apiClient.requestJson.mock.calls[1][1].body).not.toHaveProperty("previewImageUrl");
+  });
+
+  it("displays existing null demo mode as the approved none option", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath === "/api/admin/categories?limit=100&page=1") {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (options.method === "GET") {
+          return Promise.resolve({ data: siteFixture({ demoMode: null }) });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "edit",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+
+    const demoMode = screen.element.querySelector('[name="demoMode"]');
+    expect(demoMode.tagName).toBe("select");
+    expect(demoMode.value).toBe("none");
   });
 
   it("loads edit data and keeps editor patch payloads away from admin-only fields", async () => {
@@ -206,6 +247,90 @@ describe("admin site editor screen", () => {
     screen.element.querySelector('[data-action="cancel-editor"]').dispatchEvent(fakeEvent("click"));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("binds demo mode API validation errors to the select without clearing the form", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        return Promise.reject({
+          code: "VALIDATION_ERROR",
+          details: [{ message: "Выберите допустимый режим демо.", path: "demoMode" }],
+          message: "Invalid request.",
+          requestId: "req_demo_mode"
+        });
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Saved title");
+    setValue(screen.element, "slug", "demo-mode");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setValue(screen.element, "demoMode", "external-iframe");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("req_demo_mode"));
+
+    const demoMode = screen.element.querySelector('[name="demoMode"]');
+    expect(demoMode.tagName).toBe("select");
+    expect(demoMode.value).toBe("external-iframe");
+    expect(demoMode.focused).toBe(true);
+    expect(screen.element.textContent).toContain("Выберите допустимый режим демо.");
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Saved title");
+  });
+
+  it("binds numeric validation errors to the numeric field without clearing the form", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        return Promise.reject({
+          code: "VALIDATION_ERROR",
+          details: [{ message: "Must be at most 2147483647.", path: "priceAmountCents" }],
+          message: "Invalid request.",
+          requestId: "req_price_overflow"
+        });
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Saved title");
+    setValue(screen.element, "slug", "price-overflow");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setValue(screen.element, "priceAmountCents", "2147483648");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Must be at most 2147483647."));
+
+    const price = screen.element.querySelector('[name="priceAmountCents"]');
+    expect(price.focused).toBe(true);
+    expect(price.value).toBe("2147483648");
+    expect(screen.element.textContent).toContain("Must be at most 2147483647.");
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Saved title");
+    expect(apiClient.requestJson).toHaveBeenCalledTimes(1);
+  });
 });
 
 function setValue(root, name, value) {
@@ -222,7 +347,7 @@ function categoryFixture() {
   };
 }
 
-function siteFixture() {
+function siteFixture(overrides = {}) {
   return {
     category: categoryFixture(),
     categoryId: "00000000-0000-4000-8000-000000000001",
@@ -247,7 +372,8 @@ function siteFixture() {
     sortOrder: 0,
     status: "draft",
     tags: ["cms"],
-    title: "CRM Site"
+    title: "CRM Site",
+    ...overrides
   };
 }
 

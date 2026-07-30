@@ -18,6 +18,7 @@ export const SITE_LIMITS = Object.freeze({
   title: 160,
   url: 2048
 });
+export const DB_INT_MAX = 2147483647;
 
 const PROTECTED_SITE_FIELDS = new Set([
   "active",
@@ -121,6 +122,9 @@ export function serializePositiveInteger(value, fieldName) {
   if (number <= 0) {
     throw validationError(fieldName, "Must be a positive integer.");
   }
+  if (number > DB_INT_MAX) {
+    throw validationError(fieldName, `Must be at most ${DB_INT_MAX}.`);
+  }
 
   return number;
 }
@@ -135,7 +139,13 @@ export function serializeNonNegativeInteger(value, fieldName) {
     throw validationError(fieldName, "Must be zero or a positive integer.");
   }
 
-  return Number.parseInt(text, 10);
+  const number = Number.parseInt(text, 10);
+
+  if (number > DB_INT_MAX) {
+    throw validationError(fieldName, `Must be at most ${DB_INT_MAX}.`);
+  }
+
+  return number;
 }
 
 export function serializeStringList(items, options) {

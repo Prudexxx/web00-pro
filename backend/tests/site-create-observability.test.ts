@@ -125,11 +125,11 @@ describe("site create draft observability", () => {
   it("does not include payload, actor, raw error message, or stack data", async () => {
     const siteCreateError = Object.assign(
       new Error(
-        "raw message with secret-site-slug, Secret Site Title, admin@example.com, and category id"
+        "raw DB message with secret-site-slug, Secret Site Title, admin@example.com, https://secret-site.example.test, bearer-token-secret, INSERT INTO sites, and category id"
       ),
       {
         stack:
-          "Error: stack includes secret-site-slug and 11111111-1111-4111-8111-111111111111"
+          "Error: stack includes refresh-token-secret and SQL SELECT * FROM sites WHERE slug = 'secret-site-slug'"
       }
     );
     const { events, repository } = createRepository({ siteCreateError });
@@ -166,6 +166,10 @@ describe("site create draft observability", () => {
     expect(serialized).not.toContain("Secret short description");
     expect(serialized).not.toContain("Secret full description");
     expect(serialized).not.toContain("https://secret-site.example.test");
+    expect(serialized).not.toContain("INSERT INTO");
+    expect(serialized).not.toContain("SELECT * FROM sites");
+    expect(serialized).not.toContain("bearer-token-secret");
+    expect(serialized).not.toContain("refresh-token-secret");
     expect(serialized).not.toContain("admin@example.com");
     expect(serialized).not.toContain("11111111-1111-4111-8111-111111111111");
   });
