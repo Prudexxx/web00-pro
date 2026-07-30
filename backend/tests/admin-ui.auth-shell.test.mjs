@@ -76,10 +76,13 @@ describe("admin auth shell", () => {
     expect(root.textContent).not.toMatch(/регистрац|восстанов|register|reset/i);
   });
 
-  it("checks backend readiness before showing the authenticated shell when enabled", async () => {
+  it("checks backend readiness before auth bootstrap and before showing the authenticated shell when enabled", async () => {
     const documentRef = createFakeDocument();
     const root = documentRef.createElement("main");
     const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
       if (requestPath === "/api/auth/refresh") {
         return Promise.resolve(jsonResponse(200, {
           data: {
@@ -94,9 +97,6 @@ describe("admin auth shell", () => {
             user: safeUser("admin")
           }
         }));
-      }
-      if (requestPath === "/api/ready") {
-        return Promise.resolve(jsonResponse(200, { status: "ready" }));
       }
 
       throw new Error(`Unexpected path ${requestPath}`);
@@ -112,11 +112,11 @@ describe("admin auth shell", () => {
     });
 
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/ready",
       "/api/auth/refresh",
-      "/api/auth/me",
-      "/api/ready"
+      "/api/auth/me"
     ]);
-    expect(readHeader(fetchImpl.mock.calls[2][1], "Authorization")).toBeUndefined();
+    expect(readHeader(fetchImpl.mock.calls[0][1], "Authorization")).toBeUndefined();
     expect(root.textContent).toContain("admin@example.test");
   });
 
@@ -125,6 +125,9 @@ describe("admin auth shell", () => {
     const root = documentRef.createElement("main");
     const ready = createDeferred();
     const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return ready.promise;
+      }
       if (requestPath === "/api/auth/refresh") {
         return Promise.resolve(jsonResponse(200, {
           data: {
@@ -139,9 +142,6 @@ describe("admin auth shell", () => {
             user: safeUser("admin")
           }
         }));
-      }
-      if (requestPath === "/api/ready") {
-        return ready.promise;
       }
 
       throw new Error(`Unexpected path ${requestPath}`);
@@ -160,6 +160,104 @@ describe("admin auth shell", () => {
     ready.resolve(jsonResponse(200, { status: "ready" }));
     await boot;
     expect(root.textContent).toContain("admin@example.test");
+  });
+
+  it("shows a backend unavailable retry screen instead of silently redirecting to login", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(503, {
+          error: {
+            code: "SERVICE_UNAVAILABLE",
+            message: "Backend unavailable.",
+            requestId: "req_ready_timeout"
+          }
+        }));
+      }
+
+      throw new Error(`Auth must not start before readiness, got ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      readinessRetryMs: 0,
+      readinessTimeoutMs: 0,
+      root
+    });
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual(["/api/ready"]);
+    expect(root.textContent).toContain("Backend пока недоступен");
+    expect(root.textContent).toContain("Введённые данные не потеряны");
+    expect(root.textContent).not.toContain("Вход");
+
+    root.querySelector('[data-action="retry-readiness"]').dispatchEvent(createFakeEvent("click"));
+    await flushPromises();
+
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(2);
+  });
+
+  it("runs a readiness preflight before login when readiness is stale", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(401, {
+          error: {
+            code: "REFRESH_REQUIRED",
+            message: "Refresh token is required.",
+            requestId: "req_refresh_required"
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/login") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "login-ready-token",
+            user: safeUser("editor")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: safeUser("editor")
+          }
+        }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      readinessFreshMs: 0,
+      root
+    });
+
+    setValue(root, "email", "editor@example.test");
+    setValue(root, "password", "correct-password");
+    root.querySelector("form").dispatchEvent(createFakeEvent("submit"));
+    await waitFor(() => fetchImpl.mock.calls.some(([url]) => url === "/api/auth/me"));
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/ready",
+      "/api/auth/refresh",
+      "/api/ready",
+      "/api/auth/login",
+      "/api/auth/me"
+    ]);
   });
 
   it("stops visible-tab keep-warm readiness pings after logout", async () => {
@@ -540,6 +638,13 @@ function createFakeEvent(type) {
     target: null,
     type
   };
+}
+
+function setValue(root, name, value) {
+  const input = root.querySelector(`[name="${name}"]`);
+
+  input.value = value;
+  input.dispatchEvent(createFakeEvent("input"));
 }
 
 function createDeferred() {

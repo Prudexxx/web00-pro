@@ -207,5 +207,14 @@ export function slugConflict(): AppError {
 }
 
 export function isUniqueConflict(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError ||
+    (
+      typeof error === "object" &&
+      error !== null &&
+      "name" in error &&
+      "code" in error &&
+      error.name === "PrismaClientKnownRequestError"
+    )
+  ) && (error as { code?: unknown }).code === "P2002";
 }

@@ -111,11 +111,11 @@ describe("admin image manager screen", () => {
     await screen.load();
     setFiles(screen.element, "previewImage", [imageFile("bad.gif", "image/gif", 12)]);
     screen.element.querySelector('[data-action="replace-preview"]').dispatchEvent(fakeEvent("submit"));
-    expect(screen.element.textContent).toContain("JPEG, PNG, WebP или AVIF");
+    expect(screen.element.textContent).toContain("JPEG, PNG, WEBP или AVIF");
 
     setFiles(screen.element, "previewImage", [imageFile("large.png", "image/png", IMAGE_UPLOAD_LIMITS.fileBytes + 1)]);
     screen.element.querySelector('[data-action="replace-preview"]').dispatchEvent(fakeEvent("submit"));
-    expect(screen.element.textContent).toContain("5 MiB");
+    expect(screen.element.textContent).toContain("5 MB");
 
     setFiles(screen.element, "previewImage", [imageFile("ok.avif", "image/avif", 12)]);
     setValue(screen.element, "previewAlt", "x".repeat(161));
@@ -271,7 +271,7 @@ describe("admin image manager screen", () => {
       imageFile(`large-${index}.png`, "image/png", IMAGE_UPLOAD_LIMITS.fileBytes)
     )));
     screen.element.querySelector('[data-action="add-gallery-batch"]').dispatchEvent(fakeEvent("submit"));
-    expect(screen.element.textContent).toContain("30 MiB");
+    expect(screen.element.textContent).toContain("30 MB");
 
     setFiles(screen.element, "galleryImage", [imageFile("ok.png", "image/png", 12)]);
     setValue(screen.element, "galleryAlt", "x".repeat(161));

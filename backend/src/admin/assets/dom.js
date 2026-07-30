@@ -53,6 +53,7 @@ const ALLOWED_ATTRIBUTES = new Set([
   "min",
   "multiple",
   "name",
+  "open",
   "placeholder",
   "required",
   "rows",

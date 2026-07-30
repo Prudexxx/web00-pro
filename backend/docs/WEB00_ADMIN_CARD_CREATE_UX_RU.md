@@ -45,11 +45,22 @@
 
 ### 5. Изображения
 
-- Preview
-- Gallery
+Секция `Изображения — необязательно` доступна прямо в форме создания:
 
-Upload может оставаться отдельным экраном, если текущая архитектура требует
-отдельного image manager после создания карточки.
+- Preview файл
+- Alt для preview
+- Gallery файлы
+- Alt для gallery
+
+Лимиты: JPG, PNG, WEBP, AVIF; 5 MB на файл; gallery batch до 10 файлов и до
+30 MB; gallery максимум 20 изображений.
+
+Если файлы выбраны до сохранения, основной flow остаётся одним действием:
+
+`Сохранить карточку` -> create site -> upload preview -> upload gallery.
+
+Файлы не входят в JSON payload карточки. Они читаются отдельно из File inputs и
+отправляются multipart-запросами только после успешного create.
 
 После успешного создания черновика форма больше не остаётся в режиме create.
 Пользователь видит следующий шаг:
@@ -77,8 +88,14 @@ Upload может оставаться отдельным экраном, есл
 ## Save Recovery
 
 Форма автосохраняет только текущие поля карточки в локальный draft с ключом
-`web00_admin_site_form_draft_v1`. Access tokens, cookies, auth state and other
-secrets must never be stored.
+`web00_admin_site_form_draft_v1`. Draft включает fields, mode, siteId,
+updatedAt и stable `clientRequestId` create-операции. Access tokens, cookies,
+auth state, passwords, JWT, Authorization headers and other secrets must never
+be stored.
+
+Dirty draft writes happen both on the normal 1-second debounce and immediately
+on `visibilitychange` to hidden, `pagehide`, browser offline, and internal
+cancel/back while dirty.
 
 If unsaved data is found after reload or accidental navigation, the admin UI
 shows:
@@ -93,10 +110,20 @@ Available actions:
 After a successful server save, the local draft for the form is removed. After a
 failed save or expired auth, the local draft remains.
 
+File/Blob data and local file paths are never stored. After full reload, text can
+be restored but files must be reselected. The UI says:
+
+`Текст восстановлен. Изображения выберите повторно.`
+
 ## Network Failure Model
 
-After a network failure or request timeout the form stays on screen. The UI does
-not perform a blind repeated POST. It verifies by slug:
+Create uses one stable `X-Request-Id` for the logical operation. After a
+`NETWORK_ERROR` or `REQUEST_TIMEOUT`, the form stays on screen and the UI:
+
+1. preserves form data and selected in-memory files;
+2. checks backend readiness;
+3. retries create exactly once with the same `X-Request-Id`;
+4. if needed, verifies by exact slug:
 
 `GET /api/admin/sites?search=<slug>&deleted=without`
 
@@ -105,16 +132,40 @@ record is opened. If the slug is not found, the UI says:
 
 `Сервер не ответил. Запись не найдена. Можно повторить.`
 
+Retries are not performed for validation errors, auth failures, forbidden
+responses, duplicate slug, reused idempotency key, or ordinary backend 500.
+
+## Partial Image Failure
+
+Site create and image upload are a recoverable saga, not one database/storage
+transaction. If site create succeeds but preview/gallery upload fails, the UI
+does not call the card save failed. It says:
+
+`Карточка сохранена. Часть изображений не загрузилась.`
+
+It keeps the saved site ID, counts successful/failed images, shows requestId
+when available, and provides:
+
+- `Повторить загрузку изображений`
+- `Открыть изображения`
+- `К списку`
+
+Retry uploads only failed/not-completed images and never repeats create POST.
+
 ## Backend Readiness
 
-Admin boot and save flow check backend readiness through `/api/ready` or
-`/api/health`. During cold start the UI says:
+Admin boot and save flow check backend readiness through `/api/ready`.
+Readiness runs before auth bootstrap. During cold start the UI says:
 
 `Backend просыпается, подождите...`
 
 The Render plan is not changed. Optional keep-warm pings are allowed only while
 the authenticated admin tab is visible and online; they must stop on logout or
 tab close and must not run from a service worker.
+
+All admin requests have finite client-side timeouts: JSON GET 25 seconds, JSON
+mutation 45 seconds, readiness attempt 15 seconds, readiness total 90 seconds,
+multipart upload 120 seconds.
 
 ## Publish Safety
 

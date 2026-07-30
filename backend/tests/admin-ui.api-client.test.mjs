@@ -60,7 +60,8 @@ describe("admin API client", () => {
     expect(readHeader(getOptions, "Authorization")).toBe("Bearer memory-token-a");
     expect(readHeader(getOptions, "Accept")).toBe("application/json");
     expect(readHeader(getOptions, "Content-Type")).toBeUndefined();
-    expect(getOptions.signal).toBe(signal);
+    expect(getOptions.signal).not.toBe(signal);
+    expect(getOptions.signal.aborted).toBe(false);
 
     expect(readHeader(postOptions, "Authorization")).toBe("Bearer memory-token-a");
     expect(readHeader(postOptions, "Content-Type")).toBe("application/json");
@@ -201,8 +202,9 @@ describe("admin API client", () => {
     expect(fetchImpl.mock.calls[2][1].body).toBe(formData);
     expect(fetchImpl.mock.calls[0][1].method).toBe("PUT");
     expect(fetchImpl.mock.calls[2][1].method).toBe("PUT");
-    expect(fetchImpl.mock.calls[0][1].signal).toBe(signal);
-    expect(fetchImpl.mock.calls[2][1].signal).toBe(signal);
+    expect(fetchImpl.mock.calls[0][1].signal).not.toBe(signal);
+    expect(fetchImpl.mock.calls[2][1].signal).not.toBe(signal);
+    expect(fetchImpl.mock.calls[0][1].signal).not.toBe(fetchImpl.mock.calls[2][1].signal);
     expect(authStore.getAccessToken()).toBe("memory-token-upload-new");
   });
 
@@ -439,9 +441,9 @@ describe("admin API client", () => {
 
     await expect(api.requestJson("/api/admin/sites", { method: "GET", signal })).rejects.toMatchObject({
       code: "REQUEST_ABORTED",
-      message: "Request was cancelled."
+      message: "Запрос отменён."
     });
-    expect(fetchImpl.mock.calls[0][1].signal).toBe(signal);
+    expect(fetchImpl.mock.calls[0][1].signal).not.toBe(signal);
   });
 });
 

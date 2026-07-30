@@ -11,6 +11,7 @@ Primary create/edit sections:
 - `Демо`: `Есть демо?` select and one `Ссылка на демо`.
 - `Каталог`: features and tags.
 - `Коммерция`: `Цена, ₽`, price label, development days, delivery label.
+- `Изображения — необязательно`: preview/gallery files and alt text.
 - `Расширенные настройки`: collapsed by default for address/slug and technical
   fields.
 
@@ -20,18 +21,23 @@ while the backend still receives cents.
 
 After a successful create, the UI shows a next-step screen with
 `Перейти к изображениям` and `К списку`, so the user does not accidentally
-repeat the create POST.
+repeat the create POST. If preview/gallery files were selected before submit,
+the same click creates the card and then uploads selected images.
 
 ## 2. Reliability Mechanisms
 
 Autosave/recovery:
 
 - The form writes a local draft while the user edits.
-- The draft stores form fields only.
+- The draft stores form fields, mode, siteId, updatedAt, and stable create
+  `clientRequestId`.
 - Secret-like field names are filtered.
+- File/Blob bytes and local file paths are never serialized.
 - Successful server save clears the draft.
 - Failed save, network failure, auth expiry, reload, or back navigation keeps
   recovery available.
+- Dirty forms are written immediately on visibility hidden, `pagehide`, offline,
+  and internal dirty cancel/back.
 
 Save state machine:
 
@@ -41,12 +47,16 @@ Save state machine:
   states;
 - validation errors stay next to fields.
 
-Verify-by-slug:
+Controlled create retry:
 
-- A create request that fails with network/timeout is not blindly repeated.
-- The UI checks `GET /api/admin/sites?search=<slug>&deleted=without`.
+- Create uses one stable `X-Request-Id` for the logical operation.
+- After `NETWORK_ERROR` or `REQUEST_TIMEOUT`, the UI checks readiness and
+  retries create exactly once with the same id.
+- If the response is still ambiguous, the UI checks
+  `GET /api/admin/sites?search=<slug>&deleted=without`.
 - Only an exact slug match is treated as a successful save.
-- If no exact match is found, the form remains available for manual retry.
+- If no exact match is found, the form remains available for manual retry with
+  the same operation id.
 
 Double-submit protection:
 
@@ -56,10 +66,28 @@ Double-submit protection:
 
 Readiness/cold start:
 
-- Admin boot and save flow use `/api/ready`.
+- Admin boot calls `/api/ready` before auth bootstrap.
 - Cold start copy is visible: `Backend просыпается, подождите...`.
+- If readiness is unavailable after the bounded deadline, a retry screen says
+  `Backend пока недоступен` and `Введённые данные не потеряны`.
 - Keep-warm pings are limited to authenticated visible online admin tabs.
 - Keep-warm stops on logout/destroy and does not run from a service worker.
+
+Timeout model:
+
+- normal JSON GET: 25 seconds;
+- JSON mutation: 45 seconds;
+- readiness attempt: 15 seconds;
+- readiness total budget: 90 seconds;
+- multipart image upload: 120 seconds.
+
+Image saga:
+
+- selected files are validated before site create;
+- site create success is not rolled back by image upload failure;
+- partial image failures show saved card state, counts, requestId, and retry;
+- retry uploads only failed images and never repeats create POST;
+- after full reload, text can recover but files must be selected again.
 
 Safe errors/requestId:
 
@@ -91,6 +119,18 @@ Slug conflict:
 - Duplicate slug returns a controlled conflict.
 - UI shows a field-level `Адрес карточки уже занят` hint with a timestamped
   suggestion.
+
+Create idempotency:
+
+- Server create uses existing `audit_logs.request_id`, the existing create+audit
+  transaction, and PostgreSQL transaction advisory lock.
+- Same actor + same requestId + same normalized payload returns the existing
+  site without a second site insert or second audit insert.
+- Same actor + same requestId + different payload returns
+  `IDEMPOTENCY_KEY_REUSED`.
+- A replay audit whose site cannot be read returns
+  `IDEMPOTENCY_REPLAY_UNAVAILABLE`.
+- No Prisma schema change or migration is used.
 
 No raw Prisma/SQL:
 
@@ -163,11 +203,13 @@ Price validation:
 
 Image upload:
 
-- After create, click `Перейти к изображениям`.
-- Add preview.
-- Add gallery image.
-- Trigger an upload validation error and confirm the image screen is not
-  cleared.
+- On the create form, optionally select preview and gallery files before
+  pressing `Сохранить карточку`.
+- Confirm successful selected files upload after card create.
+- Trigger an invalid selected file and confirm create is blocked before POST.
+- Trigger partial upload failure and confirm the card is saved, requestId is
+  visible, and retry does not repeat create POST.
+- Open `Перейти к изображениям` and confirm the image manager still works.
 
 Publish:
 

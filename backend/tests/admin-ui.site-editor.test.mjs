@@ -28,6 +28,7 @@ describe("admin site editor screen", () => {
     const onImages = vi.fn();
     const screen = createSiteEditorScreen({
       apiClient,
+      createRetryBackoffMs: 0,
       documentRef,
       mode: "create",
       onCancel: vi.fn(),
@@ -114,6 +115,7 @@ describe("admin site editor screen", () => {
     };
     const screen = createSiteEditorScreen({
       apiClient,
+      createRetryBackoffMs: 0,
       documentRef,
       mode: "create",
       onCancel: vi.fn(),
@@ -499,6 +501,7 @@ describe("admin site editor screen", () => {
     };
     const screen = createSiteEditorScreen({
       apiClient,
+      createRetryBackoffMs: 0,
       documentRef,
       mode: "create",
       onCancel: vi.fn(),
@@ -515,7 +518,10 @@ describe("admin site editor screen", () => {
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
     await waitFor(() => onSaved.mock.calls.length === 1);
 
-    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+    const createRequests = requests.filter((request) => request.requestPath === "/api/admin/sites");
+
+    expect(createRequests).toHaveLength(2);
+    expect(createRequests[1].options.headers["X-Request-Id"]).toBe(createRequests[0].options.headers["X-Request-Id"]);
     expect(requests.some((request) => request.requestPath.includes("search=magazin-odezhdy-test"))).toBe(true);
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({
       slug: "magazin-odezhdy-test"
@@ -560,6 +566,362 @@ describe("admin site editor screen", () => {
       "/api/admin/categories?limit=100&page=1"
     ]);
   });
+
+  it("persists drafts immediately on page lifecycle events with a stable create request id and no secrets/files", async () => {
+    const documentRef = createFakeDocument();
+    const windowRef = createFakeWindow();
+    const storage = createMemoryStorage();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      draftAutosaveMs: 1000,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      storage,
+      windowRef
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Lifecycle title");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "previewImage", [imageFile("preview.png", "image/png", 12)]);
+
+    documentRef.visibilityState = "hidden";
+    documentRef.dispatchEvent(fakeEvent("visibilitychange"));
+    windowRef.dispatchEvent(fakeEvent("pagehide"));
+    windowRef.dispatchEvent(fakeEvent("offline"));
+
+    expect(storage.setItem.mock.calls.length).toBeGreaterThanOrEqual(3);
+    const draft = JSON.parse(storage.setItem.mock.calls.at(-1)[1]);
+
+    expect(draft).toMatchObject({
+      fields: expect.objectContaining({
+        categoryId: "00000000-0000-4000-8000-000000000001",
+        shortDescription: "Short",
+        title: "Lifecycle title"
+      }),
+      routeType: "create",
+      siteId: null,
+      updatedAt: expect.any(String)
+    });
+    expect(draft.clientRequestId).toMatch(/^req_[0-9a-f-]{36}$/);
+    expect(JSON.stringify(draft)).not.toMatch(/token|authorization|cookie|password|jwt|secret/i);
+    expect(JSON.stringify(draft)).not.toContain("preview.png");
+    expect(JSON.stringify(draft)).not.toContain("C:\\");
+
+    screen.destroy();
+
+    expect(documentRef.listenerCount("visibilitychange")).toBe(0);
+    expect(windowRef.listenerCount("pagehide")).toBe(0);
+    expect(windowRef.listenerCount("offline")).toBe(0);
+  });
+
+  it("reuses one stable X-Request-Id for a safe timeout retry before exact slug verification", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          const createAttempts = requests.filter((request) => request.requestPath === "/api/admin/sites").length;
+          if (createAttempts === 1) {
+            return Promise.reject({
+              code: "REQUEST_TIMEOUT",
+              message: "Сервер не ответил вовремя.",
+              status: 0
+            });
+          }
+
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000303",
+              slug: options.body.slug,
+              title: options.body.title
+            }),
+            meta: { replayed: true }
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const onSaved = vi.fn();
+    const screen = createSiteEditorScreen({
+      apiClient,
+      createRetryBackoffMs: 0,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Retry title");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => onSaved.mock.calls.length === 1);
+
+    const createRequests = requests.filter((request) => request.requestPath === "/api/admin/sites");
+
+    expect(createRequests).toHaveLength(2);
+    expect(createRequests[0].options.headers["X-Request-Id"]).toMatch(/^req_[0-9a-f-]{36}$/);
+    expect(createRequests[1].options.headers["X-Request-Id"]).toBe(createRequests[0].options.headers["X-Request-Id"]);
+    expect(requests.some((request) => request.requestPath.includes("search="))).toBe(false);
+    expect(screen.element.textContent).toContain("Карточка сохранена");
+  });
+
+  it("blocks invalid selected images before creating a site", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor"
+    });
+
+    await screen.load();
+    expect(screen.element.textContent).toContain("Изображения — необязательно");
+    setValue(screen.element, "title", "Image validation");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "previewImage", [imageFile("bad.gif", "image/gif", 12)]);
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await flushPromises();
+
+    expect(screen.element.textContent).toContain("Поддерживаются только JPEG, PNG, WEBP или AVIF.");
+    expect(apiClient.requestJson.mock.calls.some(([path]) => path === "/api/admin/sites")).toBe(false);
+    expect(apiClient.requestMultipart).not.toHaveBeenCalled();
+  });
+
+  it("creates once, uploads selected preview/gallery, and shows a completed one-click success", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000777",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.endsWith("/images/preview")) {
+          return Promise.resolve({
+            data: {
+              previewImage: {
+                assetId: "preview-asset",
+                url: "https://storage.example.test/preview.webp"
+              }
+            }
+          });
+        }
+        if (requestPath.endsWith("/images/gallery/batch")) {
+          return Promise.resolve({
+            data: {
+              failed: [],
+              succeeded: [{
+                clientFileId: "00000000-0000-4000-8000-000000000402",
+                image: { assetId: "gallery-asset" },
+                index: 0,
+                replayed: false
+              }]
+            }
+          });
+        }
+        throw new Error(`Unexpected multipart path ${requestPath}`);
+      })
+    };
+    const onImages = vi.fn();
+    const onSaved = vi.fn();
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onImages,
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor",
+      uuidFactory: createUuidSequence([
+        "00000000-0000-4000-8000-000000000301",
+        "00000000-0000-4000-8000-000000000402"
+      ])
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "One click images");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "previewImage", [imageFile("preview.jpg", "image/jpeg", 12)]);
+    setValue(screen.element, "previewAlt", "Preview alt");
+    setFiles(screen.element, "galleryBatchImages", [imageFile("gallery.webp", "image/webp", 12)]);
+    setValue(screen.element, "galleryBatchAlt", "Gallery alt");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Карточка и изображения сохранены."));
+
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+    expect(requests.map((request) => request.requestPath)).toContain(
+      "/api/admin/sites/00000000-0000-4000-8000-000000000777/images/preview"
+    );
+    expect(requests.map((request) => request.requestPath)).toContain(
+      "/api/admin/sites/00000000-0000-4000-8000-000000000777/images/gallery/batch"
+    );
+    expect(requests.find((request) => request.requestPath.endsWith("/images/preview")).options.body.get("clientFileId")).toBe(
+      "00000000-0000-4000-8000-000000000301"
+    );
+    expect(onSaved).toHaveBeenCalledTimes(1);
+
+    screen.element.querySelector('[data-action="manage-images"]').dispatchEvent(fakeEvent("click"));
+    expect(onImages).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000777");
+  });
+
+  it("recovers partial image failures without a second create POST and retries only failed files", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    let previewAttempts = 0;
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000888",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.endsWith("/images/preview")) {
+          previewAttempts += 1;
+          if (previewAttempts === 1) {
+            return Promise.reject({
+              code: "REQUEST_TIMEOUT",
+              message: "Сервер не ответил вовремя.",
+              requestId: "req_preview_timeout",
+              status: 0
+            });
+          }
+          return Promise.resolve({ data: { previewImage: { assetId: "preview-ok" } } });
+        }
+        if (requestPath.endsWith("/images/gallery/batch")) {
+          return Promise.resolve({
+            data: {
+              failed: [{
+                clientFileId: "00000000-0000-4000-8000-000000000402",
+                code: "IMAGE_TOO_LARGE",
+                index: 1,
+                message: "Too large."
+              }],
+              succeeded: [{
+                clientFileId: "00000000-0000-4000-8000-000000000401",
+                image: { assetId: "gallery-ok" },
+                index: 0,
+                replayed: false
+              }]
+            }
+          });
+        }
+        throw new Error(`Unexpected multipart path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onImages: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      uuidFactory: createUuidSequence([
+        "00000000-0000-4000-8000-000000000301",
+        "00000000-0000-4000-8000-000000000401",
+        "00000000-0000-4000-8000-000000000402",
+        "00000000-0000-4000-8000-000000000501"
+      ])
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Partial images");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "previewImage", [imageFile("preview.png", "image/png", 12)]);
+    setFiles(screen.element, "galleryBatchImages", [
+      imageFile("ok.webp", "image/webp", 12),
+      imageFile("retry.webp", "image/webp", 12)
+    ]);
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Карточка сохранена. Часть изображений не загрузилась."));
+
+    expect(screen.element.textContent).toContain("1 успешно");
+    expect(screen.element.textContent).toContain("2 ошибка");
+    expect(screen.element.textContent).toContain("req_preview_timeout");
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+
+    screen.element.querySelector('[data-action="retry-image-upload"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => previewAttempts === 2);
+
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+  });
 });
 
 function setValue(root, name, value) {
@@ -568,6 +930,23 @@ function setValue(root, name, value) {
   input.value = value;
   input.dispatchEvent(fakeEvent("input"));
   input.dispatchEvent(fakeEvent("change"));
+}
+
+function setFiles(root, name, files) {
+  const input = root.querySelector(`[name="${name}"]`);
+  expect(input).not.toBeNull();
+  input.files = files;
+  input.dispatchEvent(fakeEvent("change"));
+}
+
+function imageFile(name, type, size) {
+  return { name, size, type };
+}
+
+function createUuidSequence(values) {
+  let index = 0;
+
+  return () => values[index++];
 }
 
 function categoryFixture() {
@@ -618,12 +997,32 @@ function metaFixture(total) {
 }
 
 function createFakeDocument() {
+  const listeners = new Map();
+
   return {
+    visibilityState: "visible",
+    addEventListener(type, listener) {
+      const items = listeners.get(type) ?? [];
+      items.push(listener);
+      listeners.set(type, items);
+    },
     createElement(tagName) {
       return new FakeElement(tagName);
     },
     createTextNode(text) {
       return new FakeTextNode(text);
+    },
+    dispatchEvent(event) {
+      for (const listener of listeners.get(event.type) ?? []) {
+        listener.call(this, event);
+      }
+    },
+    listenerCount(type) {
+      return (listeners.get(type) ?? []).length;
+    },
+    removeEventListener(type, listener) {
+      const items = listeners.get(type) ?? [];
+      listeners.set(type, items.filter((item) => item !== listener));
     }
   };
 }
@@ -807,6 +1206,9 @@ function createFakeWindow() {
       for (const listener of listeners.get(event.type) ?? []) {
         listener.call(this, event);
       }
+    },
+    listenerCount(type) {
+      return (listeners.get(type) ?? []).length;
     },
     removeEventListener(type, listener) {
       const items = listeners.get(type) ?? [];

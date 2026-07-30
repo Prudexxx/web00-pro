@@ -24,10 +24,24 @@ import {
   resolveSiteFormDraftStorage,
   writeSiteFormDraft
 } from "../site-form-drafts.js";
+import {
+  IMAGE_UPLOAD_LIMITS,
+  buildGalleryBatchFormData,
+  buildImagePath,
+  buildPreviewFormData,
+  createClientFileId,
+  normalizeAlt,
+  normalizeGalleryBatchResult,
+  selectedNames,
+  supportedImageTypes,
+  validateBatch,
+  validateImageFile
+} from "../site-image-upload.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
 const READY_PATH = "/api/ready";
 const DRAFT_AUTOSAVE_MS = 1000;
+const CREATE_RETRY_BACKOFF_MS = 1000;
 const DEMO_MODE_OPTIONS = Object.freeze([
   {
     label: "Без демо",
@@ -72,7 +86,11 @@ export function createSiteEditorScreen(options) {
   const storage = resolveSiteFormDraftStorage(options?.storage);
   const draftKey = buildSiteFormDraftKey({ mode, siteId });
   const draftAutosaveMs = Number.isFinite(options?.draftAutosaveMs) ? options.draftAutosaveMs : DRAFT_AUTOSAVE_MS;
+  const createRetryBackoffMs = Number.isFinite(options?.createRetryBackoffMs)
+    ? options.createRetryBackoffMs
+    : CREATE_RETRY_BACKOFF_MS;
   const windowRef = options?.windowRef ?? documentRef.defaultView ?? null;
+  const uuidFactory = typeof options?.uuidFactory === "function" ? options.uuidFactory : createRandomUuid;
   let activeController = null;
   let busy = false;
   let destroyed = false;
@@ -80,6 +98,9 @@ export function createSiteEditorScreen(options) {
   let categories = [];
   let lastFormState = {};
   let pendingDraft = null;
+  let imageRecoveryNotice = false;
+  let imageRetryPlan = null;
+  let clientRequestId = mode === "create" ? createStableClientRequestId() : null;
   let draftSaveTimer = null;
   let dirty = false;
   let networkOnline = windowRef?.navigator?.onLine !== false;
@@ -124,6 +145,7 @@ export function createSiteEditorScreen(options) {
   });
 
   registerNetworkListeners();
+  registerLifecycleListeners();
 
   async function load() {
     abortActiveRequest();
@@ -155,6 +177,9 @@ export function createSiteEditorScreen(options) {
       categories = Array.isArray(categoryResponse?.data) ? categoryResponse.data : [];
       currentSite = siteResponse?.data ?? null;
       pendingDraft = readSiteFormDraft(storage, draftKey);
+      if (mode === "create" && typeof pendingDraft?.clientRequestId === "string") {
+        clientRequestId = pendingDraft.clientRequestId;
+      }
       renderForm({});
       statusRegion.textContent = "Форма готова.";
       onStatus("Форма готова.");
@@ -171,6 +196,7 @@ export function createSiteEditorScreen(options) {
     destroyed = true;
     abortActiveRequest();
     clearDraftSaveTimer();
+    unregisterLifecycleListeners();
     unregisterNetworkListeners();
     unregisterDirtyGuard();
   }
@@ -192,7 +218,12 @@ export function createSiteEditorScreen(options) {
 
   function renderForm(errors) {
     const form = createForm(errors);
-    replaceContent(formHost, ...(pendingDraft === null ? [form] : [createDraftRecoveryBanner(), form]));
+    replaceContent(
+      formHost,
+      ...(pendingDraft === null ? [] : [createDraftRecoveryBanner()]),
+      ...(imageRecoveryNotice ? [createImageRecoveryNotice()] : []),
+      form
+    );
   }
 
   function createForm(errors) {
@@ -208,6 +239,7 @@ export function createSiteEditorScreen(options) {
         createCatalogSection(errors),
         createCommercialSection(errors),
         createAdvancedSection(errors),
+        ...(mode === "create" ? [createImageSection(errors)] : []),
         ...(role === "admin" && mode === "edit" ? [createAdminSection(errors)] : []),
         createActions()
       ]
@@ -238,7 +270,10 @@ export function createSiteEditorScreen(options) {
         const payload = mode === "create"
           ? buildCreateSitePayload(formState)
           : buildUpdateSitePayload(formState, role);
+        const imageSelection = mode === "create" ? readImageSelection(form) : emptyImageSelection();
+        validateImageSelection(imageSelection);
         if (!networkOnline) {
+          persistDraft(form);
           renderForm({
             _form: ["Соединение нестабильно. Форма сохранена локально."]
           });
@@ -248,18 +283,15 @@ export function createSiteEditorScreen(options) {
         }
         setSaveState(form, "warmingBackend");
         await ensureBackendReady();
-        setSaveState(form, "saving");
-        const response = await apiClient.requestJson(
-          mode === "create" ? "/api/admin/sites" : sitePath(siteId),
-          {
-            body: payload,
-            headers: {
-              "X-Request-Id": createClientRequestId()
-            },
-            method: mode === "create" ? "POST" : "PATCH"
-          }
-        );
-        finishSuccessfulSave(response?.data ?? null, form, "Сохранено.");
+        const saved = mode === "create"
+          ? await createSiteWithControlledRetry(payload, formState, form)
+          : await updateSite(payload, form);
+
+        if (mode === "create") {
+          await finishCreateSaga(saved?.data ?? saved, imageSelection, form);
+        } else {
+          finishSuccessfulSave(saved?.data ?? null, form, "Сохранено.");
+        }
       } catch (error) {
         if (await handleNetworkFailure(error, formState, form)) {
           return;
@@ -309,7 +341,168 @@ export function createSiteEditorScreen(options) {
     onSaved(saved);
   }
 
-  function renderCreateSavedNextStep(saved) {
+  async function updateSite(payload, form) {
+    setSaveState(form, "saving");
+    return apiClient.requestJson(sitePath(siteId), {
+      body: payload,
+      headers: {
+        "X-Request-Id": createStableClientRequestId()
+      },
+      method: "PATCH"
+    });
+  }
+
+  async function createSiteWithControlledRetry(payload, formState, form) {
+    setSaveState(form, "creatingSite");
+
+    try {
+      return await postCreateSite(payload);
+    } catch (error) {
+      if (!isRetryableCreateFailure(error)) {
+        throw error;
+      }
+
+      persistDraft(form);
+      setSaveState(form, "verifyingCreate");
+      statusRegion.textContent = "Проверяем сервер...";
+      onStatus("Проверяем сервер...");
+      await ensureBackendReady();
+      await wait(createRetryBackoffMs);
+      setSaveState(form, "creatingSite");
+
+      try {
+        return await postCreateSite(payload);
+      } catch (retryError) {
+        const verified = await verifyCreatedSiteBySlug(formState?.slug);
+
+        if (verified !== null) {
+          return Object.fromEntries([["data", verified]]);
+        }
+
+        throw retryError;
+      }
+    }
+  }
+
+  async function postCreateSite(payload) {
+    return apiClient.requestJson("/api/admin/sites", {
+      body: payload,
+      headers: {
+        "X-Request-Id": clientRequestId
+      },
+      method: "POST"
+    });
+  }
+
+  async function finishCreateSaga(saved, imageSelection, form) {
+    if (typeof saved?.id !== "string") {
+      finishSuccessfulSave(saved, form, "Карточка сохранена.");
+      return;
+    }
+
+    currentSite = saved;
+    const uploadResult = await uploadSelectedImages(saved.id, imageSelection, form);
+
+    if (uploadResult.failedCount > 0) {
+      dirty = false;
+      clearDraft();
+      unregisterDirtyGuard();
+      imageRetryPlan = uploadResult.retryPlan;
+      renderSavedWithImageErrors(saved, uploadResult);
+      onSaved(saved);
+      return;
+    }
+
+    const message = imageSelection.hasAny
+      ? "Карточка и изображения сохранены."
+      : "Карточка сохранена.";
+    finishSuccessfulSave(saved, form, message);
+  }
+
+  async function uploadSelectedImages(siteIdForUpload, imageSelection, form) {
+    const retryPlan = {
+      gallery: [],
+      galleryAlt: imageSelection.galleryAlt,
+      preview: null,
+      siteId: siteIdForUpload
+    };
+    let failedCount = 0;
+    let succeededCount = 0;
+    let requestId = null;
+
+    if (imageSelection.previewFile !== null) {
+      setSaveState(form, "uploadingPreview");
+      statusRegion.textContent = "Загружаем preview...";
+      onStatus("Загружаем preview...");
+
+      try {
+        await apiClient.requestMultipart(buildImagePath(siteIdForUpload, "preview"), {
+          body: buildPreviewFormData({
+            alt: imageSelection.previewAlt,
+            clientFileId: createClientFileId(uuidFactory),
+            file: imageSelection.previewFile
+          }),
+          method: "PUT"
+        });
+        succeededCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        requestId ??= readRequestId(error);
+        retryPlan.preview = {
+          alt: imageSelection.previewAlt,
+          file: imageSelection.previewFile
+        };
+      }
+    }
+
+    if (imageSelection.galleryFiles.length > 0) {
+      setSaveState(form, "uploadingGallery");
+      statusRegion.textContent = "Загружаем gallery...";
+      onStatus("Загружаем gallery...");
+      const clientFileIds = imageSelection.galleryFiles.map(() => createClientFileId(uuidFactory));
+
+      try {
+        const response = await apiClient.requestMultipart(buildImagePath(siteIdForUpload, "gallery-batch"), {
+          body: buildGalleryBatchFormData({
+            alt: imageSelection.galleryAlt,
+            clientFileIds,
+            files: imageSelection.galleryFiles
+          }),
+          method: "POST"
+        });
+        const normalized = normalizeGalleryBatchResult(response?.data, {
+          clientFileIds,
+          files: imageSelection.galleryFiles
+        });
+        succeededCount += normalized.counts.succeeded;
+        failedCount += normalized.counts.failed;
+        retryPlan.gallery = normalized.failed.map((item) => ({
+          clientFileId: item.clientFileId,
+          file: item.file,
+          index: item.index
+        }));
+      } catch (error) {
+        requestId ??= readRequestId(error);
+        failedCount += imageSelection.galleryFiles.length;
+        retryPlan.gallery = imageSelection.galleryFiles.map((file, index) => ({
+          clientFileId: clientFileIds[index],
+          file,
+          index
+        }));
+      }
+    }
+
+    return {
+      failedCount,
+      requestId,
+      retryPlan,
+      succeededCount
+    };
+  }
+
+  function renderCreateSavedNextStep(saved, options = {}) {
+    const message = typeof options.message === "string" ? options.message : "Карточка сохранена.";
+    const title = typeof options.title === "string" ? options.title : "Черновик сохранён";
     const actions = [
       createElement("button", {
         documentRef,
@@ -349,7 +542,11 @@ export function createSiteEditorScreen(options) {
         }),
         createElement("h3", {
           documentRef,
-          text: "Черновик сохранён"
+          text: title
+        }),
+        createElement("p", {
+          documentRef,
+          text: message
         }),
         createElement("div", {
           documentRef,
@@ -358,6 +555,169 @@ export function createSiteEditorScreen(options) {
         })
       ]
     }));
+  }
+
+  function renderSavedWithImageErrors(saved, result) {
+    replaceContent(formHost, createElement("section", {
+      documentRef,
+      className: "admin-save-next-step admin-save-partial",
+      attributes: {
+        "data-save-state": "savedWithImageErrors"
+      },
+      children: [
+        createElement("p", {
+          documentRef,
+          className: "admin-kicker",
+          text: "Черновик"
+        }),
+        createElement("h3", {
+          documentRef,
+          text: "Карточка сохранена. Часть изображений не загрузилась."
+        }),
+        createElement("p", {
+          documentRef,
+          text: `Изображения: ${result.succeededCount} успешно, ${result.failedCount} ошибка.`
+        }),
+        ...(typeof result.requestId === "string"
+          ? [createRequestIdControl(result.requestId, { documentRef })]
+          : []),
+        createElement("div", {
+          documentRef,
+          className: "admin-save-next-actions",
+          children: [
+            createElement("button", {
+              documentRef,
+              text: "Повторить загрузку изображений",
+              attributes: {
+                "data-action": "retry-image-upload",
+                type: "button"
+              },
+              on: {
+                click: retryFailedImageUploads
+              }
+            }),
+            createElement("button", {
+              documentRef,
+              text: "Открыть изображения",
+              attributes: {
+                "data-action": "manage-images",
+                type: "button"
+              },
+              on: {
+                click: () => onImages(saved.id)
+              }
+            }),
+            createElement("button", {
+              documentRef,
+              text: "К списку",
+              attributes: {
+                "data-action": "back-to-sites",
+                type: "button"
+              },
+              on: {
+                click: onCancel
+              }
+            })
+          ]
+        })
+      ]
+    }));
+    statusRegion.textContent = "Карточка сохранена. Не все изображения загружены.";
+    onStatus("Карточка сохранена. Не все изображения загружены.");
+  }
+
+  async function retryFailedImageUploads() {
+    if (busy || imageRetryPlan === null) {
+      return;
+    }
+
+    busy = true;
+    const plan = imageRetryPlan;
+    imageRetryPlan = null;
+    let failedCount = 0;
+    let succeededCount = 0;
+    let requestId = null;
+    const nextPlan = {
+      gallery: [],
+      galleryAlt: plan.galleryAlt,
+      preview: null,
+      siteId: plan.siteId
+    };
+
+    try {
+      statusRegion.textContent = "Загружаем preview...";
+      onStatus("Загружаем preview...");
+      if (plan.preview !== null) {
+        try {
+          await apiClient.requestMultipart(buildImagePath(plan.siteId, "preview"), {
+            body: buildPreviewFormData({
+              alt: plan.preview.alt,
+              clientFileId: createClientFileId(uuidFactory),
+              file: plan.preview.file
+            }),
+            method: "PUT"
+          });
+          succeededCount += 1;
+        } catch (error) {
+          failedCount += 1;
+          requestId ??= readRequestId(error);
+          nextPlan.preview = plan.preview;
+        }
+      }
+
+      if (plan.gallery.length > 0) {
+        statusRegion.textContent = "Загружаем gallery...";
+        onStatus("Загружаем gallery...");
+        const files = plan.gallery.map((item) => item.file);
+        const clientFileIds = plan.gallery.map((item) => item.clientFileId);
+
+        try {
+          const response = await apiClient.requestMultipart(buildImagePath(plan.siteId, "gallery-batch"), {
+            body: buildGalleryBatchFormData({
+              alt: plan.galleryAlt,
+              clientFileIds,
+              files
+            }),
+            method: "POST"
+          });
+          const normalized = normalizeGalleryBatchResult(response?.data, {
+            clientFileIds,
+            files
+          });
+          succeededCount += normalized.counts.succeeded;
+          failedCount += normalized.counts.failed;
+          nextPlan.gallery = normalized.failed.map((item) => ({
+            clientFileId: item.clientFileId,
+            file: item.file,
+            index: item.index
+          }));
+        } catch (error) {
+          requestId ??= readRequestId(error);
+          failedCount += files.length;
+          nextPlan.gallery = plan.gallery;
+        }
+      }
+
+      if (failedCount > 0) {
+        imageRetryPlan = nextPlan;
+        renderSavedWithImageErrors(currentSite, {
+          failedCount,
+          requestId,
+          retryPlan: nextPlan,
+          succeededCount
+        });
+        return;
+      }
+
+      renderCreateSavedNextStep(currentSite, {
+        message: "Карточка и изображения сохранены.",
+        title: "Карточка сохранена"
+      });
+      statusRegion.textContent = "Карточка и изображения сохранены.";
+      onStatus("Карточка и изображения сохранены.");
+    } finally {
+      busy = false;
+    }
   }
 
   function createBasicSection(errors) {
@@ -404,12 +764,86 @@ export function createSiteEditorScreen(options) {
     ]);
   }
 
+  function createImageSection(errors) {
+    const previewInput = createElement("input", {
+      documentRef,
+      attributes: {
+        accept: supportedImageTypes.join(","),
+        name: "previewImage",
+        type: "file"
+      }
+    });
+    const galleryInput = createElement("input", {
+      documentRef,
+      attributes: {
+        accept: supportedImageTypes.join(","),
+        multiple: true,
+        name: "galleryBatchImages",
+        type: "file"
+      }
+    });
+    const previewSelection = createElement("p", {
+      documentRef,
+      className: "admin-upload-selection"
+    });
+    const gallerySelection = createElement("p", {
+      documentRef,
+      className: "admin-upload-selection"
+    });
+
+    previewInput.addEventListener("change", () => {
+      previewSelection.textContent = selectedNames(previewInput.files);
+      scheduleDraftSave(formHost.querySelector("form"));
+    });
+    galleryInput.addEventListener("change", () => {
+      gallerySelection.textContent = selectedNames(galleryInput.files);
+      scheduleDraftSave(formHost.querySelector("form"));
+    });
+
+    return createSection("Изображения — необязательно", [
+      createElement("p", {
+        documentRef,
+        className: "admin-field-help",
+        text: "JPG, PNG, WEBP, AVIF. 5 MB на файл. Gallery batch: до 10 файлов, до 30 MB. Gallery максимум 20 изображений."
+      }),
+      createElement("label", {
+        documentRef,
+        className: "admin-field",
+        children: [
+          createElement("span", { documentRef, text: "Preview файл" }),
+          previewInput,
+          previewSelection,
+          renderFieldErrors("previewImage", errors)
+        ]
+      }),
+      createField("previewAlt", "Alt для preview", "input", errors, readValue("previewAlt"), {
+        maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt)
+      }),
+      createElement("label", {
+        documentRef,
+        className: "admin-field",
+        children: [
+          createElement("span", { documentRef, text: "Gallery файлы" }),
+          galleryInput,
+          gallerySelection,
+          renderFieldErrors("galleryBatchImages", errors)
+        ]
+      }),
+      createField("galleryBatchAlt", "Alt для gallery", "input", errors, readValue("galleryBatchAlt"), {
+        maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt)
+      })
+    ]);
+  }
+
   function createAdvancedSection(errors) {
+    const shouldOpen = hasAdvancedErrors(errors);
+
     return createElement("details", {
       documentRef,
       className: "admin-editor-section admin-editor-advanced",
       attributes: {
-        "data-section": "advanced-site-settings"
+        "data-section": "advanced-site-settings",
+        open: shouldOpen ? "" : undefined
       },
       children: [
         createElement("summary", {
@@ -482,7 +916,7 @@ export function createSiteEditorScreen(options) {
       children: [
         createElement("button", {
           documentRef,
-          text: "Сохранить",
+          text: "Сохранить карточку",
           attributes: {
             "data-action": "save-site",
             type: "submit"
@@ -496,7 +930,14 @@ export function createSiteEditorScreen(options) {
             type: "button"
           },
           on: {
-            click: onCancel
+            click: () => {
+              const form = formHost.querySelector("form");
+
+              if (dirty && form !== null) {
+                persistDraft(form);
+              }
+              onCancel();
+            }
           }
         })
       ].concat(mode === "edit" && currentSite?.id !== undefined
@@ -773,6 +1214,10 @@ export function createSiteEditorScreen(options) {
           on: {
             click: () => {
               lastFormState = { ...pendingDraft?.fields };
+              if (mode === "create" && typeof pendingDraft?.clientRequestId === "string") {
+                clientRequestId = pendingDraft.clientRequestId;
+              }
+              imageRecoveryNotice = pendingDraft?.hadImageSelection === true;
               pendingDraft = null;
               dirty = true;
               renderForm({});
@@ -789,12 +1234,24 @@ export function createSiteEditorScreen(options) {
           on: {
             click: () => {
               clearDraft();
+              if (mode === "create") {
+                clientRequestId = createStableClientRequestId();
+              }
+              imageRecoveryNotice = false;
               pendingDraft = null;
               renderForm({});
             }
           }
         })
       ]
+    });
+  }
+
+  function createImageRecoveryNotice() {
+    return createElement("p", {
+      documentRef,
+      className: "admin-state",
+      text: "Текст восстановлен. Изображения выберите повторно."
     });
   }
 
@@ -901,6 +1358,9 @@ export function createSiteEditorScreen(options) {
   }
 
   function scheduleDraftSave(form) {
+    if (form === null) {
+      return;
+    }
     dirty = true;
     registerDirtyGuard();
     clearDraftSaveTimer();
@@ -911,7 +1371,10 @@ export function createSiteEditorScreen(options) {
 
   function persistDraft(form) {
     writeSiteFormDraft(storage, draftKey, {
+      clientRequestId,
       fields: readFormState(form),
+      hadImageSelection: hasSelectedImageFiles(form),
+      mode,
       routeType: mode,
       siteId: mode === "edit" ? siteId : null,
       temporaryClientId: mode === "create" ? "new" : null,
@@ -943,6 +1406,16 @@ export function createSiteEditorScreen(options) {
     windowRef?.removeEventListener?.("beforeunload", handleBeforeUnload);
   }
 
+  function registerLifecycleListeners() {
+    documentRef?.addEventListener?.("visibilitychange", handleVisibilityChange);
+    windowRef?.addEventListener?.("pagehide", handlePageHide);
+  }
+
+  function unregisterLifecycleListeners() {
+    documentRef?.removeEventListener?.("visibilitychange", handleVisibilityChange);
+    windowRef?.removeEventListener?.("pagehide", handlePageHide);
+  }
+
   function registerNetworkListeners() {
     windowRef?.addEventListener?.("offline", handleOffline);
     windowRef?.addEventListener?.("online", handleOnline);
@@ -955,6 +1428,7 @@ export function createSiteEditorScreen(options) {
 
   function handleOffline() {
     networkOnline = false;
+    persistCurrentDraftImmediately();
     statusRegion.textContent = "Соединение нестабильно. Форма сохранена локально.";
     onStatus("Соединение нестабильно. Форма сохранена локально.");
   }
@@ -974,6 +1448,29 @@ export function createSiteEditorScreen(options) {
     event.returnValue = "";
   }
 
+  function handleVisibilityChange() {
+    if (documentRef?.visibilityState === "hidden") {
+      persistCurrentDraftImmediately();
+    }
+  }
+
+  function handlePageHide() {
+    persistCurrentDraftImmediately();
+  }
+
+  function persistCurrentDraftImmediately() {
+    if (!dirty) {
+      return;
+    }
+
+    const form = formHost.querySelector("form");
+
+    if (form !== null) {
+      clearDraftSaveTimer();
+      persistDraft(form);
+    }
+  }
+
   async function ensureBackendReady() {
     await apiClient.requestJson(READY_PATH, {
       auth: false,
@@ -991,13 +1488,7 @@ export function createSiteEditorScreen(options) {
     onStatus("Проверяем, сохранилась ли запись...");
 
     try {
-      const slug = String(formState.slug ?? "").trim();
-      const response = await apiClient.requestJson(
-        `/api/admin/sites?search=${encodeURIComponent(slug)}&deleted=without`,
-        { method: "GET" }
-      );
-      const saved = (Array.isArray(response?.data) ? response.data : [])
-        .find((site) => site?.slug === slug) ?? null;
+      const saved = await verifyCreatedSiteBySlug(formState.slug);
 
       if (saved !== null) {
         finishSuccessfulSave(saved, form, "Сохранено. Запись найдена после проверки.");
@@ -1014,6 +1505,22 @@ export function createSiteEditorScreen(options) {
     statusRegion.textContent = "Сервер не ответил. Запись не найдена. Можно повторить.";
     onStatus("Сервер не ответил. Запись не найдена. Можно повторить.");
     return true;
+  }
+
+  async function verifyCreatedSiteBySlug(slugValue) {
+    const slug = String(slugValue ?? "").trim();
+
+    if (slug.length === 0) {
+      return null;
+    }
+
+    const response = await apiClient.requestJson(
+      `/api/admin/sites?search=${encodeURIComponent(slug)}&deleted=without`,
+      { method: "GET" }
+    );
+
+    return (Array.isArray(response?.data) ? response.data : [])
+      .find((site) => site?.slug === slug) ?? null;
   }
 }
 
@@ -1068,10 +1575,27 @@ function fieldErrorId(name) {
   return `admin-field-error-${name}`;
 }
 
+function hasAdvancedErrors(errors) {
+  return [
+    "demoLocalUrl",
+    "demoUrl",
+    "externalDemoUrl",
+    "legacyTitle",
+    "originalDemoUrl",
+    "previewType",
+    "siteUrl",
+    "slug",
+    "sortOrder"
+  ].some((field) => Array.isArray(errors?.[field]) && errors[field].length > 0);
+}
+
 function readFormState(form) {
   const state = {};
 
   for (const field of form.querySelectorAll("[name]")) {
+    if (field.type === "file") {
+      continue;
+    }
     if (field.getAttribute?.("data-advanced-field") === "true" && !isInsideOpenDetails(field)) {
       continue;
     }
@@ -1084,6 +1608,76 @@ function readFormState(form) {
   }
 
   return state;
+}
+
+function readImageSelection(form) {
+  const previewInput = form.querySelector('[name="previewImage"]');
+  const galleryInput = form.querySelector('[name="galleryBatchImages"]');
+  const previewFile = previewInput?.files?.[0] ?? null;
+  const galleryFiles = Array.from(galleryInput?.files ?? []);
+
+  return {
+    galleryAlt: form.querySelector('[name="galleryBatchAlt"]')?.value ?? "",
+    galleryFiles,
+    hasAny: previewFile !== null || galleryFiles.length > 0,
+    previewAlt: form.querySelector('[name="previewAlt"]')?.value ?? "",
+    previewFile
+  };
+}
+
+function emptyImageSelection() {
+  return {
+    galleryAlt: "",
+    galleryFiles: [],
+    hasAny: false,
+    previewAlt: "",
+    previewFile: null
+  };
+}
+
+function validateImageSelection(selection) {
+  try {
+    selection.previewAlt = normalizeAlt(selection.previewAlt);
+  } catch (error) {
+    throw new FormValidationError([{
+      message: safeMessage(error),
+      path: "previewAlt"
+    }]);
+  }
+  try {
+    selection.galleryAlt = normalizeAlt(selection.galleryAlt);
+  } catch (error) {
+    throw new FormValidationError([{
+      message: safeMessage(error),
+      path: "galleryBatchAlt"
+    }]);
+  }
+  if (selection.previewFile !== null) {
+    try {
+      validateImageFile(selection.previewFile);
+    } catch (error) {
+      throw new FormValidationError([{
+        message: safeMessage(error),
+        path: "previewImage"
+      }]);
+    }
+  }
+
+  if (selection.galleryFiles.length > 0) {
+    try {
+      validateBatch(selection.galleryFiles);
+    } catch (error) {
+      throw new FormValidationError([{
+        message: safeMessage(error),
+        path: "galleryBatchImages"
+      }]);
+    }
+  }
+}
+
+function hasSelectedImageFiles(form) {
+  return form.querySelector('[name="previewImage"]')?.files?.length > 0 ||
+    form.querySelector('[name="galleryBatchImages"]')?.files?.length > 0;
 }
 
 function isInsideOpenDetails(field) {
@@ -1103,6 +1697,30 @@ function isInsideOpenDetails(field) {
 
 function setSaveState(form, state) {
   form?.setAttribute?.("data-save-state", state);
+  const button = form?.querySelector?.('[data-action="save-site"]');
+
+  if (button !== null && button !== undefined) {
+    button.textContent = saveButtonText(state);
+  }
+}
+
+function saveButtonText(state) {
+  switch (state) {
+    case "warmingBackend":
+      return "Проверяем сервер...";
+    case "creatingSite":
+    case "saving":
+      return "Сохраняем карточку...";
+    case "verifyingCreate":
+    case "verifyingAfterNetworkFailure":
+      return "Проверяем сервер...";
+    case "uploadingPreview":
+      return "Загружаем preview...";
+    case "uploadingGallery":
+      return "Загружаем gallery...";
+    default:
+      return "Сохранить карточку";
+  }
 }
 
 function sitePath(siteId) {
@@ -1114,6 +1732,24 @@ function sitePath(siteId) {
 }
 
 function safeMessage(error) {
+  if (error?.code === "REQUEST_TIMEOUT") {
+    return "Сервер не ответил вовремя. Данные формы сохранены.";
+  }
+  if (error?.code === "NETWORK_ERROR") {
+    return "Связь с сервером прервана. Данные формы сохранены.";
+  }
+  if (error?.code === "REQUEST_ABORTED") {
+    return "Запрос отменён.";
+  }
+  if (error?.code === "IDEMPOTENCY_KEY_REUSED") {
+    return "Эта операция уже использована с другими данными. Начните новую карточку или обновите форму.";
+  }
+  if (error?.code === "IDEMPOTENCY_REPLAY_UNAVAILABLE") {
+    return "Не удалось восстановить результат предыдущего сохранения. Передайте requestId разработчику.";
+  }
+  if (error?.code === "INTERNAL_ERROR" || /prisma|sql|database|stack/i.test(String(error?.message ?? ""))) {
+    return "Не удалось сохранить. Передайте requestId разработчику.";
+  }
   if (typeof error?.message === "string" && error.message.length > 0) {
     return error.message;
   }
@@ -1143,7 +1779,11 @@ function localizeSlugError(message, slug) {
 }
 
 function isNetworkFailure(error) {
-  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED" || error?.status === 0;
+  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT" || error?.status === 0;
+}
+
+function isRetryableCreateFailure(error) {
+  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT";
 }
 
 function isSlugConflict(error) {
@@ -1164,10 +1804,30 @@ function saveStateForError(error) {
   return "failedServer";
 }
 
-function createClientRequestId() {
+function readRequestId(error) {
+  return typeof error?.requestId === "string" && error.requestId.length > 0 ? error.requestId : null;
+}
+
+function createStableClientRequestId() {
   const random = globalThis.crypto?.randomUUID?.();
 
   return typeof random === "string"
     ? `req_${random}`
     : `req_${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createRandomUuid() {
+  const random = globalThis.crypto?.randomUUID?.();
+
+  if (typeof random === "string") {
+    return random;
+  }
+
+  throw new Error("Browser UUID support is required.");
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
