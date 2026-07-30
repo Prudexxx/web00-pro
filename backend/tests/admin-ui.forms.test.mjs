@@ -48,6 +48,12 @@ describe("admin site form utilities", () => {
     expectValidationError(() => serializeOptionalUrl("javascript:alert(1)"), {
       details: [{ message: "Must be a valid http or https URL.", path: "url" }]
     });
+    expectValidationError(() => serializePositiveInteger("2147483648", "priceAmountCents"), {
+      details: [{ message: "Must be at most 2147483647.", path: "priceAmountCents" }]
+    });
+    expectValidationError(() => serializeNonNegativeInteger("2147483648", "sortOrder"), {
+      details: [{ message: "Must be at most 2147483647.", path: "sortOrder" }]
+    });
   });
 
   it("builds exact create draft payloads and omits unknown or protected fields", () => {

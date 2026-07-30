@@ -10,6 +10,7 @@ const baseCreate = {
   slug: "admin-site",
   title: "Admin Site"
 };
+const int32Max = 2_147_483_647;
 
 describe("admin site validation", () => {
   it("rejects featured in create requests for every role", () => {
@@ -51,6 +52,74 @@ describe("admin site validation", () => {
     );
   });
 
+  it("rejects unsupported demo modes before database constraints", () => {
+    expectValidationDetail(() =>
+      parseCreateAdminSiteInput({
+        ...baseCreate,
+        demoMode: "iframe"
+      })
+    , {
+      message: "Выберите допустимый режим демо.",
+      path: "demoMode"
+    });
+    expectValidationDetail(() =>
+      parseUpdateAdminSiteInput({ demoMode: "external" }, "admin")
+    , {
+      message: "Выберите допустимый режим демо.",
+      path: "demoMode"
+    });
+  });
+
+  it("accepts only approved demo modes and normalizes empty mode to null", () => {
+    expect(parseCreateAdminSiteInput({ ...baseCreate, demoMode: "none" })).toMatchObject({
+      demoMode: "none"
+    });
+    expect(
+      parseCreateAdminSiteInput({ ...baseCreate, demoMode: "external-iframe" })
+    ).toMatchObject({
+      demoMode: "external-iframe"
+    });
+    expect(parseCreateAdminSiteInput({ ...baseCreate, demoMode: "" })).toMatchObject({
+      demoMode: null
+    });
+    expect(parseUpdateAdminSiteInput({ demoMode: null }, "admin")).toEqual({
+      demoMode: null
+    });
+  });
+
+  it("rejects integer overflow before PostgreSQL integer constraints", () => {
+    for (const path of ["priceAmountCents", "developmentDays", "sortOrder"] as const) {
+      expectValidationDetail(() =>
+        parseCreateAdminSiteInput({
+          ...baseCreate,
+          [path]: int32Max + 1
+        })
+      , {
+        message: "Must be at most 2147483647.",
+        path
+      });
+      expectValidationDetail(() =>
+        parseUpdateAdminSiteInput({ [path]: int32Max + 1 }, "admin")
+      , {
+        message: "Must be at most 2147483647.",
+        path
+      });
+    }
+
+    expect(
+      parseCreateAdminSiteInput({
+        ...baseCreate,
+        developmentDays: int32Max,
+        priceAmountCents: int32Max,
+        sortOrder: int32Max
+      })
+    ).toMatchObject({
+      developmentDays: int32Max,
+      priceAmountCents: int32Max,
+      sortOrder: int32Max
+    });
+  });
+
   it("allows featured only in admin patch and never in editor patch", () => {
     expect(parseUpdateAdminSiteInput({ featured: true }, "admin")).toEqual({
       featured: true
@@ -60,3 +129,21 @@ describe("admin site validation", () => {
     );
   });
 });
+
+function expectValidationDetail(
+  action: () => unknown,
+  expected: { message: string; path: string }
+): void {
+  try {
+    action();
+  } catch (error) {
+    expect(error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      details: [expected],
+      message: "Invalid request."
+    });
+    return;
+  }
+
+  throw new Error(`Expected validation error for ${expected.path}.`);
+}

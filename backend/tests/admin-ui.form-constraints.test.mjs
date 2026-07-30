@@ -39,7 +39,7 @@ describe("admin UI browser form constraints", () => {
     expectTextLimit(screen.element, "legacyTitle", "160");
     expectTextLimit(screen.element, "deliveryLabel", "80");
     expectTextLimit(screen.element, "priceLabel", "80");
-    expectTextLimit(screen.element, "demoMode", "40");
+    expectSelectOptions(screen.element, "demoMode", ["none", "external-iframe"]);
     expectTextLimit(screen.element, "previewType", "40");
     for (const name of ["demoUrl", "demoLocalUrl", "externalDemoUrl", "originalDemoUrl", "siteUrl"]) {
       expectTextLimit(screen.element, name, "2048");
@@ -175,6 +175,13 @@ function expectNumeric(root, name, expected) {
   if (expected.max !== undefined) {
     expect(control.getAttribute("max")).toBe(expected.max);
   }
+}
+
+function expectSelectOptions(root, name, values) {
+  const control = field(root, name);
+  expect(control.tagName).toBe("select");
+  expect(control.getAttribute("type")).toBeNull();
+  expect(control.querySelectorAll("option").map((option) => option.getAttribute("value"))).toEqual(values);
 }
 
 function field(root, name) {

@@ -7,6 +7,7 @@ import {
   setBusy
 } from "../dom.js";
 import {
+  DB_INT_MAX,
   FormValidationError,
   SITE_LIMITS,
   buildCreateSitePayload,
@@ -15,10 +16,19 @@ import {
 } from "../forms.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
+const DEMO_MODE_OPTIONS = Object.freeze([
+  {
+    label: "Без демо",
+    value: "none"
+  },
+  {
+    label: "Внешнее демо",
+    value: "external-iframe"
+  }
+]);
 const FIELD_MAX_LENGTHS = Object.freeze({
   deliveryLabel: SITE_LIMITS.deliveryLabel,
   demoLocalUrl: SITE_LIMITS.url,
-  demoMode: SITE_LIMITS.demoMode,
   demoUrl: SITE_LIMITS.url,
   externalDemoUrl: SITE_LIMITS.url,
   fullDescription: SITE_LIMITS.fullDescription,
@@ -237,7 +247,7 @@ export function createSiteEditorScreen(options) {
       createArrayField("tags", "Теги", errors, readArrayValue("tags")),
       createField("legacyTitle", "Старое название", "input", errors, readValue("legacyTitle")),
       createField("previewType", "Тип превью", "input", errors, readValue("previewType")),
-      createField("demoMode", "Режим демо", "input", errors, readValue("demoMode"))
+      createDemoModeField(errors)
     ]);
   }
 
@@ -254,14 +264,17 @@ export function createSiteEditorScreen(options) {
   function createCommercialSection(errors) {
     return createSection("Коммерция", [
       createField("priceAmountCents", "Цена в копейках", "input", errors, readValue("priceAmountCents"), {
+        max: String(DB_INT_MAX),
         type: "number"
       }),
       createField("priceLabel", "Метка цены", "input", errors, readValue("priceLabel")),
       createField("developmentDays", "Дней разработки", "input", errors, readValue("developmentDays"), {
+        max: String(DB_INT_MAX),
         type: "number"
       }),
       createField("deliveryLabel", "Срок поставки", "input", errors, readValue("deliveryLabel")),
       createField("sortOrder", "Порядок", "input", errors, readValue("sortOrder"), {
+        max: String(DB_INT_MAX),
         min: "0",
         type: "number"
       })
@@ -334,6 +347,43 @@ export function createSiteEditorScreen(options) {
             })
           ]
         : [])
+    });
+  }
+
+  function createDemoModeField(errors) {
+    const errorId = fieldErrorId("demoMode");
+    const hintId = "admin-field-help-demoMode";
+    const select = createElement("select", {
+      documentRef,
+      attributes: {
+        "aria-describedby": `${hintId} ${errorId}`,
+        name: "demoMode"
+      },
+      children: DEMO_MODE_OPTIONS.map((option) => createElement("option", {
+        documentRef,
+        text: option.label,
+        attributes: {
+          value: option.value
+        }
+      }))
+    });
+
+    select.value = readDemoModeValue();
+
+    return createElement("label", {
+      documentRef,
+      className: "admin-field",
+      children: [
+        createElement("span", { documentRef, text: "Режим демо" }),
+        select,
+        createElement("span", {
+          documentRef,
+          className: "admin-field-help",
+          attributes: { id: hintId },
+          text: "Выберите “Без демо”, если отдельной рабочей ссылки нет. При выборе “Без демо” публичная карточка покажет “Подробнее”; ссылки можно очистить вручную."
+        }),
+        renderFieldErrors("demoMode", errors)
+      ]
     });
   }
 
@@ -518,6 +568,12 @@ export function createSiteEditorScreen(options) {
     const value = lastFormState[fieldName] ?? currentSite?.[fieldName] ?? [];
 
     return Array.isArray(value) ? value : String(value).split(/\r?\n/);
+  }
+
+  function readDemoModeValue() {
+    const value = lastFormState.demoMode ?? currentSite?.demoMode ?? "none";
+
+    return value === "external-iframe" ? "external-iframe" : "none";
   }
 }
 
