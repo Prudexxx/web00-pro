@@ -1,5 +1,15 @@
+import { createTimedSignal } from "./request-timeout.js";
+
 const JSON_CONTENT_TYPE = "application/json";
 const REFRESHABLE_AUTH_CODE = "UNAUTHORIZED";
+
+export const ADMIN_REQUEST_TIMEOUTS = Object.freeze({
+  jsonGet: 25_000,
+  jsonMutation: 45_000,
+  multipart: 120_000,
+  readinessAttempt: 15_000,
+  readinessTotal: 90_000
+});
 
 export class AdminApiError extends Error {
   constructor({ code, details, message, requestId, status }) {
@@ -36,6 +46,11 @@ export function createApiClient(options) {
   }
 
   async function doRefresh({ signal } = {}) {
+    const timed = createTimedSignal({
+      externalSignal: signal,
+      timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonMutation
+    });
+
     try {
       const response = await fetchImpl("/api/auth/refresh", {
         credentials: "same-origin",
@@ -43,7 +58,7 @@ export function createApiClient(options) {
           Accept: JSON_CONTENT_TYPE
         },
         method: "POST",
-        signal
+        signal: timed.signal
       });
       const body = await readResponseBody(response);
 
@@ -61,19 +76,29 @@ export function createApiClient(options) {
       return data.user ?? null;
     } catch (error) {
       authStore.clear();
-      throw normalizeThrownError(error);
+      throw normalizeThrownError(error, { timedOut: timed.didTimeout() });
+    } finally {
+      timed.cleanup();
     }
   }
 
   async function requestJson(path, requestOptions = {}, replayed = false) {
     assertApiPath(path);
+    const timed = createTimedSignal({
+      externalSignal: requestOptions.signal,
+      timeoutMs: selectJsonTimeoutMs(requestOptions)
+    });
+    const fetchOptions = toJsonFetchOptions({
+      ...requestOptions,
+      signal: timed.signal
+    }, authStore);
 
     try {
-      const response = await fetchImpl(path, toJsonFetchOptions(requestOptions, authStore));
+      const response = await fetchImpl(path, fetchOptions);
       const body = await readResponseBody(response);
 
       if (isAuthExpiredResponse(response, body) && requestOptions.auth !== false && !replayed) {
-        await refreshAccess();
+        await refreshAccess({ signal: requestOptions.signal });
         return requestJson(path, requestOptions, true);
       }
 
@@ -83,15 +108,25 @@ export function createApiClient(options) {
 
       return body;
     } catch (error) {
-      throw normalizeThrownError(error);
+      throw normalizeThrownError(error, { timedOut: timed.didTimeout() });
+    } finally {
+      timed.cleanup();
     }
   }
 
   async function requestMultipart(path, requestOptions = {}, replayed = false) {
     assertApiPath(path);
+    const timed = createTimedSignal({
+      externalSignal: requestOptions.signal,
+      timeoutMs: selectMultipartTimeoutMs(requestOptions)
+    });
+    const fetchOptions = toMultipartFetchOptions({
+      ...requestOptions,
+      signal: timed.signal
+    }, authStore);
 
     try {
-      const response = await fetchImpl(path, toMultipartFetchOptions(requestOptions, authStore));
+      const response = await fetchImpl(path, fetchOptions);
       const body = await readResponseBody(response);
 
       if (isAuthExpiredResponse(response, body) && requestOptions.auth !== false && !replayed) {
@@ -105,7 +140,9 @@ export function createApiClient(options) {
 
       return body;
     } catch (error) {
-      throw normalizeThrownError(error);
+      throw normalizeThrownError(error, { timedOut: timed.didTimeout() });
+    } finally {
+      timed.cleanup();
     }
   }
 
@@ -157,6 +194,11 @@ export function createApiClient(options) {
   }
 
   async function logout({ signal } = {}) {
+    const timed = createTimedSignal({
+      externalSignal: signal,
+      timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonMutation
+    });
+
     try {
       const response = await fetchImpl("/api/auth/logout", {
         credentials: "same-origin",
@@ -164,7 +206,7 @@ export function createApiClient(options) {
           Accept: JSON_CONTENT_TYPE
         },
         method: "POST",
-        signal
+        signal: timed.signal
       });
       const body = await readResponseBody(response);
 
@@ -172,7 +214,9 @@ export function createApiClient(options) {
         throw parseApiError(response, body);
       }
     } catch (error) {
-      throw normalizeThrownError(error);
+      throw normalizeThrownError(error, { timedOut: timed.didTimeout() });
+    } finally {
+      timed.cleanup();
     }
   }
 
@@ -379,16 +423,44 @@ function readSafeUser(data) {
   };
 }
 
-function normalizeThrownError(error) {
+function selectJsonTimeoutMs(options) {
+  if (Number.isFinite(options?.timeoutMs)) {
+    return options.timeoutMs;
+  }
+
+  const method = String(options?.method ?? "GET").toUpperCase();
+
+  return method === "GET" && options?.body === undefined
+    ? ADMIN_REQUEST_TIMEOUTS.jsonGet
+    : ADMIN_REQUEST_TIMEOUTS.jsonMutation;
+}
+
+function selectMultipartTimeoutMs(options) {
+  return Number.isFinite(options?.timeoutMs)
+    ? options.timeoutMs
+    : ADMIN_REQUEST_TIMEOUTS.multipart;
+}
+
+function normalizeThrownError(error, options = {}) {
   if (error instanceof AdminApiError) {
     return error;
   }
 
   if (isRecord(error) && error.name === "AbortError") {
+    if (options.timedOut === true) {
+      return new AdminApiError({
+        code: "REQUEST_TIMEOUT",
+        details: [],
+        message: "Сервер не ответил вовремя.",
+        requestId: null,
+        status: 0
+      });
+    }
+
     return new AdminApiError({
       code: "REQUEST_ABORTED",
       details: [],
-      message: "Request was cancelled.",
+      message: "Запрос отменён.",
       requestId: null,
       status: 0
     });
@@ -397,7 +469,7 @@ function normalizeThrownError(error) {
   return new AdminApiError({
     code: "NETWORK_ERROR",
     details: [],
-    message: "Unable to reach the server.",
+    message: "Не удалось связаться с сервером.",
     requestId: null,
     status: 0
   });

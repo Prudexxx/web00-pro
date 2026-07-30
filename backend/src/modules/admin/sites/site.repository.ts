@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import { AppError } from "../../../lib/errors.js";
 import type { AdminMutationContext } from "../admin.types.js";
@@ -23,6 +24,30 @@ import {
   type SiteCreateDraftDiagnostics,
   type SiteCreateDraftStage
 } from "./site-create-observability.js";
+
+const SITE_CREATE_DRAFT_ACTION = "site.create_draft";
+const CREATE_FINGERPRINT_FIELDS = [
+  "categoryId",
+  "deliveryLabel",
+  "demoLocalUrl",
+  "demoMode",
+  "demoUrl",
+  "developmentDays",
+  "externalDemoUrl",
+  "features",
+  "fullDescription",
+  "legacyTitle",
+  "originalDemoUrl",
+  "previewType",
+  "priceAmountCents",
+  "priceLabel",
+  "shortDescription",
+  "siteUrl",
+  "slug",
+  "sortOrder",
+  "tags",
+  "title"
+] as const satisfies readonly (keyof CreateAdminSiteInput)[];
 
 export interface AdminSiteRepository {
   createDraft(input: CreateAdminSiteInput, context: AdminMutationContext): Promise<AdminSiteRecord>;
@@ -99,7 +124,18 @@ export function createPrismaAdminSiteRepository(
       };
 
       try {
+        const requestFingerprint = createSiteCreateRequestFingerprint(input);
         const site = await prisma.$transaction(async (tx) => {
+          await acquireCreateDraftIdempotencyLock(tx, context);
+          const replay = await resolveCreateDraftReplay(tx, {
+            context,
+            requestFingerprint
+          });
+
+          if (replay !== null) {
+            return replay;
+          }
+
           setStage("CATEGORY_LOOKUP_STARTED");
           await assertCategoryIsActive(tx, input.categoryId);
           setStage("CATEGORY_LOOKUP_COMPLETED");
@@ -142,8 +178,8 @@ export function createPrismaAdminSiteRepository(
 
           setStage("AUDIT_INSERT_STARTED");
           await createSiteAudit(tx, {
-            action: "site.create_draft",
-            afterJson: siteSnapshot(site),
+            action: SITE_CREATE_DRAFT_ACTION,
+            afterJson: siteSnapshot(site, requestFingerprint),
             beforeJson: Prisma.DbNull,
             context,
             entityId: site.id
@@ -507,13 +543,119 @@ async function createSiteAudit(
   });
 }
 
-function siteSnapshot(site: AdminSiteRecord): Prisma.InputJsonValue {
+async function acquireCreateDraftIdempotencyLock(
+  tx: Prisma.TransactionClient,
+  context: AdminMutationContext
+): Promise<void> {
+  const lockIdentity = `${context.actor.id}:${context.requestId}`;
+
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockIdentity}, 0))`;
+}
+
+async function resolveCreateDraftReplay(
+  tx: Prisma.TransactionClient,
+  input: {
+    context: AdminMutationContext;
+    requestFingerprint: string;
+  }
+): Promise<AdminSiteRecord | null> {
+  const audit = await tx.auditLog.findFirst({
+    orderBy: { createdAt: "desc" },
+    where: {
+      action: SITE_CREATE_DRAFT_ACTION,
+      actorUserId: input.context.actor.id,
+      entityType: "site",
+      requestId: input.context.requestId
+    }
+  });
+
+  if (audit === null) {
+    return null;
+  }
+
+  const storedFingerprint = readStoredRequestFingerprint(audit.afterJson);
+
+  if (storedFingerprint !== input.requestFingerprint) {
+    throw idempotencyKeyReused();
+  }
+
+  const entityId = typeof audit.entityId === "string" ? audit.entityId : "";
+  const site = await tx.site.findUnique({
+    select: siteSelect,
+    where: { id: entityId }
+  });
+
+  if (site === null) {
+    throw idempotencyReplayUnavailable();
+  }
+
+  return site as AdminSiteRecord;
+}
+
+function createSiteCreateRequestFingerprint(input: CreateAdminSiteInput): string {
+  const canonical = Object.fromEntries(
+    CREATE_FINGERPRINT_FIELDS.map((field) => [field, normalizeFingerprintValue(input[field])])
+  );
+
+  return createHash("sha256")
+    .update(JSON.stringify(canonical))
+    .digest("hex");
+}
+
+function normalizeFingerprintValue(value: unknown): unknown {
+  if (value === undefined) {
+    return { type: "undefined" };
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeFingerprintValue);
+  }
+
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, normalizeFingerprintValue((value as Record<string, unknown>)[key])])
+  );
+}
+
+function readStoredRequestFingerprint(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  const fingerprint = (value as Record<string, unknown>).requestFingerprint;
+
+  return typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint)
+    ? fingerprint
+    : null;
+}
+
+function idempotencyKeyReused(): AppError {
+  return new AppError({
+    code: "IDEMPOTENCY_KEY_REUSED",
+    message: "Операция сохранения уже использована с другими данными.",
+    statusCode: 409
+  });
+}
+
+function idempotencyReplayUnavailable(): AppError {
+  return new AppError({
+    code: "IDEMPOTENCY_REPLAY_UNAVAILABLE",
+    message: "Не удалось восстановить результат предыдущего сохранения.",
+    statusCode: 409
+  });
+}
+
+function siteSnapshot(site: AdminSiteRecord, requestFingerprint?: string): Prisma.InputJsonValue {
   return {
     active: site.active,
     categoryId: site.categoryId,
     featured: site.featured,
     id: site.id,
     publishedAt: site.publishedAt?.toISOString() ?? null,
+    ...(requestFingerprint === undefined ? {} : { requestFingerprint }),
     slug: site.slug,
     status: site.status,
     title: site.title

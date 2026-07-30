@@ -209,6 +209,7 @@ function createRepository(overrides: {
 } = {}) {
   const events: SiteCreateDraftFailedLogEntry[] = [];
   const tx = {
+    $queryRaw: vi.fn(async () => [{ pg_advisory_xact_lock: "" }]),
     auditLog: {
       create: vi.fn(async () => {
         if (overrides.auditCreateError !== undefined) {
@@ -216,7 +217,8 @@ function createRepository(overrides: {
         }
 
         return {};
-      })
+      }),
+      findFirst: vi.fn(async () => null)
     },
     category: {
       findUnique: vi.fn(async () => {
@@ -234,7 +236,8 @@ function createRepository(overrides: {
         }
 
         return siteRecord();
-      })
+      }),
+      findUnique: vi.fn(async () => null)
     }
   };
   const prisma = {

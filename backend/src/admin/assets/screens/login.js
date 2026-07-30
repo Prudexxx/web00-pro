@@ -4,6 +4,7 @@ const LOGIN_ERROR_MESSAGES = Object.freeze({
   ORIGIN_NOT_ALLOWED: "Вход с этого адреса недоступен.",
   RATE_LIMITED: "Слишком много попыток. Подождите и попробуйте снова.",
   REQUEST_ABORTED: "Запрос отменён.",
+  REQUEST_TIMEOUT: "Сервер не ответил вовремя.",
   USER_DISABLED: "Пользователь отключён. Обратитесь к администратору."
 });
 
@@ -77,6 +78,9 @@ export function createLoginView(options) {
       await onSubmit({ email, password });
       status.textContent = "Вход выполнен.";
     } catch (error) {
+      if (isNetworkLoginFailure(error)) {
+        passwordInput.value = password;
+      }
       status.textContent = toLoginMessage(error);
       emailInput.focus();
     } finally {
@@ -91,6 +95,10 @@ export function toLoginMessage(error) {
   const code = typeof error?.code === "string" ? error.code : "NETWORK_ERROR";
 
   return LOGIN_ERROR_MESSAGES[code] ?? "Не удалось войти. Проверьте данные и попробуйте снова.";
+}
+
+function isNetworkLoginFailure(error) {
+  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT";
 }
 
 function setLoading({ status, submitButton }, loading) {
