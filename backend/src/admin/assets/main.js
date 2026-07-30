@@ -9,6 +9,11 @@ import { createSiteEditorScreen } from "./screens/site-editor.js";
 import { createSitesListScreen } from "./screens/sites-list.js";
 import { createUsersScreen } from "./screens/users.js";
 
+const ADMIN_READY_PATH = "/api/ready";
+const ADMIN_READY_TIMEOUT_MS = 90_000;
+const ADMIN_READY_RETRY_MS = 1_000;
+const ADMIN_KEEP_WARM_INTERVAL_MS = 10 * 60 * 1000;
+
 export async function bootstrapAdminApp(options = {}) {
   const documentRef = options.documentRef ?? document;
   const root = options.root ?? documentRef.querySelector("#admin-root");
@@ -26,7 +31,11 @@ export async function bootstrapAdminApp(options = {}) {
   let currentScreen = null;
   let currentUser = null;
   let shellElement = null;
+  let keepWarmTimer = null;
   const autoLoadScreens = options.autoLoadScreens ?? options.documentRef === undefined;
+  const enableReadinessCheck = options.enableReadinessCheck ?? options.documentRef === undefined;
+  const enableKeepWarm = options.enableKeepWarm ?? options.documentRef === undefined;
+  const keepWarmIntervalMs = options.keepWarmIntervalMs ?? ADMIN_KEEP_WARM_INTERVAL_MS;
   const unsubscribe = authStore.subscribe((snapshot) => {
     root.setAttribute("aria-busy", isBusyState(snapshot.state) ? "true" : "false");
   });
@@ -66,6 +75,7 @@ export async function bootstrapAdminApp(options = {}) {
     shellElement = createAuthenticatedShell({
       documentRef,
       onLogout: () => {
+        stopKeepWarm();
         void logoutAdminSession({
           abortController: screenAbort,
           api,
@@ -83,6 +93,7 @@ export async function bootstrapAdminApp(options = {}) {
     if (autoLoadScreens) {
       navigate("sites");
     }
+    startKeepWarm();
     root.focus();
   }
 
@@ -215,6 +226,38 @@ export async function bootstrapAdminApp(options = {}) {
     }
   }
 
+  function showReadinessWait() {
+    root.replaceChildren(
+      element(documentRef, "section", { class: "admin-bootstrap" }, [
+        element(documentRef, "p", { class: "admin-kicker" }, ["WEB00"]),
+        element(documentRef, "h1", {}, ["Backend просыпается"]),
+        element(documentRef, "p", {}, ["Backend просыпается, подождите..."])
+      ])
+    );
+  }
+
+  function startKeepWarm() {
+    if (!enableKeepWarm || keepWarmTimer !== null) {
+      return;
+    }
+    keepWarmTimer = setInterval(() => {
+      if (!isAdminTabVisibleAndOnline(documentRef)) {
+        return;
+      }
+      void api.requestJson(ADMIN_READY_PATH, {
+        auth: false,
+        method: "GET"
+      }).catch(() => {});
+    }, keepWarmIntervalMs);
+  }
+
+  function stopKeepWarm() {
+    if (keepWarmTimer !== null) {
+      clearInterval(keepWarmTimer);
+      keepWarmTimer = null;
+    }
+  }
+
   function abortScreenRequests() {
     if (screenAbort !== null) {
       screenAbort.abort();
@@ -226,6 +269,10 @@ export async function bootstrapAdminApp(options = {}) {
 
   try {
     const user = await api.bootstrapSession();
+    if (enableReadinessCheck) {
+      showReadinessWait();
+      await waitForAdminBackendReady(api, options);
+    }
     showShell(user);
   } catch {
     authStore.clear();
@@ -236,11 +283,35 @@ export async function bootstrapAdminApp(options = {}) {
     api,
     authStore,
     destroy() {
+      stopKeepWarm();
       destroyCurrentScreen();
       abortScreenRequests();
       unsubscribe();
     }
   };
+}
+
+export async function waitForAdminBackendReady(api, options = {}) {
+  const timeoutMs = options.readinessTimeoutMs ?? ADMIN_READY_TIMEOUT_MS;
+  const retryMs = options.readinessRetryMs ?? ADMIN_READY_RETRY_MS;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      await api.requestJson(ADMIN_READY_PATH, {
+        auth: false,
+        method: "GET"
+      });
+      return true;
+    } catch (error) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw error;
+      }
+      await wait(retryMs);
+    }
+  }
+
+  return false;
 }
 
 export async function logoutAdminSession({ abortController, api, authStore, destroyCurrentScreen, showLogin }) {
@@ -267,6 +338,20 @@ if (typeof document !== "undefined") {
 
 function isBusyState(state) {
   return state === "BOOTSTRAPPING" || state === "REFRESHING" || state === "LOGGING_OUT";
+}
+
+function isAdminTabVisibleAndOnline(documentRef) {
+  const view = documentRef.defaultView ?? globalThis;
+  const visible = documentRef.visibilityState === undefined || documentRef.visibilityState === "visible";
+  const online = view.navigator?.onLine !== false;
+
+  return visible && online;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function element(documentRef, tagName, attributes = {}, children = []) {

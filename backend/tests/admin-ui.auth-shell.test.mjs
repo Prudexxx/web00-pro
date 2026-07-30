@@ -8,6 +8,7 @@ import { createAuthenticatedShell } from "../src/admin/assets/screens/shell.js";
 const restoreGlobals = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   while (restoreGlobals.length > 0) {
     restoreGlobals.pop()();
   }
@@ -73,6 +74,144 @@ describe("admin auth shell", () => {
     expect(root.textContent).toContain("Эл. почта");
     expect(root.textContent).toContain("Пароль");
     expect(root.textContent).not.toMatch(/регистрац|восстанов|register|reset/i);
+  });
+
+  it("checks backend readiness before showing the authenticated shell when enabled", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "ready-token",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      root
+    });
+
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      "/api/auth/refresh",
+      "/api/auth/me",
+      "/api/ready"
+    ]);
+    expect(readHeader(fetchImpl.mock.calls[2][1], "Authorization")).toBeUndefined();
+    expect(root.textContent).toContain("admin@example.test");
+  });
+
+  it("shows a cold-start readiness message while waiting for the backend", async () => {
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const ready = createDeferred();
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "ready-token",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/ready") {
+        return ready.promise;
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    const boot = bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: false,
+      enableReadinessCheck: true,
+      fetchImpl,
+      root
+    });
+    await waitFor(() => root.textContent.includes("Backend просыпается, подождите..."));
+
+    ready.resolve(jsonResponse(200, { status: "ready" }));
+    await boot;
+    expect(root.textContent).toContain("admin@example.test");
+  });
+
+  it("stops visible-tab keep-warm readiness pings after logout", async () => {
+    vi.useFakeTimers();
+    const documentRef = createFakeDocument();
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "keepwarm-token",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+      if (requestPath === "/api/auth/logout") {
+        return Promise.resolve(jsonResponse(204, null));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: true,
+      enableReadinessCheck: false,
+      fetchImpl,
+      keepWarmIntervalMs: 10,
+      root
+    });
+
+    vi.advanceTimersByTime(10);
+    await flushPromises();
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(1);
+
+    root.querySelector('[data-action="logout"]').dispatchEvent(createFakeEvent("click"));
+    await flushPromises();
+    vi.advanceTimersByTime(30);
+    await flushPromises();
+
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(1);
   });
 
   it("submits login credentials, clears the password field, calls me, and stores token only in memory", async () => {
@@ -401,6 +540,15 @@ function createFakeEvent(type) {
     target: null,
     type
   };
+}
+
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((nextResolve) => {
+    resolve = nextResolve;
+  });
+
+  return { promise, resolve };
 }
 
 async function flushPromises() {

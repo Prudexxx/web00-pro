@@ -7,15 +7,27 @@ import {
   setBusy
 } from "../dom.js";
 import {
+  appendSlugTimestamp,
   DB_INT_MAX,
   FormValidationError,
   SITE_LIMITS,
   buildCreateSitePayload,
   buildUpdateSitePayload,
+  formatCentsToRubles,
+  generateSiteSlug,
   mapValidationDetails
 } from "../forms.js";
+import {
+  buildSiteFormDraftKey,
+  readSiteFormDraft,
+  removeSiteFormDraft,
+  resolveSiteFormDraftStorage,
+  writeSiteFormDraft
+} from "../site-form-drafts.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
+const READY_PATH = "/api/ready";
+const DRAFT_AUTOSAVE_MS = 1000;
 const DEMO_MODE_OPTIONS = Object.freeze([
   {
     label: "Без демо",
@@ -29,19 +41,21 @@ const DEMO_MODE_OPTIONS = Object.freeze([
 const FIELD_MAX_LENGTHS = Object.freeze({
   deliveryLabel: SITE_LIMITS.deliveryLabel,
   demoLocalUrl: SITE_LIMITS.url,
+  demoUrlSimple: SITE_LIMITS.url,
   demoUrl: SITE_LIMITS.url,
   externalDemoUrl: SITE_LIMITS.url,
   fullDescription: SITE_LIMITS.fullDescription,
   legacyTitle: SITE_LIMITS.legacyTitle,
   originalDemoUrl: SITE_LIMITS.url,
   previewType: SITE_LIMITS.previewType,
+  priceRubles: SITE_LIMITS.priceRubles,
   priceLabel: SITE_LIMITS.priceLabel,
   shortDescription: SITE_LIMITS.shortDescription,
   siteUrl: SITE_LIMITS.url,
   slug: SITE_LIMITS.slug,
   title: SITE_LIMITS.title
 });
-const URL_FIELDS = new Set(["demoLocalUrl", "demoUrl", "externalDemoUrl", "originalDemoUrl", "siteUrl"]);
+const URL_FIELDS = new Set(["demoLocalUrl", "demoUrl", "demoUrlSimple", "externalDemoUrl", "originalDemoUrl", "siteUrl"]);
 const REQUIRED_FIELDS = new Set(["categoryId", "shortDescription", "slug", "title"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -55,12 +69,22 @@ export function createSiteEditorScreen(options) {
   const onImages = typeof options?.onImages === "function" ? options.onImages : () => {};
   const onSaved = typeof options?.onSaved === "function" ? options.onSaved : () => {};
   const onStatus = typeof options?.onStatus === "function" ? options.onStatus : () => {};
+  const storage = resolveSiteFormDraftStorage(options?.storage);
+  const draftKey = buildSiteFormDraftKey({ mode, siteId });
+  const draftAutosaveMs = Number.isFinite(options?.draftAutosaveMs) ? options.draftAutosaveMs : DRAFT_AUTOSAVE_MS;
+  const windowRef = options?.windowRef ?? documentRef.defaultView ?? null;
   let activeController = null;
   let busy = false;
   let destroyed = false;
   let currentSite = null;
   let categories = [];
   let lastFormState = {};
+  let pendingDraft = null;
+  let draftSaveTimer = null;
+  let dirty = false;
+  let networkOnline = windowRef?.navigator?.onLine !== false;
+  let slugManuallyEdited = mode !== "create";
+  let updatingSlug = false;
 
   const statusRegion = createLiveRegion({
     className: "admin-screen-status",
@@ -99,6 +123,8 @@ export function createSiteEditorScreen(options) {
     ]
   });
 
+  registerNetworkListeners();
+
   async function load() {
     abortActiveRequest();
     const controller = new AbortController();
@@ -128,6 +154,7 @@ export function createSiteEditorScreen(options) {
 
       categories = Array.isArray(categoryResponse?.data) ? categoryResponse.data : [];
       currentSite = siteResponse?.data ?? null;
+      pendingDraft = readSiteFormDraft(storage, draftKey);
       renderForm({});
       statusRegion.textContent = "Форма готова.";
       onStatus("Форма готова.");
@@ -143,6 +170,9 @@ export function createSiteEditorScreen(options) {
   function destroy() {
     destroyed = true;
     abortActiveRequest();
+    clearDraftSaveTimer();
+    unregisterNetworkListeners();
+    unregisterDirtyGuard();
   }
 
   function abortActiveRequest() {
@@ -162,23 +192,34 @@ export function createSiteEditorScreen(options) {
 
   function renderForm(errors) {
     const form = createForm(errors);
-    replaceContent(formHost, form);
+    replaceContent(formHost, ...(pendingDraft === null ? [form] : [createDraftRecoveryBanner(), form]));
   }
 
   function createForm(errors) {
     const form = createElement("form", {
       documentRef,
       className: "admin-editor-form",
+      attributes: {
+        "data-save-state": "idle"
+      },
       children: [
         createBasicSection(errors),
+        createDemoSection(errors),
         createCatalogSection(errors),
-        createLinksSection(errors),
         createCommercialSection(errors),
+        createAdvancedSection(errors),
         ...(role === "admin" && mode === "edit" ? [createAdminSection(errors)] : []),
         createActions()
       ]
     });
 
+    form.addEventListener("input", (event) => {
+      handleFormInput(form, event);
+    });
+    form.addEventListener("change", () => {
+      syncDemoUrlVisibility(form);
+      scheduleDraftSave(form);
+    });
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       if (busy) {
@@ -188,31 +229,62 @@ export function createSiteEditorScreen(options) {
       const submitButton = form.querySelector('[data-action="save-site"]');
       busy = true;
       setBusy(submitButton, true);
+      setSaveState(form, "validating");
+      let formState = {};
 
       try {
-        const formState = readFormState(form);
+        formState = readFormState(form);
         lastFormState = formState;
         const payload = mode === "create"
           ? buildCreateSitePayload(formState)
           : buildUpdateSitePayload(formState, role);
+        if (!networkOnline) {
+          renderForm({
+            _form: ["Соединение нестабильно. Форма сохранена локально."]
+          });
+          statusRegion.textContent = "Соединение нестабильно. Форма сохранена локально.";
+          onStatus("Соединение нестабильно. Форма сохранена локально.");
+          return;
+        }
+        setSaveState(form, "warmingBackend");
+        await ensureBackendReady();
+        setSaveState(form, "saving");
         const response = await apiClient.requestJson(
           mode === "create" ? "/api/admin/sites" : sitePath(siteId),
           {
             body: payload,
+            headers: {
+              "X-Request-Id": createClientRequestId()
+            },
             method: mode === "create" ? "POST" : "PATCH"
           }
         );
         const saved = response?.data ?? null;
         currentSite = saved;
+        dirty = false;
+        clearDraft();
+        unregisterDirtyGuard();
+        setSaveState(form, "saved");
         statusRegion.textContent = "Сохранено.";
         onStatus("Сохранено.");
         onSaved(saved);
       } catch (error) {
+        if (await handleNetworkFailure(error, formState, form)) {
+          return;
+        }
         const mapped = error instanceof FormValidationError
           ? mapValidationDetails(error.details)
           : mapValidationDetails(error?.details);
+        const nextErrors = Object.keys(mapped).length === 0 ? { _form: [safeMessage(error)] } : mapped;
 
-        renderForm(Object.keys(mapped).length === 0 ? { _form: [safeMessage(error)] } : mapped);
+        if (isSlugConflict(error) && nextErrors.slug === undefined && formState.slug !== undefined) {
+          nextErrors.slug = [
+            `Адрес карточки уже занят. Можно попробовать: ${appendSlugTimestamp(formState.slug)}.`
+          ];
+        }
+
+        setSaveState(form, saveStateForError(error));
+        renderForm(nextErrors);
         renderErrorStatus(error);
         focusFirstInvalid(formHost.querySelector("form"), mapped);
       } finally {
@@ -229,10 +301,7 @@ export function createSiteEditorScreen(options) {
 
   function createBasicSection(errors) {
     const children = [
-      createField("title", "Название", "input", errors, readValue("title")),
-      ...(mode === "create" || role === "admin"
-        ? [createField("slug", "Slug", "input", errors, readValue("slug"))]
-        : []),
+      createField("title", "Название сайта", "input", errors, readValue("title")),
       createCategoryField(errors),
       createField("shortDescription", "Короткое описание", "textarea", errors, readValue("shortDescription")),
       createField("fullDescription", "Полное описание", "textarea", errors, readValue("fullDescription"))
@@ -241,44 +310,81 @@ export function createSiteEditorScreen(options) {
     return createSection("Основное", children);
   }
 
-  function createCatalogSection(errors) {
-    return createSection("Каталог", [
-      createArrayField("features", "Особенности", errors, readArrayValue("features")),
-      createArrayField("tags", "Теги", errors, readArrayValue("tags")),
-      createField("legacyTitle", "Старое название", "input", errors, readValue("legacyTitle")),
-      createField("previewType", "Тип превью", "input", errors, readValue("previewType")),
-      createDemoModeField(errors)
+  function createDemoSection(errors) {
+    return createSection("Демо", [
+      createDemoModeField(errors),
+      createField("demoUrlSimple", "Ссылка на демо", "input", errors, readDemoUrlSimpleValue(), {
+        "data-demo-url-field": "true",
+        hidden: readDemoModeValue() === "external-iframe" ? undefined : true
+      })
     ]);
   }
 
-  function createLinksSection(errors) {
-    return createSection("Ссылки", [
-      createField("demoUrl", "Ссылка на демо", "input", errors, readValue("demoUrl")),
-      createField("demoLocalUrl", "Локальная ссылка", "input", errors, readValue("demoLocalUrl")),
-      createField("externalDemoUrl", "Внешняя ссылка", "input", errors, readValue("externalDemoUrl")),
-      createField("originalDemoUrl", "Исходная ссылка", "input", errors, readValue("originalDemoUrl")),
-      createField("siteUrl", "Ссылка на сайт", "input", errors, readValue("siteUrl"))
+  function createCatalogSection(errors) {
+    return createSection("Каталог", [
+      createArrayField("features", "Особенности", errors, readArrayValue("features")),
+      createArrayField("tags", "Теги", errors, readArrayValue("tags"))
     ]);
   }
 
   function createCommercialSection(errors) {
     return createSection("Коммерция", [
-      createField("priceAmountCents", "Цена в копейках", "input", errors, readValue("priceAmountCents"), {
-        max: String(DB_INT_MAX),
-        type: "number"
+      createField("priceRubles", "Цена, ₽", "input", errors, readPriceRublesValue(), {
+        inputmode: "decimal",
+        maxlength: String(SITE_LIMITS.priceRubles),
+        type: "text"
       }),
       createField("priceLabel", "Метка цены", "input", errors, readValue("priceLabel")),
       createField("developmentDays", "Дней разработки", "input", errors, readValue("developmentDays"), {
         max: String(DB_INT_MAX),
         type: "number"
       }),
-      createField("deliveryLabel", "Срок поставки", "input", errors, readValue("deliveryLabel")),
-      createField("sortOrder", "Порядок", "input", errors, readValue("sortOrder"), {
-        max: String(DB_INT_MAX),
-        min: "0",
-        type: "number"
-      })
+      createField("deliveryLabel", "Текст срока", "input", errors, readValue("deliveryLabel"))
     ]);
+  }
+
+  function createAdvancedSection(errors) {
+    return createElement("details", {
+      documentRef,
+      className: "admin-editor-section admin-editor-advanced",
+      attributes: {
+        "data-section": "advanced-site-settings"
+      },
+      children: [
+        createElement("summary", {
+          documentRef,
+          text: "Расширенные настройки"
+        }),
+        ...(mode === "create" || role === "admin" ? [createSlugField(errors)] : []),
+        createField("previewType", "previewType", "input", errors, readValue("previewType"), {
+          "data-advanced-field": "true"
+        }),
+        createField("sortOrder", "sortOrder", "input", errors, readValue("sortOrder"), {
+          "data-advanced-field": "true",
+          max: String(DB_INT_MAX),
+          min: "0",
+          type: "number"
+        }),
+        createField("legacyTitle", "legacyTitle", "input", errors, readValue("legacyTitle"), {
+          "data-advanced-field": "true"
+        }),
+        createField("siteUrl", "siteUrl", "input", errors, readValue("siteUrl"), {
+          "data-advanced-field": "true"
+        }),
+        createField("demoUrl", "demoUrl", "input", errors, readValue("demoUrl"), {
+          "data-advanced-field": "true"
+        }),
+        createField("demoLocalUrl", "demoLocalUrl", "input", errors, readValue("demoLocalUrl"), {
+          "data-advanced-field": "true"
+        }),
+        createField("externalDemoUrl", "externalDemoUrl", "input", errors, readValue("externalDemoUrl"), {
+          "data-advanced-field": "true"
+        }),
+        createField("originalDemoUrl", "originalDemoUrl", "input", errors, readValue("originalDemoUrl"), {
+          "data-advanced-field": "true"
+        })
+      ]
+    });
   }
 
   function createAdminSection(errors) {
@@ -350,6 +456,37 @@ export function createSiteEditorScreen(options) {
     });
   }
 
+  function createSlugField(errors) {
+    const field = createField("slug", "Адрес карточки", "input", errors, readSlugValue(), {
+      helpText: "Создаётся автоматически. Менять обычно не нужно."
+    });
+    const regenerate = createElement("button", {
+      documentRef,
+      text: "Сгенерировать заново",
+      attributes: {
+        "data-action": "regenerate-slug",
+        type: "button"
+      },
+      on: {
+        click: () => {
+          const form = formHost.querySelector("form");
+
+          if (form === null) {
+            return;
+          }
+
+          slugManuallyEdited = false;
+          updateSlugFromTitle(form);
+          scheduleDraftSave(form);
+        }
+      }
+    });
+
+    field.append(regenerate);
+
+    return field;
+  }
+
   function createDemoModeField(errors) {
     const errorId = fieldErrorId("demoMode");
     const hintId = "admin-field-help-demoMode";
@@ -374,13 +511,13 @@ export function createSiteEditorScreen(options) {
       documentRef,
       className: "admin-field",
       children: [
-        createElement("span", { documentRef, text: "Режим демо" }),
+        createElement("span", { documentRef, text: "Есть демо?" }),
         select,
         createElement("span", {
           documentRef,
           className: "admin-field-help",
           attributes: { id: hintId },
-          text: "Выберите “Без демо”, если отдельной рабочей ссылки нет. При выборе “Без демо” публичная карточка покажет “Подробнее”; ссылки можно очистить вручную."
+          text: "Выберите “Без демо”, если отдельной рабочей ссылки нет."
         }),
         renderFieldErrors("demoMode", errors)
       ]
@@ -402,7 +539,8 @@ export function createSiteEditorScreen(options) {
   }
 
   function createField(name, label, kind, errors, value, attributes = {}) {
-    const fieldAttributes = buildFieldAttributes(name, kind, attributes);
+    const { helpText, ...htmlAttributes } = attributes;
+    const fieldAttributes = buildFieldAttributes(name, kind, htmlAttributes);
     const control = createElement(kind, {
       documentRef,
       attributes: fieldAttributes
@@ -419,6 +557,15 @@ export function createSiteEditorScreen(options) {
           text: label
         }),
         control,
+        ...(typeof helpText === "string" && helpText.length > 0
+          ? [
+              createElement("span", {
+                documentRef,
+                className: "admin-field-help",
+                text: helpText
+              })
+            ]
+          : []),
         renderFieldErrors(name, errors)
       ]
     });
@@ -543,6 +690,53 @@ export function createSiteEditorScreen(options) {
     onStatus(safeMessage(error));
   }
 
+  function createDraftRecoveryBanner() {
+    return createElement("div", {
+      documentRef,
+      className: "admin-draft-recovery",
+      attributes: {
+        role: "status"
+      },
+      children: [
+        createElement("span", {
+          documentRef,
+          text: "Найдены несохранённые данные. Восстановить?"
+        }),
+        createElement("button", {
+          documentRef,
+          text: "Восстановить",
+          attributes: {
+            "data-action": "restore-site-draft",
+            type: "button"
+          },
+          on: {
+            click: () => {
+              lastFormState = { ...pendingDraft?.fields };
+              pendingDraft = null;
+              dirty = true;
+              renderForm({});
+            }
+          }
+        }),
+        createElement("button", {
+          documentRef,
+          text: "Удалить черновик",
+          attributes: {
+            "data-action": "discard-site-draft",
+            type: "button"
+          },
+          on: {
+            click: () => {
+              clearDraft();
+              pendingDraft = null;
+              renderForm({});
+            }
+          }
+        })
+      ]
+    });
+  }
+
   function renderScreenError(error) {
     replaceContent(formHost, createElement("p", {
       documentRef,
@@ -555,6 +749,7 @@ export function createSiteEditorScreen(options) {
   return {
     destroy,
     element,
+    isMutationBusy: () => busy,
     load
   };
 
@@ -574,6 +769,197 @@ export function createSiteEditorScreen(options) {
     const value = lastFormState.demoMode ?? currentSite?.demoMode ?? "none";
 
     return value === "external-iframe" ? "external-iframe" : "none";
+  }
+
+  function readSlugValue() {
+    if (lastFormState.slug !== undefined) {
+      return lastFormState.slug;
+    }
+    if (currentSite?.slug !== undefined) {
+      return currentSite.slug;
+    }
+
+    return mode === "create" ? generateSiteSlug(lastFormState.title ?? "") : "";
+  }
+
+  function readDemoUrlSimpleValue() {
+    return lastFormState.demoUrlSimple ??
+      currentSite?.externalDemoUrl ??
+      currentSite?.demoUrl ??
+      currentSite?.originalDemoUrl ??
+      "";
+  }
+
+  function readPriceRublesValue() {
+    if (lastFormState.priceRubles !== undefined) {
+      return lastFormState.priceRubles;
+    }
+
+    return formatCentsToRubles(currentSite?.priceAmountCents);
+  }
+
+  function handleFormInput(form, event) {
+    const target = event?.target;
+
+    if (target?.name === "slug" && !updatingSlug) {
+      slugManuallyEdited = true;
+    }
+    if (target?.name === "title" && mode === "create" && !slugManuallyEdited) {
+      updateSlugFromTitle(form);
+    }
+
+    syncDemoUrlVisibility(form);
+    scheduleDraftSave(form);
+  }
+
+  function updateSlugFromTitle(form) {
+    const title = form.querySelector('[name="title"]');
+    const slug = form.querySelector('[name="slug"]');
+
+    if (title === null || slug === null) {
+      return;
+    }
+
+    updatingSlug = true;
+    slug.value = generateSiteSlug(title.value);
+    updatingSlug = false;
+  }
+
+  function syncDemoUrlVisibility(form) {
+    const demoMode = form.querySelector('[name="demoMode"]');
+    const demoUrl = form.querySelector('[data-demo-url-field="true"]');
+
+    if (demoUrl === null) {
+      return;
+    }
+    if (demoMode?.value === "external-iframe") {
+      demoUrl.removeAttribute("hidden");
+    } else {
+      demoUrl.setAttribute("hidden", "true");
+    }
+  }
+
+  function scheduleDraftSave(form) {
+    dirty = true;
+    registerDirtyGuard();
+    clearDraftSaveTimer();
+    draftSaveTimer = setTimeout(() => {
+      persistDraft(form);
+    }, draftAutosaveMs);
+  }
+
+  function persistDraft(form) {
+    writeSiteFormDraft(storage, draftKey, {
+      fields: readFormState(form),
+      routeType: mode,
+      siteId: mode === "edit" ? siteId : null,
+      temporaryClientId: mode === "create" ? "new" : null,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  function clearDraft() {
+    clearDraftSaveTimer();
+    removeSiteFormDraft(storage, draftKey);
+  }
+
+  function clearDraftSaveTimer() {
+    if (draftSaveTimer !== null) {
+      clearTimeout(draftSaveTimer);
+      draftSaveTimer = null;
+    }
+  }
+
+  function registerDirtyGuard() {
+    if (windowRef === null || typeof windowRef.addEventListener !== "function") {
+      return;
+    }
+    windowRef.removeEventListener?.("beforeunload", handleBeforeUnload);
+    windowRef.addEventListener("beforeunload", handleBeforeUnload);
+  }
+
+  function unregisterDirtyGuard() {
+    windowRef?.removeEventListener?.("beforeunload", handleBeforeUnload);
+  }
+
+  function registerNetworkListeners() {
+    windowRef?.addEventListener?.("offline", handleOffline);
+    windowRef?.addEventListener?.("online", handleOnline);
+  }
+
+  function unregisterNetworkListeners() {
+    windowRef?.removeEventListener?.("offline", handleOffline);
+    windowRef?.removeEventListener?.("online", handleOnline);
+  }
+
+  function handleOffline() {
+    networkOnline = false;
+    statusRegion.textContent = "Соединение нестабильно. Форма сохранена локально.";
+    onStatus("Соединение нестабильно. Форма сохранена локально.");
+  }
+
+  function handleOnline() {
+    networkOnline = true;
+    statusRegion.textContent = "Соединение восстановлено. Можно повторить сохранение.";
+    onStatus("Соединение восстановлено. Можно повторить сохранение.");
+  }
+
+  function handleBeforeUnload(event) {
+    if (!dirty) {
+      return;
+    }
+
+    event.preventDefault?.();
+    event.returnValue = "";
+  }
+
+  async function ensureBackendReady() {
+    await apiClient.requestJson(READY_PATH, {
+      auth: false,
+      method: "GET"
+    });
+  }
+
+  async function handleNetworkFailure(error, formState, form) {
+    if (!isNetworkFailure(error) || mode !== "create") {
+      return false;
+    }
+
+    setSaveState(form, "verifyingAfterNetworkFailure");
+    statusRegion.textContent = "Проверяем, сохранилась ли запись...";
+    onStatus("Проверяем, сохранилась ли запись...");
+
+    try {
+      const slug = String(formState.slug ?? "").trim();
+      const response = await apiClient.requestJson(
+        `/api/admin/sites?search=${encodeURIComponent(slug)}&deleted=without`,
+        { method: "GET" }
+      );
+      const saved = (Array.isArray(response?.data) ? response.data : [])
+        .find((site) => site?.slug === slug) ?? null;
+
+      if (saved !== null) {
+        currentSite = saved;
+        dirty = false;
+        clearDraft();
+        unregisterDirtyGuard();
+        setSaveState(form, "saved");
+        statusRegion.textContent = "Сохранено. Запись найдена после проверки.";
+        onStatus("Сохранено. Запись найдена после проверки.");
+        onSaved(saved);
+        return true;
+      }
+    } catch {
+      // Verification is best-effort; the local form draft is preserved either way.
+    }
+
+    setSaveState(form, "failedNetwork");
+    renderForm({
+      _form: ["Сервер не ответил. Запись не найдена. Можно повторить."]
+    });
+    statusRegion.textContent = "Сервер не ответил. Запись не найдена. Можно повторить.";
+    onStatus("Сервер не ответил. Запись не найдена. Можно повторить.");
+    return true;
   }
 }
 
@@ -605,6 +991,21 @@ function buildFieldAttributes(name, kind, attributes) {
       nextAttributes.max = attributes.max;
     }
   }
+  if (attributes.inputmode !== undefined) {
+    nextAttributes.inputmode = attributes.inputmode;
+  }
+  if (attributes.maxlength !== undefined) {
+    nextAttributes.maxlength = attributes.maxlength;
+  }
+  if (attributes["data-advanced-field"] !== undefined) {
+    nextAttributes["data-advanced-field"] = attributes["data-advanced-field"];
+  }
+  if (attributes["data-demo-url-field"] !== undefined) {
+    nextAttributes["data-demo-url-field"] = attributes["data-demo-url-field"];
+  }
+  if (attributes.hidden === true) {
+    nextAttributes.hidden = "true";
+  }
 
   return nextAttributes;
 }
@@ -617,6 +1018,9 @@ function readFormState(form) {
   const state = {};
 
   for (const field of form.querySelectorAll("[name]")) {
+    if (field.getAttribute?.("data-advanced-field") === "true" && !isInsideOpenDetails(field)) {
+      continue;
+    }
     if (field.type === "checkbox") {
       state[field.name] = field.checked;
       continue;
@@ -626,6 +1030,25 @@ function readFormState(form) {
   }
 
   return state;
+}
+
+function isInsideOpenDetails(field) {
+  let current = field.parentNode;
+
+  while (current !== null && current !== undefined) {
+    if (current.tagName === "details") {
+      return typeof current.hasAttribute === "function"
+        ? current.hasAttribute("open")
+        : current.getAttribute?.("open") !== null;
+    }
+    current = current.parentNode;
+  }
+
+  return false;
+}
+
+function setSaveState(form, state) {
+  form?.setAttribute?.("data-save-state", state);
 }
 
 function sitePath(siteId) {
@@ -642,4 +1065,34 @@ function safeMessage(error) {
   }
 
   return "Не удалось сохранить.";
+}
+
+function isNetworkFailure(error) {
+  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_ABORTED" || error?.status === 0;
+}
+
+function isSlugConflict(error) {
+  return error?.code === "SLUG_CONFLICT" || error?.status === 409;
+}
+
+function saveStateForError(error) {
+  if (error instanceof FormValidationError || error?.status === 400) {
+    return "failedValidation";
+  }
+  if (error?.status === 401 || error?.code === "UNAUTHORIZED" || /^REFRESH_/.test(String(error?.code ?? ""))) {
+    return "authExpired";
+  }
+  if (isNetworkFailure(error)) {
+    return "failedNetwork";
+  }
+
+  return "failedServer";
+}
+
+function createClientRequestId() {
+  const random = globalThis.crypto?.randomUUID?.();
+
+  return typeof random === "string"
+    ? `req_${random}`
+    : `req_${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }

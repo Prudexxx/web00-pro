@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreateSitePayload,
   buildUpdateSitePayload,
+  formatCentsToRubles,
+  generateSiteSlug,
   mapValidationDetails,
   normalizeSlug,
+  parseRublesToCents,
   serializeNullableText,
   serializeNonNegativeInteger,
   serializeOptionalUrl,
@@ -13,6 +16,37 @@ import {
 } from "../src/admin/assets/forms.js";
 
 describe("admin site form utilities", () => {
+  it("generates human-friendly latin slugs from Russian titles", () => {
+    expect(generateSiteSlug("Магазин одежды — тест")).toBe("magazin-odezhdy-test");
+    expect(generateSiteSlug("Сайт салона красоты")).toBe("sait-salona-krasoty");
+    expect(generateSiteSlug("  CRM + AI!!! 2026  ")).toBe("crm-ai-2026");
+    expect(generateSiteSlug("---")).toBe("site");
+    expect(generateSiteSlug("Очень длинный заголовок ".repeat(12)).length).toBeLessThanOrEqual(120);
+    expect(generateSiteSlug("Магазин---одежды")).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+  });
+
+  it("parses ruble prices to cents without floating point math", () => {
+    expect(parseRublesToCents("15000", "priceRubles")).toBe(1500000);
+    expect(parseRublesToCents("15000,50", "priceRubles")).toBe(1500050);
+    expect(parseRublesToCents("15 000", "priceRubles")).toBe(1500000);
+    expect(parseRublesToCents("", "priceRubles")).toBeNull();
+    expect(formatCentsToRubles(1500050)).toBe("15000,50");
+    expect(formatCentsToRubles(1500000)).toBe("15000");
+
+    expectValidationError(() => parseRublesToCents("-1", "priceRubles"), {
+      details: [{ message: "Введите цену в рублях без минуса.", path: "priceRubles" }]
+    });
+    expectValidationError(() => parseRublesToCents("12,345", "priceRubles"), {
+      details: [{ message: "Цена может содержать не больше двух знаков после запятой.", path: "priceRubles" }]
+    });
+    expectValidationError(() => parseRublesToCents("12 abc", "priceRubles"), {
+      details: [{ message: "Введите цену в рублях: например 15000 или 15000,50.", path: "priceRubles" }]
+    });
+    expectValidationError(() => parseRublesToCents("21474836,48", "priceRubles"), {
+      details: [{ message: "Цена слишком большая для сохранения.", path: "priceRubles" }]
+    });
+  });
+
   it("normalizes nullable text, numbers, slugs, arrays, and URLs", () => {
     expect(serializeNullableText("   ", 80)).toBeNull();
     expect(serializeNullableText("  WEB00  ", 80)).toBe("WEB00");
@@ -68,7 +102,7 @@ describe("admin site form utilities", () => {
       galleryImages: [{ url: "x" }],
       id: "site-1",
       previewImageUrl: "preview.png",
-      priceAmountCents: "120000",
+      priceRubles: "1 200,50",
       shortDescription: "  Short  ",
       slug: "  New-Site  ",
       sortOrder: "0",
@@ -84,7 +118,7 @@ describe("admin site form utilities", () => {
       categoryId: "00000000-0000-4000-8000-000000000001",
       developmentDays: 5,
       features: ["A", "B"],
-      priceAmountCents: 120000,
+      priceAmountCents: 120050,
       shortDescription: "Short",
       slug: "new-site",
       sortOrder: 0,
@@ -95,6 +129,36 @@ describe("admin site form utilities", () => {
     expect(payload).not.toHaveProperty("status");
     expect(payload).not.toHaveProperty("previewImageUrl");
     expect(payload).not.toHaveProperty("galleryImages");
+  });
+
+  it("maps one simple external demo URL to the current backend URL contract", () => {
+    expect(buildCreateSitePayload({
+      categoryId: "00000000-0000-4000-8000-000000000001",
+      demoMode: "external-iframe",
+      demoUrlSimple: " https://demo.example.test/path ",
+      shortDescription: "Short",
+      slug: "demo-site",
+      title: "Demo Site"
+    })).toMatchObject({
+      demoMode: "external-iframe",
+      demoUrl: "https://demo.example.test/path",
+      externalDemoUrl: "https://demo.example.test/path",
+      originalDemoUrl: "https://demo.example.test/path"
+    });
+
+    expect(buildCreateSitePayload({
+      categoryId: "00000000-0000-4000-8000-000000000001",
+      demoMode: "none",
+      demoUrlSimple: "",
+      shortDescription: "Short",
+      slug: "no-demo-site",
+      title: "No Demo Site"
+    })).toMatchObject({
+      demoMode: "none",
+      demoUrl: null,
+      externalDemoUrl: null,
+      originalDemoUrl: null
+    });
   });
 
   it("keeps editor update payloads away from admin-only and protected fields", () => {

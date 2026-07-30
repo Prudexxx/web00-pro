@@ -8,6 +8,7 @@ export const SITE_LIMITS = Object.freeze({
   fullDescription: 5000,
   legacyTitle: 160,
   previewType: 40,
+  priceRubles: 20,
   priceLabel: 80,
   shortDescription: 500,
   slug: 120,
@@ -35,13 +36,13 @@ const PROTECTED_SITE_FIELDS = new Set([
 
 const OPTIONAL_TEXT_FIELDS = {
   deliveryLabel: SITE_LIMITS.deliveryLabel,
-  demoMode: SITE_LIMITS.demoMode,
   fullDescription: SITE_LIMITS.fullDescription,
   legacyTitle: SITE_LIMITS.legacyTitle,
   previewType: SITE_LIMITS.previewType,
   priceLabel: SITE_LIMITS.priceLabel
 };
 
+const SIMPLE_DEMO_URL_FIELDS = new Set(["demoUrl", "externalDemoUrl", "originalDemoUrl"]);
 const URL_FIELDS = [
   "demoLocalUrl",
   "demoUrl",
@@ -57,6 +58,77 @@ export class FormValidationError extends Error {
     this.code = "FORM_VALIDATION_ERROR";
     this.details = details;
   }
+}
+
+const CYRILLIC_TRANSLITERATION = Object.freeze({
+  а: "a",
+  б: "b",
+  в: "v",
+  г: "g",
+  д: "d",
+  е: "e",
+  ё: "e",
+  ж: "zh",
+  з: "z",
+  и: "i",
+  й: "i",
+  к: "k",
+  л: "l",
+  м: "m",
+  н: "n",
+  о: "o",
+  п: "p",
+  р: "r",
+  с: "s",
+  т: "t",
+  у: "u",
+  ф: "f",
+  х: "h",
+  ц: "ts",
+  ч: "ch",
+  ш: "sh",
+  щ: "sch",
+  ъ: "",
+  ы: "y",
+  ь: "",
+  э: "e",
+  ю: "yu",
+  я: "ya"
+});
+
+export function generateSiteSlug(value) {
+  const transliterated = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .split("")
+    .map((letter) => CYRILLIC_TRANSLITERATION[letter] ?? letter)
+    .join("");
+  const slug = transliterated
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SITE_LIMITS.slug)
+    .replace(/-+$/g, "");
+
+  return slug.length > 0 ? slug : "site";
+}
+
+export function appendSlugTimestamp(slug, now = new Date()) {
+  const safeSlug = generateSiteSlug(slug);
+  const timestamp = [
+    String(now.getFullYear()).padStart(4, "0"),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "-",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0")
+  ].join("");
+  const suffix = `-${timestamp}`;
+  const base = safeSlug
+    .slice(0, Math.max(1, SITE_LIMITS.slug - suffix.length))
+    .replace(/-+$/g, "");
+
+  return `${base}${suffix}`;
 }
 
 export function normalizeSlug(value) {
@@ -105,6 +177,57 @@ export function serializeOptionalUrl(value, fieldName = "url") {
   }
 
   return parsed.href;
+}
+
+export function parseRublesToCents(value, fieldName = "priceRubles") {
+  const text = serializeNullableText(value, SITE_LIMITS.priceRubles, fieldName);
+
+  if (text === null) {
+    return null;
+  }
+
+  const compact = text.replace(/\s+/g, "");
+
+  if (compact.startsWith("-")) {
+    throw validationError(fieldName, "Введите цену в рублях без минуса.");
+  }
+  if (/^\d+[,.]\d{3,}$/.test(compact)) {
+    throw validationError(fieldName, "Цена может содержать не больше двух знаков после запятой.");
+  }
+  if (!/^\d+(?:[,.]\d{1,2})?$/.test(compact)) {
+    throw validationError(fieldName, "Введите цену в рублях: например 15000 или 15000,50.");
+  }
+
+  const [rubles, fraction = ""] = compact.replace(",", ".").split(".");
+  const cents = (BigInt(rubles) * 100n) + BigInt((fraction + "00").slice(0, 2));
+
+  if (cents <= 0n) {
+    throw validationError(fieldName, "Введите цену больше нуля.");
+  }
+  if (cents > BigInt(DB_INT_MAX)) {
+    throw validationError(fieldName, "Цена слишком большая для сохранения.");
+  }
+
+  return Number(cents);
+}
+
+export function formatCentsToRubles(value) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+
+  const cents = Number(value);
+
+  if (!Number.isInteger(cents) || cents <= 0) {
+    return "";
+  }
+
+  const rubles = Math.floor(cents / 100);
+  const kopecks = cents % 100;
+
+  return kopecks === 0
+    ? String(rubles)
+    : `${rubles},${String(kopecks).padStart(2, "0")}`;
 }
 
 export function serializePositiveInteger(value, fieldName) {
@@ -225,6 +348,25 @@ export function buildUpdateSitePayload(formState, role) {
 }
 
 function addSharedOptionalFields(payload, source) {
+  if (source.demoMode !== undefined) {
+    payload.demoMode = serializeDemoMode(source.demoMode);
+  }
+  if (source.demoUrlSimple !== undefined) {
+    const demoMode = payload.demoMode ?? serializeDemoMode(source.demoMode ?? "none");
+
+    if (demoMode === "external-iframe") {
+      const demoUrl = serializeOptionalUrl(source.demoUrlSimple, "demoUrlSimple");
+
+      payload.demoUrl = demoUrl;
+      payload.externalDemoUrl = demoUrl;
+      payload.originalDemoUrl = demoUrl;
+    } else {
+      payload.demoUrl = null;
+      payload.externalDemoUrl = null;
+      payload.originalDemoUrl = null;
+    }
+  }
+
   for (const [field, maxLength] of Object.entries(OPTIONAL_TEXT_FIELDS)) {
     if (source[field] !== undefined) {
       payload[field] = serializeNullableText(source[field], maxLength, field);
@@ -233,6 +375,13 @@ function addSharedOptionalFields(payload, source) {
 
   for (const field of URL_FIELDS) {
     if (source[field] !== undefined) {
+      if (
+        source.demoUrlSimple !== undefined &&
+        SIMPLE_DEMO_URL_FIELDS.has(field) &&
+        serializeNullableText(source[field], SITE_LIMITS.url, field) === null
+      ) {
+        continue;
+      }
       payload[field] = serializeOptionalUrl(source[field], field);
     }
   }
@@ -242,6 +391,9 @@ function addSharedOptionalFields(payload, source) {
   }
   if (source.priceAmountCents !== undefined) {
     payload.priceAmountCents = serializePositiveInteger(source.priceAmountCents, "priceAmountCents");
+  }
+  if (source.priceRubles !== undefined) {
+    payload.priceAmountCents = parseRublesToCents(source.priceRubles, "priceRubles");
   }
   if (source.sortOrder !== undefined) {
     const sortOrder = serializeNonNegativeInteger(source.sortOrder, "sortOrder");
@@ -263,6 +415,19 @@ function addSharedOptionalFields(payload, source) {
       maxLength: SITE_LIMITS.tags.item
     });
   }
+}
+
+function serializeDemoMode(value) {
+  const text = serializeNullableText(value, SITE_LIMITS.demoMode, "demoMode");
+
+  if (text === null) {
+    return null;
+  }
+  if (text === "none" || text === "external-iframe") {
+    return text;
+  }
+
+  throw validationError("demoMode", "Выберите допустимый режим демо.");
 }
 
 function requireText(value, fieldName, maxLength) {

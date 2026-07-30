@@ -6,11 +6,20 @@ const ADMIN_SRC = path.join(process.cwd(), "src", "admin");
 
 describe("admin UI final security audit", () => {
   it("keeps production admin sources free of unsafe DOM and persistence APIs", () => {
-    const combined = readAdminSources().map((file) => file.source).join("\n");
+    const sources = readAdminSources();
+    const draftSource = sources.find((file) => file.filePath.endsWith(`${path.sep}site-form-drafts.js`))?.source ?? "";
+    const combined = sources
+      .filter((file) => !file.filePath.endsWith(`${path.sep}site-form-drafts.js`))
+      .map((file) => file.source)
+      .join("\n");
 
     expect(combined).not.toMatch(/\binnerHTML\b|\bouterHTML\b|insertAdjacentHTML|eval\s*\(|new Function|document\.write/);
     expect(combined).not.toMatch(/setAttribute\(["'`]on[a-z]+|["'`]\s*on[a-z]+\s*=/i);
     expect(combined).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\.open|document\.cookie/);
+    expect(draftSource).toContain("web00_admin_site_form_draft_v1");
+    expect(draftSource).toContain("localStorage");
+    expect(draftSource).not.toMatch(/sessionStorage|indexedDB|caches\.open|document\.cookie/);
+    expect(draftSource).not.toMatch(/accessToken|refreshToken|Authorization|Bearer/);
     expect(combined).not.toMatch(/console\.(log|warn|error)[^\n]*(token|password)|(token|password)[^\n]*console\.(log|warn|error)/i);
     expect(combined).not.toMatch(/@supabase\/supabase-js|createClient\s*\(/);
   });
