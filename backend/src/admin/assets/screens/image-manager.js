@@ -14,6 +14,7 @@ import {
   buildPreviewFormData,
   createRandomUuid,
   normalizeAlt,
+  normalizeGalleryBatchResult,
   readSingleFile,
   selectedNames,
   supportedImageTypes,
@@ -629,7 +630,10 @@ export function createImageManagerScreen(options) {
         return;
       }
 
-      const result = response?.data ?? { failed: [], succeeded: [] };
+      const result = normalizeGalleryBatchResult(response?.data, {
+        clientFileIds,
+        files
+      });
       currentSite = {
         ...currentSite,
         galleryImages: [

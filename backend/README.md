@@ -16,6 +16,12 @@ B2 does not include Supabase runtime use, authentication, JWT, roles enforcement
 
 All relative imports inside TypeScript source files use the future emitted `.js` extension.
 
+Read-only runtime identity is available at `GET /api/version`. The endpoint does
+not use the database and returns only allowlisted, bounded fields: service,
+commit, branch, package/runtime version when available, and environment. It must
+not expose raw environment variables, database URLs, JWT secrets, tokens,
+filesystem paths, build logs, or credentials.
+
 ## Commands
 
 Run commands from `D:\WEB00_BACKEND\backend` with the approved portable Node.js runtime:
@@ -90,9 +96,11 @@ Initial Render Free service fields:
 Render Free is suitable for first public smoke/staging only. It can sleep after
 idle periods, has a slow first request after sleep, has no dashboard shell or
 SSH, has no one-off jobs, has no pre-deploy command, and uses an ephemeral
-filesystem. Do not add keep-alive workarounds, Render-specific runtime branches,
-automatic migration, automatic seed, Storage bootstrap, or admin bootstrap to
-the Start Command.
+filesystem. The only approved keep-warm behavior is the admin UI's authenticated,
+visible, online tab readiness ping around every 10 minutes; it stops on hidden,
+offline, logout, and app destroy. Do not add service-worker keep-warm, external
+cron, Render-specific runtime branches, automatic migration, automatic seed,
+Storage bootstrap, or admin bootstrap to the Start Command.
 
 Before first deploy, run the launch operations from a trusted machine:
 

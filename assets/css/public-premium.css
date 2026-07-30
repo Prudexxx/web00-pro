@@ -675,12 +675,6 @@ body[data-page="legal"] .mobile-cta {
   display: none;
 }
 
-body[data-page="services"] .footer [data-open-bug],
-body[data-page="how-it-works"] .footer [data-open-bug],
-body[data-page="legal"] .footer [data-open-bug] {
-  display: none;
-}
-
 body[data-page="services"] .footer,
 body[data-page="how-it-works"] .footer,
 body[data-page="legal"] .footer {
@@ -1700,11 +1694,6 @@ body[data-page="faq"] .side-contact,
 body[data-page="faq"] .mobile-cta,
 body[data-page="contacts"] .side-contact,
 body[data-page="contacts"] .mobile-cta {
-  display: none;
-}
-
-body[data-page="faq"] .footer [data-open-bug],
-body[data-page="contacts"] .footer [data-open-bug] {
   display: none;
 }
 

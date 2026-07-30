@@ -445,6 +445,56 @@ describe("admin API client", () => {
     });
     expect(fetchImpl.mock.calls[0][1].signal).not.toBe(signal);
   });
+
+  it("rejects empty, malformed, and non-JSON successful responses as INVALID_RESPONSE", async () => {
+    const scenarios = [
+      new Response("", {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      }),
+      new Response("{", {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      }),
+      new Response(JSON.stringify({ data: [] }), {
+        headers: { "Content-Type": "text/plain" },
+        status: 200
+      })
+    ];
+
+    for (const response of scenarios) {
+      const api = createApiClient({
+        authStore: createAuthStore(),
+        fetchImpl: vi.fn().mockResolvedValue(response)
+      });
+
+      await expect(api.requestJson("/api/admin/sites", { method: "GET" })).rejects.toMatchObject({
+        code: "INVALID_RESPONSE",
+        message: "Сервер вернул некорректный ответ.",
+        status: 200
+      });
+    }
+  });
+
+  it("allows 204 only when the caller explicitly expects no response body", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    await expect(api.requestJson("/api/admin/sites", { method: "GET" })).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      status: 204
+    });
+    await expect(
+      api.requestJson("/api/admin/sites/00000000-0000-4000-8000-000000000101/permanent", {
+        allowNoContent: true,
+        method: "DELETE"
+      })
+    ).resolves.toBeNull();
+  });
 });
 
 function authExpiredResponse(requestId) {

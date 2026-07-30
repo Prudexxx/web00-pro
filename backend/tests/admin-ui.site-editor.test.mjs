@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { ADMIN_REQUEST_TIMEOUTS } from "../src/admin/assets/api-client.js";
 import { createSiteEditorScreen } from "../src/admin/assets/screens/site-editor.js";
 
 describe("admin site editor screen", () => {
@@ -1074,6 +1075,212 @@ describe("admin site editor screen", () => {
       }
     ]);
     expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+  });
+
+  it("uses the readiness attempt timeout for save preflight without changing ordinary GET timeout", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000919",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Readiness timeout");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => requests.some((request) => request.requestPath === "/api/admin/sites"));
+
+    const categoryGet = requests.find((request) => request.requestPath.startsWith("/api/admin/categories"));
+    const readiness = requests.find((request) => request.requestPath === "/api/ready");
+
+    expect(categoryGet.options.timeoutMs).toBeUndefined();
+    expect(readiness.options.timeoutMs).toBe(ADMIN_REQUEST_TIMEOUTS.readinessAttempt);
+  });
+
+  it("does not show success, clear draft, or clear selected files when create response identity is malformed", async () => {
+    const documentRef = createFakeDocument();
+    const storage = createMemoryStorage();
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000920",
+              slug: "different-slug",
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const onSaved = vi.fn();
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      draftAutosaveMs: 1,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor",
+      storage
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Malformed create");
+    setValue(screen.element, "slug", "malformed-create");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "previewImage", [imageFile("preview.png", "image/png", 12)]);
+    await waitFor(() => storage.setItem.mock.calls.length > 0);
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(screen.element.querySelector("form")).not.toBeNull();
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Malformed create");
+    expect(screen.element.querySelector('[name="previewImage"]').files[0].name).toBe("preview.png");
+    expect(apiClient.requestMultipart).not.toHaveBeenCalled();
+  });
+
+  it("does not accept a malformed update response as a saved edit", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
+          return Promise.resolve({ data: siteFixture() });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "PATCH") {
+          return Promise.resolve({ data: null });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const onSaved = vi.fn();
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "edit",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Edited title");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.element.querySelector("form")).not.toBeNull();
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Edited title");
+  });
+
+  it("keeps server save available when local draft storage throws", async () => {
+    const documentRef = createFakeDocument();
+    const storage = {
+      getItem: vi.fn(() => null),
+      removeItem: vi.fn(() => {
+        throw new DOMException("blocked", "SecurityError");
+      }),
+      setItem: vi.fn(() => {
+        throw new DOMException("quota", "QuotaExceededError");
+      })
+    };
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000921",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const onSaved = vi.fn();
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      draftAutosaveMs: 1,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor",
+      storage
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Storage blocked");
+    await waitFor(() => screen.element.textContent.includes("Локальное автосохранение недоступно."));
+    expect(screen.element.textContent).toContain("Локальное автосохранение недоступно.");
+
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => onSaved.mock.calls.length === 1);
+
+    expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({
+      slug: "storage-blocked"
+    }));
   });
 });
 

@@ -182,7 +182,62 @@ describe("admin site lifecycle UI", () => {
 
     const mutation = requests.find((request) => request.requestPath.endsWith("/permanent"));
     expect(mutation.options.method).toBe("DELETE");
+    expect(mutation.options.allowNoContent).toBe(true);
     expect(mutation.options).not.toHaveProperty("body");
+  });
+
+  it("shows an image-cleanup path when permanent delete is blocked by attached images", async () => {
+    const documentRef = createFakeDocument();
+    const onImages = vi.fn();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [], meta: metaFixture(0) });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: [siteFixture({
+              deletedAt: "2026-07-28T00:00:00.000Z",
+              galleryImages: [{ assetId: "gallery-1" }]
+            })],
+            meta: metaFixture(1)
+          });
+        }
+        if (requestPath.endsWith("/permanent")) {
+          return Promise.reject({
+            code: "SITE_IMAGES_ATTACHED",
+            message: "Перед окончательным удалением удалите preview и gallery.",
+            requestId: "req_images_attached",
+            status: 409
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSitesListScreen({
+      apiClient,
+      documentRef,
+      onCreate: vi.fn(),
+      onEdit: vi.fn(),
+      onImages,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    screen.element.querySelector('[data-lifecycle-action="permanent-delete"]').dispatchEvent(fakeEvent("click"));
+    const typed = screen.element.querySelector('[name="typedConfirmation"]');
+    typed.value = "CRM Site / crm-site";
+    typed.dispatchEvent(fakeEvent("input"));
+    screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => screen.element.textContent.includes("Перед окончательным удалением удалите preview и gallery."));
+
+    expect(screen.element.textContent).toContain("Открыть изображения");
+    expect(screen.element.textContent).toContain("req_images_attached");
+    expect(screen.element.textContent).not.toContain("Сайт удалён навсегда.");
+
+    screen.element.querySelector('[data-action="open-images-after-delete-block"]').dispatchEvent(fakeEvent("click"));
+    expect(onImages).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000101");
   });
 
   it("shows safe lifecycle errors without dropping the current list state or retrying", async () => {

@@ -4,7 +4,10 @@ import { runSerializableWithRetry } from "../../../cli/cli-user.repository.js";
 import type { ManagedGalleryImage } from "../../images/image.types.js";
 import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
-import type { SiteImageRepository } from "./site-image.service.js";
+import {
+  assertCanMutateSiteImages,
+  type SiteImageRepository
+} from "./site-image.service.js";
 
 const siteImageSelect = {
   active: true,
@@ -25,6 +28,7 @@ export function createPrismaSiteImageRepository(options: {
     async addGalleryImage(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
+        assertCanMutateSiteImages(input.context.actor, before);
         const gallery = readGalleryArray(before.galleryImages);
 
         if (gallery.length >= 20) {
@@ -61,6 +65,7 @@ export function createPrismaSiteImageRepository(options: {
     async deleteGalleryImage(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
+        assertCanMutateSiteImages(input.context.actor, before);
         const gallery = readGalleryArray(before.galleryImages);
         const next = normalizeGallery(
           gallery.filter(
@@ -96,6 +101,7 @@ export function createPrismaSiteImageRepository(options: {
     async deletePreview(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
+        assertCanMutateSiteImages(input.context.actor, before);
         const after = await tx.site.update({
           data: { previewImageUrl: null },
           select: siteImageSelect,
@@ -132,6 +138,7 @@ export function createPrismaSiteImageRepository(options: {
       onStage("DB_ATTACH_STARTED");
       const after = await runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
+        assertCanMutateSiteImages(input.context.actor, before);
         onStage("DB_SITE_UPDATED");
         const after = await tx.site.update({
           data: { previewImageUrl: input.previewImageUrl },
@@ -169,6 +176,8 @@ export function createPrismaSiteImageRepository(options: {
     },
     async reorderGallery(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
+        const before = await getSiteOrThrow(tx, input.siteId);
+        assertCanMutateSiteImages(input.context.actor, before);
         const next = normalizeGallery(input.images.map(storedGalleryImage));
         const after = await tx.site.update({
           data: { galleryImages: next as Prisma.InputJsonValue },

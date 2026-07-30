@@ -123,8 +123,17 @@ export function normalizeAlt(value) {
 }
 
 export function normalizeGalleryBatchResult(result, context = {}) {
-  const succeeded = Array.isArray(result?.succeeded) ? result.succeeded : [];
-  const failed = Array.isArray(result?.failed) ? result.failed : [];
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    !Array.isArray(result.succeeded) ||
+    !Array.isArray(result.failed)
+  ) {
+    throw new Error("Сервер вернул некорректный ответ.");
+  }
+
+  const succeeded = result.succeeded;
+  const failed = result.failed;
   const clientFileIds = Array.isArray(context.clientFileIds) ? context.clientFileIds : [];
   const files = Array.isArray(context.files) ? context.files : [];
   const normalizedSucceeded = succeeded.map((item) => ({

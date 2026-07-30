@@ -60,7 +60,9 @@ export function createApiClient(options) {
         method: "POST",
         signal: timed.signal
       });
-      const body = await readResponseBody(response);
+      const body = await readResponseBody(response, {
+        strictJson: response.ok
+      });
 
       if (!response.ok) {
         throw parseApiError(response, body);
@@ -95,7 +97,10 @@ export function createApiClient(options) {
 
     try {
       const response = await fetchImpl(path, fetchOptions);
-      const body = await readResponseBody(response);
+      const body = await readResponseBody(response, {
+        allowNoContent: requestOptions.allowNoContent === true,
+        strictJson: response.ok
+      });
 
       if (isAuthExpiredResponse(response, body) && requestOptions.auth !== false && !replayed) {
         await refreshAccess({ signal: requestOptions.signal });
@@ -127,7 +132,10 @@ export function createApiClient(options) {
 
     try {
       const response = await fetchImpl(path, fetchOptions);
-      const body = await readResponseBody(response);
+      const body = await readResponseBody(response, {
+        allowNoContent: requestOptions.allowNoContent === true,
+        strictJson: response.ok
+      });
 
       if (isAuthExpiredResponse(response, body) && requestOptions.auth !== false && !replayed) {
         await refreshAccess({ signal: requestOptions.signal });
@@ -208,7 +216,10 @@ export function createApiClient(options) {
         method: "POST",
         signal: timed.signal
       });
-      const body = await readResponseBody(response);
+      const body = await readResponseBody(response, {
+        allowNoContent: true,
+        strictJson: response.ok
+      });
 
       if (!response.ok) {
         throw parseApiError(response, body);
@@ -327,21 +338,56 @@ function toMultipartFetchOptions(options = {}, authStore) {
   });
 }
 
-async function readResponseBody(response) {
+async function readResponseBody(response, options = {}) {
+  const strictJson = options.strictJson === true;
+  const allowNoContent = options.allowNoContent === true;
+
   if (response.status === 204) {
-    return null;
+    if (allowNoContent) {
+      return null;
+    }
+
+    throw invalidTransportResponse(response.status);
+  }
+
+  if (strictJson && !hasJsonContentType(response)) {
+    throw invalidTransportResponse(response.status);
   }
 
   const text = await response.text();
   if (text === "") {
+    if (strictJson) {
+      throw invalidTransportResponse(response.status);
+    }
+
     return null;
   }
 
   try {
     return JSON.parse(text);
   } catch {
+    if (strictJson) {
+      throw invalidTransportResponse(response.status);
+    }
+
     return null;
   }
+}
+
+function hasJsonContentType(response) {
+  const contentType = response.headers?.get?.("Content-Type") ?? "";
+
+  return contentType.toLowerCase().split(";", 1)[0].trim() === JSON_CONTENT_TYPE;
+}
+
+function invalidTransportResponse(status = 0) {
+  return new AdminApiError({
+    code: "INVALID_RESPONSE",
+    details: [],
+    message: "Сервер вернул некорректный ответ.",
+    requestId: null,
+    status: typeof status === "number" ? status : 0
+  });
 }
 
 function isAuthExpiredResponse(response, body) {

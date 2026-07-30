@@ -836,10 +836,6 @@ body[data-page="home"] .footer__links {
   gap: 18px;
 }
 
-body[data-page="home"] .footer [data-open-bug] {
-  display: none;
-}
-
 body[data-page="home"] .footer__links a,
 body[data-page="home"] .footer__links span,
 body[data-page="home"] .footer-link {

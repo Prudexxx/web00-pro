@@ -778,10 +778,6 @@ body[data-page="pricing"] .footer-link {
   color: var(--pricing-secondary);
 }
 
-body[data-page="pricing"] .footer [data-open-bug] {
-  display: none;
-}
-
 body[data-page="pricing"] .footer__links a:hover,
 body[data-page="pricing"] .footer__links a:focus-visible,
 body[data-page="pricing"] .footer-link:hover,

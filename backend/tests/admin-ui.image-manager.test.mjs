@@ -280,6 +280,44 @@ describe("admin image manager screen", () => {
     expect(apiClient.requestMultipart).not.toHaveBeenCalled();
   });
 
+  it("keeps selected gallery files visible when the batch response envelope is malformed", async () => {
+    const documentRef = createFakeDocument();
+    const onStatus = vi.fn();
+    const screen = createImageManagerScreen({
+      apiClient: {
+        requestJson: vi.fn((requestPath) => {
+          if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101") {
+            return Promise.resolve({ data: siteFixture() });
+          }
+          throw new Error(`Unexpected JSON path ${requestPath}`);
+        }),
+        requestMultipart: vi.fn(() => Promise.resolve({ data: {} }))
+      },
+      documentRef,
+      onBack: vi.fn(),
+      onSiteUpdated: vi.fn(),
+      onStatus,
+      role: "editor",
+      siteId: "00000000-0000-4000-8000-000000000101",
+      uuidFactory: makeUuidFactory(
+        "00000000-0000-4000-8000-000000000401",
+        "00000000-0000-4000-8000-000000000402"
+      )
+    });
+
+    await screen.load();
+    setFiles(screen.element, "galleryBatchImages", [
+      imageFile("first.png", "image/png", 12),
+      imageFile("second.png", "image/png", 12)
+    ]);
+    screen.element.querySelector('[data-action="add-gallery-batch"]').dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+
+    expect(screen.element.textContent).toContain("first.png, second.png");
+    expect(screen.element.textContent).not.toContain("Batch загружен: 0 успешно.");
+    expect(onStatus).toHaveBeenLastCalledWith("Сервер вернул некорректный ответ.");
+  });
+
   it("reorders gallery with schema-exact payload, blocks duplicates, and deletes validated assets through confirmation", async () => {
     const documentRef = createFakeDocument();
     const deferred = createDeferred();

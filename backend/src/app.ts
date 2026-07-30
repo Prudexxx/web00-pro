@@ -10,6 +10,10 @@ import { createPublicCatalogRouter } from "./modules/public-catalog/public-catal
 import type { PublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 import { createReadinessRouter } from "./modules/readiness/readiness.routes.js";
 import type { ReadinessService } from "./modules/readiness/readiness.types.js";
+import {
+  createVersionRouter,
+  type AppVersionInfo
+} from "./modules/version/version.routes.js";
 
 export interface CreateAppOptions {
   adminRoutes?: Router;
@@ -23,6 +27,7 @@ export interface CreateAppOptions {
   registerTestRoutes?: (app: Express) => void;
   now?: () => Date;
   trustProxyHops?: number;
+  versionInfo?: AppVersionInfo;
 }
 
 export function createApp(options: CreateAppOptions): Express {
@@ -38,6 +43,10 @@ export function createApp(options: CreateAppOptions): Express {
   app.use(express.json({ limit: "100kb" }));
   app.use(requestLogger({ env: options.env, logger, now }));
   app.use("/api/health", createHealthRouter({ env: options.env, now }));
+  app.use("/api/version", createVersionRouter({
+    env: options.env,
+    ...(options.versionInfo === undefined ? {} : { versionInfo: options.versionInfo })
+  }));
 
   if (options.readinessService) {
     app.use("/api/ready", createReadinessRouter({ service: options.readinessService }));

@@ -190,7 +190,8 @@ export function startServer(options: StartServerOptions): StartedServer {
     publicCorsConfig: options.publicCorsConfig,
     publicCatalogService,
     readinessService,
-    trustProxyHops: options.authEnv.TRUST_PROXY_HOPS
+    trustProxyHops: options.authEnv.TRUST_PROXY_HOPS,
+    versionInfo: readRuntimeVersionInfo(process.env)
   };
   const app = createApp(
     options.now === undefined
@@ -355,6 +356,18 @@ function logLifecycle(options: LifecycleLogOptions): void {
     service: options.env.SERVICE_NAME,
     time: options.now().toISOString()
   });
+}
+
+function readRuntimeVersionInfo(env: NodeJS.ProcessEnv): {
+  branch: string | null;
+  commit: string | null;
+  version: string | null;
+} {
+  return {
+    branch: env.RENDER_GIT_BRANCH ?? null,
+    commit: env.RENDER_GIT_COMMIT ?? null,
+    version: env.npm_package_version ?? null
+  };
 }
 
 function isDirectRun(): boolean {

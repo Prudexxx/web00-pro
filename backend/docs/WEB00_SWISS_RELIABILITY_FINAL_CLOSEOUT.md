@@ -5,6 +5,10 @@
 This closeout records the implemented admin/backend reliability behavior for
 the final owner QAmax pass.
 
+QAmax update 2026-07-30: Product Final is not declared by this file. Public
+baseline drift is recorded separately, and live canary remains blocked until
+the owner approves the exact catalog manifest.
+
 ## Readiness Before Auth
 
 Admin startup now shows `Backend просыпается, подождите...`, calls `/api/ready`
@@ -16,8 +20,10 @@ confirmed inside the bounded budget, the admin UI shows:
 - `Повторить проверку`
 
 Login also performs a readiness preflight when the previous readiness result is
-stale. Keep-warm remains limited to authenticated visible online admin tabs and
-stops on logout/destroy.
+stale. Save preflight uses the 15-second readiness attempt timeout. Keep-warm
+remains limited to authenticated visible online admin tabs and stops on
+hidden/offline/logout/destroy. No service worker keep-warm or external cron is
+introduced.
 
 After readiness succeeds, bootstrap failures are separated by cause:
 missing/rejected refresh session shows login, network/timeout keeps the backend
@@ -46,6 +52,7 @@ Normalized client errors:
 - `REQUEST_TIMEOUT`: `Сервер не ответил вовремя.`
 - `REQUEST_ABORTED`: `Запрос отменён.`
 - `NETWORK_ERROR`: `Не удалось связаться с сервером.`
+- `INVALID_RESPONSE`: `Сервер вернул некорректный ответ.`
 
 ## Draft Recovery
 
@@ -63,6 +70,8 @@ The draft stores fields, mode, siteId, updatedAt, stable create
 tokens, cookies, Authorization headers, passwords, JWTs, secrets, File/Blob
 bytes, or local file paths. After reload, text can be restored but images must
 be selected again; the UI says `Текст восстановлен. Изображения выберите повторно.`
+If localStorage is blocked or throws during write/remove, the server save flow
+continues and the UI shows `Локальное автосохранение недоступно.`
 
 ## Create Idempotency
 
@@ -100,6 +109,9 @@ After `NETWORK_ERROR` or `REQUEST_TIMEOUT`, the create flow:
 
 It does not auto retry validation errors, auth failures, forbidden responses,
 idempotency key reuse, duplicate slug, or ordinary backend 500.
+It also does not treat malformed successful responses as network ambiguity:
+successful create/update must include valid entity identity before the UI clears
+drafts or selected in-memory files.
 
 ## One-Click Images
 
@@ -127,11 +139,36 @@ Retry uploads only failed/not-completed images and never repeats create POST.
 Preview retry reuses the original preview `clientFileId`; gallery retry keeps
 the existing failed-file `clientFileId` mapping.
 
+Gallery batch success requires a response envelope with `succeeded` and `failed`
+arrays. Missing or malformed arrays are rejected as `INVALID_RESPONSE`, so `0
+succeeded / 0 failed` is not displayed as a successful upload of selected files.
+
+## Permanent Delete And Image State
+
+Permanent site delete is blocked while the site still has preview or gallery
+images. The controlled error is `SITE_IMAGES_ATTACHED` with the Russian message
+`Перед окончательным удалением удалите preview и gallery.` The blocked path
+does not delete the site row and does not create a false permanent-delete audit.
+
+Preview/gallery attach, reorder, and delete re-check current lifecycle/RBAC
+inside the final transaction so stale pre-processing authorization is not enough
+for the DB mutation.
+
+## Runtime Build Identity
+
+`GET /api/version` returns safe service, commit, branch, version, and
+environment identity with `Cache-Control: no-store`. It does not use the DB and
+does not echo raw environment variables, secrets, database URLs, tokens,
+filesystem paths, or logs.
+
 ## Safety Boundaries
 
 This final hardening did not change Prisma schema, did not create or apply a
 migration, did not deploy Render, did not change Render settings or tariff, and
 did not write to production DB.
+
+`REAL_PG_NOT_RUN — TEST_ENV_NOT_PROVIDED`: no explicit test-only PostgreSQL
+connection was provided for this QAmax closure run.
 
 ## Owner QAmax
 

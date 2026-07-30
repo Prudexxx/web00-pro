@@ -109,6 +109,7 @@ export interface UpdateAdminSiteInput {
 
 export interface SiteLifecycleRecord {
   deletedAt: Date | null;
+  galleryImages?: unknown;
   previewImageUrl?: string | null;
   status: string;
 }

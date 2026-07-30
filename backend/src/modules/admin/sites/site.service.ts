@@ -80,6 +80,18 @@ export function createAdminSiteService(options: {
       };
     },
     async permanentlyDeleteSite(id, context) {
+      const current = await options.repository.getSite(id);
+
+      if (current === null) {
+        throw siteNotFound();
+      }
+      if (current.deletedAt === null) {
+        throw siteNotDeleted();
+      }
+      if (hasAttachedImages(current)) {
+        throw siteImagesAttached();
+      }
+
       await options.repository.permanentlyDeleteSite(id, context);
     },
     async publishSite(id, context) {
@@ -190,6 +202,14 @@ export function siteNotDeleted(): AppError {
   });
 }
 
+export function siteImagesAttached(): AppError {
+  return new AppError({
+    code: "SITE_IMAGES_ATTACHED",
+    message: "Перед окончательным удалением удалите preview и gallery.",
+    statusCode: 409
+  });
+}
+
 export function categoryInactive(): AppError {
   return new AppError({
     code: "CATEGORY_INACTIVE",
@@ -204,6 +224,13 @@ export function slugConflict(): AppError {
     message: "Slug already exists.",
     statusCode: 409
   });
+}
+
+function hasAttachedImages(site: SiteLifecycleRecord): boolean {
+  const hasPreview = typeof site.previewImageUrl === "string" && site.previewImageUrl.trim().length > 0;
+  const hasGallery = Array.isArray(site.galleryImages) && site.galleryImages.length > 0;
+
+  return hasPreview || hasGallery;
 }
 
 export function isUniqueConflict(error: unknown): boolean {
