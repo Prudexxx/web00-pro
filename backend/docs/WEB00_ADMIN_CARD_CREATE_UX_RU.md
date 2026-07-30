@@ -51,6 +51,12 @@
 Upload может оставаться отдельным экраном, если текущая архитектура требует
 отдельного image manager после создания карточки.
 
+После успешного создания черновика форма больше не остаётся в режиме create.
+Пользователь видит следующий шаг:
+
+- `Перейти к изображениям`
+- `К списку`
+
 ### 6. Расширенные Настройки
 
 Секция свернута по умолчанию и нужна только для технической правки:
@@ -109,3 +115,10 @@ Admin boot and save flow check backend readiness through `/api/ready` or
 The Render plan is not changed. Optional keep-warm pings are allowed only while
 the authenticated admin tab is visible and online; they must stop on logout or
 tab close and must not run from a service worker.
+
+## Publish Safety
+
+Публикация остаётся lifecycle-действием из списка сайтов. Если backend требует
+preview перед публикацией, UI показывает человеческий текст:
+
+`Перед публикацией добавьте preview-изображение.`

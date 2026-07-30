@@ -216,10 +216,11 @@ describe("admin site lifecycle UI", () => {
     await screen.load();
     screen.element.querySelector('[data-lifecycle-action="publish"]').dispatchEvent(fakeEvent("click"));
     screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
-    await waitFor(() => screen.element.textContent.includes("SITE_PREVIEW_REQUIRED"));
+    await waitFor(() => screen.element.textContent.includes("Перед публикацией добавьте preview-изображение."));
 
     expect(mutationCalls).toBe(1);
-    expect(screen.element.textContent).toContain('Preview required <img src=x onerror="x">');
+    expect(screen.element.textContent).not.toContain("SITE_PREVIEW_REQUIRED");
+    expect(screen.element.textContent).not.toContain('Preview required <img src=x onerror="x">');
     expect(screen.element.textContent).toContain("req_lifecycle");
     expect(screen.element.textContent).toContain("CRM Site");
     expect(screen.element.querySelector("img")).toBeNull();

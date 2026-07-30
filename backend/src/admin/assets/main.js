@@ -155,7 +155,7 @@ export async function bootstrapAdminApp(options = {}) {
       mode,
       onCancel: showSitesList,
       onImages: showImageManager,
-      onSaved: showSitesList,
+      onSaved: mode === "create" ? () => {} : showSitesList,
       onStatus: shellElement.setStatus,
       role: currentUser.role,
       ...(siteId === undefined ? {} : { siteId })

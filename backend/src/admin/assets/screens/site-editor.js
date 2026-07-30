@@ -259,22 +259,14 @@ export function createSiteEditorScreen(options) {
             method: mode === "create" ? "POST" : "PATCH"
           }
         );
-        const saved = response?.data ?? null;
-        currentSite = saved;
-        dirty = false;
-        clearDraft();
-        unregisterDirtyGuard();
-        setSaveState(form, "saved");
-        statusRegion.textContent = "Сохранено.";
-        onStatus("Сохранено.");
-        onSaved(saved);
+        finishSuccessfulSave(response?.data ?? null, form, "Сохранено.");
       } catch (error) {
         if (await handleNetworkFailure(error, formState, form)) {
           return;
         }
-        const mapped = error instanceof FormValidationError
+        const mapped = localizeEditorErrors(error instanceof FormValidationError
           ? mapValidationDetails(error.details)
-          : mapValidationDetails(error?.details);
+          : mapValidationDetails(error?.details), formState);
         const nextErrors = Object.keys(mapped).length === 0 ? { _form: [safeMessage(error)] } : mapped;
 
         if (isSlugConflict(error) && nextErrors.slug === undefined && formState.slug !== undefined) {
@@ -297,6 +289,75 @@ export function createSiteEditorScreen(options) {
     });
 
     return form;
+  }
+
+  function finishSuccessfulSave(saved, form, message) {
+    currentSite = saved;
+    dirty = false;
+    clearDraft();
+    unregisterDirtyGuard();
+    statusRegion.textContent = message;
+    onStatus(message);
+
+    if (mode === "create" && typeof saved?.id === "string") {
+      renderCreateSavedNextStep(saved);
+      onSaved(saved);
+      return;
+    }
+
+    setSaveState(form, "saved");
+    onSaved(saved);
+  }
+
+  function renderCreateSavedNextStep(saved) {
+    const actions = [
+      createElement("button", {
+        documentRef,
+        text: "Перейти к изображениям",
+        attributes: {
+          "data-action": "manage-images",
+          type: "button"
+        },
+        on: {
+          click: () => onImages(saved.id)
+        }
+      }),
+      createElement("button", {
+        documentRef,
+        text: "К списку",
+        attributes: {
+          "data-action": "back-to-sites",
+          type: "button"
+        },
+        on: {
+          click: onCancel
+        }
+      })
+    ];
+
+    replaceContent(formHost, createElement("section", {
+      documentRef,
+      className: "admin-save-next-step",
+      attributes: {
+        "data-save-state": "saved"
+      },
+      children: [
+        createElement("p", {
+          documentRef,
+          className: "admin-kicker",
+          text: "Черновик"
+        }),
+        createElement("h3", {
+          documentRef,
+          text: "Черновик сохранён"
+        }),
+        createElement("div", {
+          documentRef,
+          className: "admin-save-next-actions",
+          children: actions
+        })
+      ]
+    }));
   }
 
   function createBasicSection(errors) {
@@ -939,14 +1000,7 @@ export function createSiteEditorScreen(options) {
         .find((site) => site?.slug === slug) ?? null;
 
       if (saved !== null) {
-        currentSite = saved;
-        dirty = false;
-        clearDraft();
-        unregisterDirtyGuard();
-        setSaveState(form, "saved");
-        statusRegion.textContent = "Сохранено. Запись найдена после проверки.";
-        onStatus("Сохранено. Запись найдена после проверки.");
-        onSaved(saved);
+        finishSuccessfulSave(saved, form, "Сохранено. Запись найдена после проверки.");
         return true;
       }
     } catch {
@@ -1065,6 +1119,27 @@ function safeMessage(error) {
   }
 
   return "Не удалось сохранить.";
+}
+
+function localizeEditorErrors(errors, formState) {
+  const localized = { ...errors };
+
+  if (Array.isArray(localized.slug)) {
+    localized.slug = localized.slug.map((message) => localizeSlugError(message, formState?.slug));
+  }
+
+  return localized;
+}
+
+function localizeSlugError(message, slug) {
+  if (/already exists|conflict|duplicate|taken|unique/i.test(String(message))) {
+    return `Адрес карточки уже занят. Можно попробовать: ${appendSlugTimestamp(slug)}.`;
+  }
+  if (/lowercase|hyphens?|letters|numbers|slug/i.test(String(message))) {
+    return "Адрес карточки может содержать только латинские буквы, цифры и дефисы.";
+  }
+
+  return String(message).replace(/\b[Ss]lug\b/g, "Адрес карточки");
 }
 
 function isNetworkFailure(error) {

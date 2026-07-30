@@ -25,11 +25,13 @@ describe("admin site editor screen", () => {
       })
     };
     const onSaved = vi.fn();
+    const onImages = vi.fn();
     const screen = createSiteEditorScreen({
       apiClient,
       documentRef,
       mode: "create",
       onCancel: vi.fn(),
+      onImages,
       onSaved,
       onStatus: vi.fn(),
       role: "editor"
@@ -65,6 +67,11 @@ describe("admin site editor screen", () => {
     setValue(screen.element, "priceRubles", "15 000,50");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
     await waitFor(() => onSaved.mock.calls.length === 1);
+    expect(screen.element.textContent).toContain("Черновик сохранён");
+    expect(screen.element.textContent).toContain("Перейти к изображениям");
+    expect(screen.element.querySelector("form")).toBeNull();
+    screen.element.querySelector('[data-action="manage-images"]').dispatchEvent(fakeEvent("click"));
+    expect(onImages).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000101");
 
     expect(apiClient.requestJson.mock.calls[0][0]).toBe("/api/admin/categories?limit=100&page=1");
     expect(apiClient.requestJson.mock.calls[1][0]).toBe("/api/ready");
@@ -290,7 +297,8 @@ describe("admin site editor screen", () => {
     await waitFor(() => screen.element.textContent.includes("req_conflict"));
 
     expect(saveCalls).toBe(1);
-    expect(screen.element.textContent).toContain("Slug already exists.");
+    expect(screen.element.textContent).toContain("Адрес карточки уже занят.");
+    expect(screen.element.textContent).not.toContain("Slug already exists.");
     expect(screen.element.querySelector('[name="title"]').value).toBe("Conflict");
 
     screen.element.querySelector('[data-action="cancel-editor"]').dispatchEvent(fakeEvent("click"));
@@ -460,7 +468,7 @@ describe("admin site editor screen", () => {
     expect(allowedUnload.defaultPrevented).toBe(false);
   });
 
-  it("keeps the form after a network save failure and verifies by slug before allowing retry", async () => {
+  it("verifies a network-failed create by exact slug before allowing retry", async () => {
     const documentRef = createFakeDocument();
     const onSaved = vi.fn();
     const requests = [];
@@ -512,6 +520,8 @@ describe("admin site editor screen", () => {
     expect(onSaved).toHaveBeenCalledWith(expect.objectContaining({
       slug: "magazin-odezhdy-test"
     }));
+    expect(screen.element.textContent).toContain("Перейти к изображениям");
+    expect(screen.element.querySelector("form")).toBeNull();
   });
 
   it("keeps local form data and does not submit while the browser reports offline", async () => {

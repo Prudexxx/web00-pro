@@ -3,12 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildSitesListPath,
   createSitesListScreen,
+  lifecycleErrorMessage,
   normalizeSitesListFilters
 } from "../src/admin/assets/screens/sites-list.js";
 
 const CLEANUP_SITE_SLUG = "codex-acceptance-site-20260728-1836";
 
 describe("admin sites list screen", () => {
+  it("maps publish readiness backend codes to human lifecycle messages", () => {
+    expect(lifecycleErrorMessage({
+      code: "SITE_PREVIEW_REQUIRED",
+      message: "Site preview is required."
+    })).toBe("Перед публикацией добавьте preview-изображение.");
+    expect(lifecycleErrorMessage({
+      code: "SITE_NOT_DRAFT",
+      message: "Site must be a draft before publishing."
+    })).toBe("Опубликовать можно только черновик.");
+  });
+
   it("builds only approved query keys and resets page when filters change", () => {
     expect(buildSitesListPath({})).toBe("/api/admin/sites");
     expect(buildSitesListPath({
