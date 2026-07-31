@@ -4,9 +4,12 @@ import type { NodeEnvironment } from "../../config/env.js";
 import { AppError } from "../../lib/errors.js";
 
 export interface AdminUiSecurityOptions {
+  catalogPublicOrigin: string;
   nodeEnv: NodeEnvironment;
   storagePublicOrigin: string;
 }
+
+const maxImageOriginLength = 2048;
 
 const permissionsPolicy = [
   "camera=()",
@@ -25,6 +28,7 @@ export function createAdminUiSecurityMiddleware(
   options: AdminUiSecurityOptions
 ): RequestHandler {
   const storageOrigin = parseStorageOrigin(options.storagePublicOrigin, options.nodeEnv);
+  const catalogOrigin = parseCatalogOrigin(options.catalogPublicOrigin, options.nodeEnv);
   const securityHeaders = helmet({
     contentSecurityPolicy: {
       useDefaults: false,
@@ -34,7 +38,7 @@ export function createAdminUiSecurityMiddleware(
         scriptSrcAttr: ["'none'"],
         styleSrc: ["'self'"],
         connectSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "blob:", storageOrigin],
+        imgSrc: uniqueSources(["'self'", "data:", "blob:", storageOrigin, catalogOrigin]),
         objectSrc: ["'none'"],
         baseUri: ["'none'"],
         formAction: ["'self'"],
@@ -84,4 +88,45 @@ function parseStorageOrigin(value: string, nodeEnv: NodeEnvironment): string {
       statusCode: 500
     });
   }
+}
+
+function parseCatalogOrigin(value: string, nodeEnv: NodeEnvironment): string {
+  try {
+    if (typeof value !== "string" || value.length === 0 || value.length > maxImageOriginLength) {
+      throw new Error("invalid length");
+    }
+
+    const parsed = new URL(value);
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("invalid protocol");
+    }
+    if (nodeEnv === "production" && parsed.protocol !== "https:") {
+      throw new Error("invalid production protocol");
+    }
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== ""
+    ) {
+      throw new Error("invalid origin shape");
+    }
+    if (value !== parsed.origin && value !== `${parsed.origin}/`) {
+      throw new Error("invalid canonical origin");
+    }
+
+    return parsed.origin;
+  } catch {
+    throw new AppError({
+      code: "CONFIGURATION_ERROR",
+      message: "Invalid Admin UI catalog image origin.",
+      statusCode: 500
+    });
+  }
+}
+
+function uniqueSources(sources: string[]): string[] {
+  return [...new Set(sources)];
 }

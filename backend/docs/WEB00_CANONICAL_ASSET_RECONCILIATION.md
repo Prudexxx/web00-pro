@@ -77,6 +77,13 @@ Admin image manager display uses the resolved presentation URL only:
 - delete/reorder payloads continue to use existing `assetId`, `sortOrder`, and `alt` contract fields;
 - render does not mutate stored data.
 
+Admin CSP:
+
+- admin `img-src` allows the exact canonical catalog image origin `https://prudexxx.github.io`;
+- the origin is derived from the shared `CATALOG_PUBLIC_ASSET_BASE` backend constant, not duplicated in the admin security middleware;
+- the GitHub Pages origin is not added to `script-src`, `connect-src`, `style-src`, `frame-src`, or `form-action`;
+- no wildcard GitHub source or broad `https:` image source is allowed.
+
 ## Admin maintenance workflow
 
 Render Free does not provide a reliable owner Shell/SSH/one-off-job path for this operation. PR #7 therefore includes one authenticated admin-only maintenance action:
