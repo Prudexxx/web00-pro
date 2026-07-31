@@ -8,6 +8,7 @@ import {
 } from "./preview-upload-observability.js";
 import type {
   ImageStorage,
+  ImageStorageOperationContext,
   StorageBucketConfig,
   StorageBucketInspection,
   StorageBucketResult,
@@ -47,6 +48,10 @@ export interface SupabaseStorageLike {
   };
 }
 
+export interface SupabaseImageStorageOptions {
+  fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+}
+
 const variantPathPattern =
   /^sites\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/(preview|gallery)\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/([1-9]\d*)\.(webp|avif)$/;
 
@@ -60,9 +65,11 @@ export function createSupabaseImageStorage(
         persistSession: false
       }
     }
-  ) as SupabaseStorageLike
+  ) as SupabaseStorageLike,
+  options: SupabaseImageStorageOptions = {}
 ): ImageStorage {
   const storageClient = client.storage;
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
 
   return {
     async createBucket(input) {
@@ -183,6 +190,13 @@ export function createSupabaseImageStorage(
     },
     async uploadObject(input) {
       assertUploadInput(input);
+
+      if (input.context !== undefined) {
+        return uploadObjectWithFetch(config, input, fetchImpl, () =>
+          this.getPublicUrl(input.path)
+        );
+      }
+
       const bucketClient = storageClient.from(config.bucket);
 
       if (bucketClient.upload === undefined) {
@@ -211,6 +225,117 @@ export function createSupabaseImageStorage(
       } satisfies StorageUploadResult;
     }
   };
+}
+
+async function uploadObjectWithFetch(
+  config: StorageConfig,
+  input: UploadImageObjectInput,
+  fetchImpl: SupabaseImageStorageOptions["fetchImpl"],
+  getPublicUrl: () => string
+): Promise<StorageUploadResult> {
+  if (fetchImpl === undefined) {
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
+  }
+
+  const timed = createTimedOperationSignal(input.context);
+
+  try {
+    const result = await fetchImpl(buildObjectUploadUrl(config, input.path), {
+      body: input.body as unknown as BodyInit,
+      headers: {
+        apikey: config.credentials.serviceRoleKey,
+        authorization: `Bearer ${config.credentials.serviceRoleKey}`,
+        "cache-control": "max-age=31536000",
+        "content-type": input.contentType,
+        "x-upsert": "false"
+      },
+      method: "POST",
+      signal: timed.signal
+    });
+
+    if (!result.ok) {
+      throw storageOperationFailed(
+        "STORAGE_WRITE_FAILED",
+        "Storage write failed.",
+        503,
+        "STORAGE_UPLOAD"
+      );
+    }
+
+    return {
+      path: input.path,
+      publicUrl: getPublicUrl()
+    };
+  } catch (error) {
+    if (timed.didTimeout() || isAbortError(error)) {
+      throw storageOperationFailed(
+        "IMAGE_STORAGE_TIMEOUT",
+        "Storage upload timed out.",
+        503,
+        "STORAGE_UPLOAD"
+      );
+    }
+
+    throw error;
+  } finally {
+    timed.cleanup();
+  }
+}
+
+function buildObjectUploadUrl(config: StorageConfig, path: string): string {
+  const base = new URL(config.credentials.supabaseUrl);
+
+  base.pathname = `/storage/v1/object/${config.bucket}/${path}`;
+  base.search = "";
+  base.hash = "";
+
+  return base.toString();
+}
+
+function createTimedOperationSignal(
+  context: ImageStorageOperationContext | undefined
+): {
+  cleanup: () => void;
+  didTimeout: () => boolean;
+  signal: AbortSignal;
+} {
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  let abortListener: (() => void) | undefined;
+
+  if (context?.signal?.aborted === true) {
+    controller.abort(context.signal.reason);
+  } else if (context?.signal !== undefined) {
+    abortListener = () => {
+      controller.abort(context.signal?.reason);
+    };
+    context.signal.addEventListener("abort", abortListener, { once: true });
+  }
+
+  if (context?.timeoutMs !== undefined) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error("IMAGE_STORAGE_TIMEOUT"));
+    }, context.timeoutMs);
+  }
+
+  return {
+    cleanup() {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      if (abortListener !== undefined && context?.signal !== undefined) {
+        context.signal.removeEventListener("abort", abortListener);
+      }
+    },
+    didTimeout: () => timedOut,
+    signal: controller.signal
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function assertUploadInput(input: UploadImageObjectInput): void {
@@ -319,7 +444,7 @@ function isCompatibleBucket(data: unknown): boolean {
 }
 
 function storageOperationFailed(
-  code: "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED",
+  code: "IMAGE_STORAGE_TIMEOUT" | "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED",
   message: string,
   statusCode: number,
   operation: PreviewStorageDiagnosticCode,

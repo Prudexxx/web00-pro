@@ -23,7 +23,10 @@ import type {
   PublicManagedGalleryImage,
   PublicPreviewImage
 } from "../../images/image.types.js";
-import type { ImageStorage } from "../../images/image-storage.js";
+import type {
+  ImageStorage,
+  ImageStorageOperationContext
+} from "../../images/image-storage.js";
 import type {
   GalleryBatchResponse,
   GalleryDeleteInput,
@@ -110,8 +113,14 @@ export interface CreateSiteImageServiceOptions {
   storage: ImageStorage;
 }
 
-const GALLERY_BATCH_CONCURRENCY = 2;
-const GALLERY_BATCH_TIMEOUT_MS = 180_000;
+const GALLERY_BATCH_CONCURRENCY = 1;
+const MAX_GALLERY_BATCH_FILES = 10;
+const MAX_VARIANTS_PER_IMAGE = 6;
+const STORAGE_INSPECT_TIMEOUT_MS = 10_000;
+const STORAGE_REMOVE_TIMEOUT_MS = 15_000;
+const STORAGE_UPLOAD_TIMEOUT_MS = 15_000;
+const DATABASE_ATTACH_TIMEOUT_MS = 10_000;
+const GALLERY_BATCH_CANCELLATION_GRACE_MS = 5_000;
 
 export function createSiteImageService(
   options: CreateSiteImageServiceOptions
@@ -190,15 +199,17 @@ type GalleryBatchUploadCandidate =
     };
 
 interface GalleryBatchTimeoutState {
+  controller: AbortController;
   cancelledError?: AppError;
   timedOut: boolean;
+  timeoutMs: number;
 }
 
 async function addGalleryBatch(
   options: CreateSiteImageServiceOptions,
   input: { context: AdminMutationContext; files: ParsedImageFile[]; siteId: string }
 ): Promise<GalleryBatchResponse> {
-  return withGalleryBatchTimeout((timeoutState) =>
+  return withGalleryBatchTimeout(options.processor, input.files.length, (timeoutState) =>
     runGalleryBatch(options, input, timeoutState)
   );
 }
@@ -212,7 +223,7 @@ async function addGalleryBatchStream(
     siteId: string;
   }
 ): Promise<GalleryBatchResponse> {
-  return withGalleryBatchTimeout((timeoutState) =>
+  return withGalleryBatchTimeout(options.processor, MAX_GALLERY_BATCH_FILES, (timeoutState) =>
     runGalleryBatchStream(options, input, timeoutState)
   );
 }
@@ -447,6 +458,7 @@ async function prepareGalleryBatchCandidate(
             },
             siteId: input.siteId,
             slot: "gallery",
+            signal: input.timeoutState.controller.signal,
             source: input.file.source
           });
         } catch (error) {
@@ -512,6 +524,11 @@ async function prepareGalleryBatchCandidate(
             body: variant.body,
             cacheControl: "31536000",
             contentType: variant.contentType,
+            context: createStorageOperationContext(
+              input.context,
+              input.timeoutState.controller.signal,
+              STORAGE_UPLOAD_TIMEOUT_MS
+            ),
             path: variant.path,
             upsert: false
           });
@@ -608,6 +625,7 @@ async function replacePreview(
           onStage: setStage,
           siteId: input.siteId,
           slot: "preview",
+          signal: input.signal,
           source: input.file.source
         });
         processedWidthCount = processed.widths.length;
@@ -639,6 +657,11 @@ async function replacePreview(
               body: variant.body,
               cacheControl: "31536000",
               contentType: variant.contentType,
+              context: createStorageOperationContext(
+                input.context,
+                input.signal,
+                STORAGE_UPLOAD_TIMEOUT_MS
+              ),
               path: variant.path,
               upsert: false
             })
@@ -791,6 +814,7 @@ async function addSingleGallery(
         declaredMimeType: input.file.declaredMimeType,
         siteId: input.siteId,
         slot: "gallery",
+        signal: input.signal,
         source: input.file.source
       });
       await cleanUnattachedObjectsBeforeUpload(options, {
@@ -809,6 +833,11 @@ async function addSingleGallery(
           body: variant.body,
           cacheControl: "31536000",
           contentType: variant.contentType,
+          context: createStorageOperationContext(
+            input.context,
+            input.signal,
+            STORAGE_UPLOAD_TIMEOUT_MS
+          ),
           path: variant.path,
           upsert: false
         });
@@ -923,15 +952,25 @@ async function deleteGalleryImage(
 }
 
 async function withGalleryBatchTimeout<T>(
+  processor: ImageProcessor,
+  fileCount: number,
   operation: (timeoutState: GalleryBatchTimeoutState) => Promise<T>
 ): Promise<T> {
-  const timeoutState = { timedOut: false };
+  const timeoutMs = calculateGalleryBatchTimeoutMs(processor, fileCount);
+  const timeoutState = {
+    controller: new AbortController(),
+    timedOut: false,
+    timeoutMs
+  };
   let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {
+      const error = imageProcessingTimeout();
+
       timeoutState.timedOut = true;
-      reject(imageProcessingTimeout());
-    }, GALLERY_BATCH_TIMEOUT_MS);
+      timeoutState.controller.abort(error);
+      reject(error);
+    }, timeoutMs);
   });
 
   try {
@@ -1031,7 +1070,15 @@ async function cleanUnattachedObjectsBeforeUpload(
   }
 ): Promise<void> {
   assertGalleryBatchCanContinue(input.state);
-  const firstInspection = await options.storage.inspectObjects(input.paths);
+  const storageSignal = input.state?.controller.signal;
+  const firstInspection = await options.storage.inspectObjects(
+    input.paths,
+    createStorageOperationContext(
+      input.context,
+      storageSignal,
+      STORAGE_INSPECT_TIMEOUT_MS
+    )
+  );
 
   assertGalleryBatchCanContinue(input.state);
 
@@ -1049,10 +1096,24 @@ async function cleanUnattachedObjectsBeforeUpload(
     }))
   );
   assertGalleryBatchCanContinue(input.state);
-  await options.storage.removeObjects(firstInspection.existingPaths);
+  await options.storage.removeObjects(
+    firstInspection.existingPaths,
+    createStorageOperationContext(
+      input.context,
+      storageSignal,
+      STORAGE_REMOVE_TIMEOUT_MS
+    )
+  );
 
   assertGalleryBatchCanContinue(input.state);
-  const secondInspection = await options.storage.inspectObjects(input.paths);
+  const secondInspection = await options.storage.inspectObjects(
+    input.paths,
+    createStorageOperationContext(
+      input.context,
+      storageSignal,
+      STORAGE_INSPECT_TIMEOUT_MS
+    )
+  );
 
   assertGalleryBatchCanContinue(input.state);
 
@@ -1073,6 +1134,7 @@ function assertGalleryBatchCanContinue(timeoutState?: GalleryBatchTimeoutState):
 function cancelGalleryBatch(timeoutState: GalleryBatchTimeoutState, error: unknown): void {
   if (timeoutState.cancelledError === undefined) {
     timeoutState.cancelledError = toGalleryBatchCancellationError(error);
+    timeoutState.controller.abort(timeoutState.cancelledError);
   }
 }
 
@@ -1100,9 +1162,28 @@ function toGalleryBatchFailure(
     code: error instanceof AppError ? error.code : "INTERNAL_ERROR",
     index: file.index,
     message: error instanceof AppError ? error.message : "Internal server error.",
-    ...(safeRequestId === undefined ? {} : { requestId: safeRequestId })
+    ...(safeRequestId === undefined ? {} : { requestId: safeRequestId }),
+    retryable: isRetryableImageUploadError(error)
   };
 }
+
+function isRetryableImageUploadError(error: unknown): boolean {
+  if (!(error instanceof AppError)) {
+    return false;
+  }
+
+  return retryableImageUploadErrorCodes.has(error.code);
+}
+
+const retryableImageUploadErrorCodes = new Set([
+  "CLIENT_ABORTED",
+  "CONCURRENT_MODIFICATION",
+  "IMAGE_PROCESSING_TIMEOUT",
+  "IMAGE_PROCESSOR_BUSY",
+  "IMAGE_STORAGE_TIMEOUT",
+  "STORAGE_UNAVAILABLE",
+  "STORAGE_WRITE_FAILED"
+]);
 
 function logGalleryImageFileStage(
   options: CreateSiteImageServiceOptions,
@@ -1165,6 +1246,28 @@ function logGalleryImageFileStage(
   }
 }
 
+function calculateGalleryBatchTimeoutMs(
+  processor: ImageProcessor,
+  fileCount: number
+): number {
+  const safeFileCount = Math.max(
+    1,
+    Math.min(MAX_GALLERY_BATCH_FILES, Math.trunc(Number(fileCount) || 1))
+  );
+  const processingWaves = Math.ceil(safeFileCount / GALLERY_BATCH_CONCURRENCY);
+  const processorTimeoutMs = readProcessorTimeoutMs(processor) ?? 90_000;
+  const perFileStorageBudgetMs =
+    STORAGE_INSPECT_TIMEOUT_MS +
+    STORAGE_REMOVE_TIMEOUT_MS +
+    MAX_VARIANTS_PER_IMAGE * STORAGE_UPLOAD_TIMEOUT_MS;
+
+  return (
+    processingWaves * processorTimeoutMs +
+    safeFileCount * (perFileStorageBudgetMs + DATABASE_ATTACH_TIMEOUT_MS) +
+    GALLERY_BATCH_CANCELLATION_GRACE_MS
+  );
+}
+
 function toGalleryImageMetadataLogFields(
   event: ImageProcessingDiagnosticEvent | undefined
 ): {
@@ -1187,6 +1290,18 @@ function toGalleryImageMetadataLogFields(
 
 function readProcessorTimeoutMs(processor: ImageProcessor): number | undefined {
   return normalizePositiveLogInteger(processor.timeoutMs);
+}
+
+function createStorageOperationContext(
+  context: AdminMutationContext,
+  signal: AbortSignal | undefined,
+  timeoutMs: number
+): ImageStorageOperationContext {
+  return {
+    requestId: context.requestId,
+    signal,
+    timeoutMs
+  };
 }
 
 function isImageProcessingTimeoutError(error: unknown): boolean {

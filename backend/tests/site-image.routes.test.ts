@@ -22,7 +22,8 @@ describe("admin site image routes", () => {
           code: "IMAGE_PROCESSING_TIMEOUT",
           index: 0,
           message: "Image processing timed out.",
-          requestId: "req_gallery_route"
+          requestId: "req_gallery_route",
+          retryable: true
         }
       ],
       succeeded: []

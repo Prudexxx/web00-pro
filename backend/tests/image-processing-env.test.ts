@@ -13,12 +13,19 @@ describe("parseImageProcessingEnv", () => {
 
     expect(env).toEqual({
       IMAGE_PROCESSING_CONCURRENCY: IMAGE_PROCESSING_CONCURRENCY_LIMITS.default,
+      IMAGE_PROCESSING_MAX_PIXELS: 16_000_000,
+      IMAGE_PROCESSING_MAX_QUEUE: 2,
+      IMAGE_PROCESSING_QUEUE_WAIT_MS: 5_000,
       IMAGE_PROCESSING_TIMEOUT_MS: IMAGE_PROCESSING_TIMEOUT_LIMITS.default
     });
+    expect(env.IMAGE_PROCESSING_CONCURRENCY).toBe(1);
     expect(env.IMAGE_PROCESSING_TIMEOUT_MS).toBeGreaterThan(45_000);
-    expect(env.IMAGE_PROCESSING_TIMEOUT_MS).toBeLessThan(180_000);
+    expect(env.IMAGE_PROCESSING_TIMEOUT_MS).toBeLessThan(120_000);
     expect(toImageProcessingConfig(env)).toEqual({
       maxConcurrency: IMAGE_PROCESSING_CONCURRENCY_LIMITS.default,
+      maxPixels: 16_000_000,
+      maxQueued: 2,
+      queueWaitTimeoutMs: 5_000,
       timeoutMs: IMAGE_PROCESSING_TIMEOUT_LIMITS.default
     });
   });
@@ -26,12 +33,18 @@ describe("parseImageProcessingEnv", () => {
   it("accepts explicit bounded non-secret timeout and concurrency values", () => {
     const env = parseImageProcessingEnv({
       IMAGE_PROCESSING_CONCURRENCY: "1",
-      IMAGE_PROCESSING_TIMEOUT_MS: "120000"
+      IMAGE_PROCESSING_MAX_PIXELS: "12000000",
+      IMAGE_PROCESSING_MAX_QUEUE: "1",
+      IMAGE_PROCESSING_QUEUE_WAIT_MS: "3000",
+      IMAGE_PROCESSING_TIMEOUT_MS: "90000"
     });
 
     expect(toImageProcessingConfig(env)).toEqual({
       maxConcurrency: 1,
-      timeoutMs: 120_000
+      maxPixels: 12_000_000,
+      maxQueued: 1,
+      queueWaitTimeoutMs: 3_000,
+      timeoutMs: 90_000
     });
   });
 
@@ -49,10 +62,23 @@ describe("parseImageProcessingEnv", () => {
   });
 
   it("rejects unbounded image concurrency", () => {
-    for (const value of ["0", "3", "1.5", "many"]) {
+    for (const value of ["0", "2", "3", "1.5", "many"]) {
       expect(() =>
         parseImageProcessingEnv({ IMAGE_PROCESSING_CONCURRENCY: value })
       ).toThrow(ImageProcessingEnvValidationError);
+    }
+  });
+
+  it("rejects unbounded image memory and admission queue settings", () => {
+    for (const input of [
+      { IMAGE_PROCESSING_MAX_PIXELS: "40000001" },
+      { IMAGE_PROCESSING_MAX_PIXELS: "999999" },
+      { IMAGE_PROCESSING_MAX_QUEUE: "999" },
+      { IMAGE_PROCESSING_MAX_QUEUE: "-1" },
+      { IMAGE_PROCESSING_QUEUE_WAIT_MS: "0" },
+      { IMAGE_PROCESSING_QUEUE_WAIT_MS: "60001" }
+    ]) {
+      expect(() => parseImageProcessingEnv(input)).toThrow(ImageProcessingEnvValidationError);
     }
   });
 

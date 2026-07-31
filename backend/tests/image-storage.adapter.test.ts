@@ -214,6 +214,66 @@ describe("createSupabaseImageStorage", () => {
     ]);
   });
 
+  it("uses a finite abortable Storage upload request when an operation context is supplied", async () => {
+    const controller = new AbortController();
+    const calls: Array<{ init: RequestInit | undefined; url: string }> = [];
+    const storage = createSupabaseImageStorage(config, {
+      storage: {
+        from() {
+          return {
+            getPublicUrl(path: string) {
+              return {
+                data: {
+                  publicUrl: `${config.publicBaseUrl}/storage/v1/object/public/${config.bucket}/${path}`
+                }
+              };
+            }
+          };
+        }
+      }
+    }, {
+      fetchImpl: async (url, init) => {
+        calls.push({ init, url: String(url) });
+        return new Response(JSON.stringify({ path: variantPath(480, "webp") }), {
+          headers: { "content-type": "application/json" },
+          status: 200
+        });
+      }
+    });
+
+    await expect(
+      storage.uploadObject({
+        body: Buffer.from("webp"),
+        cacheControl: "31536000",
+        contentType: "image/webp",
+        context: {
+          requestId: "req_storage_deadline",
+          signal: controller.signal,
+          timeoutMs: 1_500
+        },
+        path: variantPath(480, "webp"),
+        upsert: false
+      })
+    ).resolves.toMatchObject({
+      path: variantPath(480, "webp")
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(
+      `https://project.supabase.co/storage/v1/object/${config.bucket}/${variantPath(480, "webp")}`
+    );
+    expect(calls[0]?.init).toMatchObject({
+      body: Buffer.from("webp"),
+      method: "POST",
+      signal: expect.any(AbortSignal)
+    });
+    expect(calls[0]?.init?.headers).toMatchObject({
+      "cache-control": "max-age=31536000",
+      "content-type": "image/webp",
+      "x-upsert": "false"
+    });
+  });
+
   it("rejects unsafe caller upload options and raw provider errors", async () => {
     const storage = createSupabaseImageStorage(config, {
       storage: {

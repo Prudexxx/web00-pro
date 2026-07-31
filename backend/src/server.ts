@@ -183,6 +183,9 @@ export function startServer(options: StartServerOptions): StartedServer {
       imageUrlPolicy,
       processor: createSharpImageProcessor({
         maxConcurrency: imageProcessingConfig.maxConcurrency,
+        maxPixels: imageProcessingConfig.maxPixels,
+        maxQueued: imageProcessingConfig.maxQueued,
+        queueWaitTimeoutMs: imageProcessingConfig.queueWaitTimeoutMs,
         timeoutMs: imageProcessingConfig.timeoutMs
       }),
       repository: createPrismaSiteImageRepository({ prisma }),

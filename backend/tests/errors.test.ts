@@ -118,6 +118,37 @@ describe("AppError response contract", () => {
     expect(status).not.toHaveBeenCalled();
     expect(json).not.toHaveBeenCalled();
   });
+
+  it("adds Retry-After only for image processor overload responses", () => {
+    const status = vi.fn().mockReturnThis();
+    const json = vi.fn().mockReturnThis();
+    const setHeader = vi.fn().mockReturnThis();
+    const next: NextFunction = vi.fn();
+    const response = {
+      headersSent: false,
+      json,
+      locals: { requestId: "req_busy" },
+      setHeader,
+      status
+    } as unknown as Response;
+    const error = new AppError({
+      code: "IMAGE_PROCESSOR_BUSY",
+      message: "Image processor queue is full.",
+      statusCode: 503
+    });
+
+    errorHandler(error, {} as Request, response, next);
+
+    expect(setHeader).toHaveBeenCalledWith("Retry-After", "5");
+    expect(status).toHaveBeenCalledWith(503);
+    expect(json).toHaveBeenCalledWith({
+      error: {
+        code: "IMAGE_PROCESSOR_BUSY",
+        message: "Image processor queue is full.",
+        requestId: "req_busy"
+      }
+    });
+  });
 });
 
 describe("Express error handling", () => {

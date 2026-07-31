@@ -19,6 +19,7 @@ export interface SiteImageMutationSite {
 export interface SiteImageUploadInput {
   context: AdminMutationContext;
   file: ParsedImageFile;
+  signal?: AbortSignal | undefined;
   siteId: string;
 }
 
@@ -63,6 +64,7 @@ export type GalleryBatchResponse = {
     index: number;
     message: string;
     requestId?: string;
+    retryable: boolean;
   }>;
   succeeded: Array<{
     clientFileId: string;

@@ -4,8 +4,12 @@ import sharp, {
   type SharpInput,
   type SharpOptions
 } from "sharp";
+import { performance } from "node:perf_hooks";
 import {
   IMAGE_PROCESSING_CONCURRENCY_LIMITS,
+  IMAGE_PROCESSING_MAX_PIXELS_LIMITS,
+  IMAGE_PROCESSING_MAX_QUEUE_LIMITS,
+  IMAGE_PROCESSING_QUEUE_WAIT_LIMITS,
   IMAGE_PROCESSING_TIMEOUT_LIMITS
 } from "../../config/image-processing-env.js";
 import { AppError } from "../../lib/errors.js";
@@ -36,6 +40,8 @@ export interface SharpImageProcessorOptions {
   maxOutputBytes?: number;
   maxOutputHeight?: number;
   maxPixels?: number;
+  maxQueued?: number;
+  queueWaitTimeoutMs?: number;
   semaphore?: ImagePipelineSemaphore;
   sharpFactory?: SharpFactory;
   timeoutMs?: number;
@@ -51,18 +57,24 @@ interface ImageMetadata {
 }
 
 interface NormalizedSharpImageProcessorOptions {
+  maxConcurrency: number;
   maxDimension: number;
   maxOutputBytes: number;
   maxOutputHeight: number;
   maxPixels: number;
+  maxQueued: number;
+  queueWaitTimeoutMs: number;
   sharpFactory: SharpFactory;
   timeoutMs: number;
 }
 
 interface ProcessingContext {
+  aborted: boolean;
   activePipelines: Set<Sharp>;
+  deadlineAt: number;
   maxPixels: number;
   sharpFactory: SharpFactory;
+  signal?: AbortSignal | undefined;
   timedOut: boolean;
   timeoutMs: number;
 }
@@ -76,22 +88,34 @@ const declaredMimeTypes = new Map<string, ImageSourceFormat>([
 const defaultMaxDimension = 20_000;
 const defaultMaxOutputBytes = 5 * 1024 * 1024;
 const defaultMaxOutputHeight = 12_000;
-const defaultMaxPixels = 40_000_000;
+const defaultMaxPixels = IMAGE_PROCESSING_MAX_PIXELS_LIMITS.default;
 const defaultTimeoutMs = IMAGE_PROCESSING_TIMEOUT_LIMITS.default;
 const defaultMaxConcurrency = IMAGE_PROCESSING_CONCURRENCY_LIMITS.default;
+const defaultMaxQueued = IMAGE_PROCESSING_MAX_QUEUE_LIMITS.default;
+const defaultQueueWaitTimeoutMs = IMAGE_PROCESSING_QUEUE_WAIT_LIMITS.default;
+const sharpCacheMemoryMb = 32;
 
 export function createSharpImageProcessor(
   options: SharpImageProcessorOptions = {}
 ): ImageProcessor {
   const normalized = normalizeOptions(options);
+  if (options.sharpFactory === undefined) {
+    configureSharpResourceProfile();
+  }
   const semaphore =
     options.semaphore ??
-    createImagePipelineSemaphore(options.maxConcurrency ?? defaultMaxConcurrency);
+    createImagePipelineSemaphore({
+      maxActive: normalized.maxConcurrency,
+      maxQueued: normalized.maxQueued,
+      queueWaitTimeoutMs: normalized.queueWaitTimeoutMs
+    });
 
   return {
     timeoutMs: normalized.timeoutMs,
     process(input) {
-      return semaphore.run(() => processImageWithTimeout(input, normalized));
+      return semaphore.run(() => processImageWithTimeout(input, normalized), {
+        signal: input.signal
+      });
     }
   };
 }
@@ -104,26 +128,35 @@ async function processImageWithTimeout(
     onStage?: (stage: ImageProcessorDiagnosticStage) => void;
     siteId: string;
     slot: ImageSlot;
+    signal?: AbortSignal | undefined;
     source: Buffer;
   },
   options: NormalizedSharpImageProcessorOptions
 ): Promise<ProcessedImage> {
   const context: ProcessingContext = {
+    aborted: false,
     activePipelines: new Set(),
+    deadlineAt: performance.now() + options.timeoutMs,
     maxPixels: options.maxPixels,
     sharpFactory: options.sharpFactory,
+    signal: input.signal,
     timedOut: false,
     timeoutMs: options.timeoutMs
   };
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let timeout: NodeJS.Timeout | undefined;
+  let abortListener: (() => void) | undefined;
+  let abortReject: ((error: AppError) => void) | undefined;
+  const abortPromise = new Promise<never>((_resolve, reject) => {
+    abortReject = reject;
+  });
   const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       context.timedOut = true;
       const timeoutError = imageProcessingTimeout();
 
       emitProcessingDiagnostic(input, {
-        durationMs: Date.now() - startedAt,
+        durationMs: performance.now() - startedAt,
         errorCategory: timeoutError.code,
         stage: "PROCESSING_TIMEOUT",
         timeoutMs: options.timeoutMs
@@ -141,13 +174,34 @@ async function processImageWithTimeout(
   });
 
   try {
+    if (input.signal?.aborted === true) {
+      throw clientAborted();
+    }
+    if (input.signal !== undefined) {
+      abortListener = () => {
+        const abortError = clientAborted();
+
+        context.aborted = true;
+        abortReject?.(abortError);
+        for (const pipeline of context.activePipelines) {
+          try {
+            pipeline.destroy(abortError);
+          } catch {
+            continue;
+          }
+        }
+      };
+      input.signal.addEventListener("abort", abortListener, { once: true });
+    }
+
     const processed = await Promise.race([
       processImage(input, options, context),
-      timeoutPromise
+      timeoutPromise,
+      abortPromise
     ]);
 
     emitProcessingDiagnostic(input, {
-      durationMs: Date.now() - startedAt,
+      durationMs: performance.now() - startedAt,
       format: processed.originalFormat,
       height: processed.originalHeight,
       orientation: processed.originalOrientation ?? null,
@@ -163,6 +217,9 @@ async function processImageWithTimeout(
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
+    if (abortListener !== undefined && input.signal !== undefined) {
+      input.signal.removeEventListener("abort", abortListener);
+    }
     context.activePipelines.clear();
   }
 }
@@ -175,6 +232,7 @@ async function processImage(
     onStage?: (stage: ImageProcessorDiagnosticStage) => void;
     siteId: string;
     slot: ImageSlot;
+    signal?: AbortSignal | undefined;
     source: Buffer;
   },
   options: NormalizedSharpImageProcessorOptions,
@@ -278,7 +336,7 @@ async function readMetadata(
   context: ProcessingContext
 ): Promise<ImageMetadata> {
   let metadata: Metadata;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
 
   try {
     metadata = await runTrackedPipeline(
@@ -291,7 +349,10 @@ async function readMetadata(
       (pipeline) => pipeline.metadata()
     );
   } catch (error) {
-    if (context.timedOut || isImageProcessingTimeout(error)) {
+    if (context.aborted || isClientAborted(error)) {
+      throw clientAborted();
+    }
+    if (context.timedOut || isImageProcessingTimeout(error) || isSharpTimeoutError(error)) {
       throw imageProcessingTimeout();
     }
     if (isSharpPixelLimitError(error)) {
@@ -329,7 +390,7 @@ async function readMetadata(
   };
 
   emitProcessingDiagnostic(input, {
-    durationMs: Date.now() - startedAt,
+    durationMs: performance.now() - startedAt,
     format: imageMetadata.format,
     height: imageMetadata.height,
     orientation: imageMetadata.orientation,
@@ -393,7 +454,14 @@ async function encodeVariant(input: {
       current.toBuffer()
     );
   } catch (error) {
-    if (input.context.timedOut || isImageProcessingTimeout(error)) {
+    if (input.context.aborted || isClientAborted(error)) {
+      throw clientAborted();
+    }
+    if (
+      input.context.timedOut ||
+      isImageProcessingTimeout(error) ||
+      isSharpTimeoutError(error)
+    ) {
       throw imageProcessingTimeout();
     }
 
@@ -437,7 +505,10 @@ async function readOutputMetadata(
       width: metadata.width
     };
   } catch (error) {
-    if (context.timedOut || isImageProcessingTimeout(error)) {
+    if (context.aborted || isClientAborted(error)) {
+      throw clientAborted();
+    }
+    if (context.timedOut || isImageProcessingTimeout(error) || isSharpTimeoutError(error)) {
       throw imageProcessingTimeout();
     }
 
@@ -452,9 +523,10 @@ async function runTrackedPipeline<T>(
 ): Promise<T> {
   assertProcessingCanContinue(context);
   context.activePipelines.add(pipeline);
+  const timedPipeline = applyNativePipelineTimeout(context, pipeline);
 
   try {
-    return await operation(pipeline);
+    return await operation(timedPipeline);
   } finally {
     context.activePipelines.delete(pipeline);
   }
@@ -488,6 +560,11 @@ function normalizeOptions(
   options: SharpImageProcessorOptions
 ): NormalizedSharpImageProcessorOptions {
   return {
+    maxConcurrency: readPositiveInteger(
+      options.maxConcurrency,
+      defaultMaxConcurrency,
+      "maxConcurrency"
+    ),
     maxDimension: readPositiveInteger(options.maxDimension, defaultMaxDimension, "maxDimension"),
     maxOutputBytes: readPositiveInteger(
       options.maxOutputBytes,
@@ -500,6 +577,12 @@ function normalizeOptions(
       "maxOutputHeight"
     ),
     maxPixels: readPositiveInteger(options.maxPixels, defaultMaxPixels, "maxPixels"),
+    maxQueued: readNonNegativeInteger(options.maxQueued, defaultMaxQueued, "maxQueued"),
+    queueWaitTimeoutMs: readPositiveInteger(
+      options.queueWaitTimeoutMs,
+      defaultQueueWaitTimeoutMs,
+      "queueWaitTimeoutMs"
+    ),
     sharpFactory: options.sharpFactory ?? sharp,
     timeoutMs: readPositiveInteger(options.timeoutMs, defaultTimeoutMs, "timeoutMs")
   };
@@ -521,10 +604,54 @@ function readPositiveInteger(
   return value;
 }
 
+function readNonNegativeInteger(
+  value: number | undefined,
+  fallback: number,
+  name: string
+): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer.`);
+  }
+
+  return value;
+}
+
+function configureSharpResourceProfile(): void {
+  sharp.concurrency(defaultMaxConcurrency);
+  sharp.cache({
+    files: 0,
+    items: 128,
+    memory: sharpCacheMemoryMb
+  });
+}
+
 function assertProcessingCanContinue(context: ProcessingContext): void {
+  if (context.signal?.aborted === true) {
+    context.aborted = true;
+    throw clientAborted();
+  }
   if (context.timedOut) {
     throw imageProcessingTimeout();
   }
+}
+
+function applyNativePipelineTimeout(context: ProcessingContext, pipeline: Sharp): Sharp {
+  const timeout = (pipeline as Sharp & {
+    timeout?: (options: { seconds: number }) => Sharp;
+  }).timeout;
+
+  if (typeof timeout !== "function") {
+    return pipeline;
+  }
+
+  const remainingMs = Math.max(1, context.deadlineAt - performance.now());
+  const seconds = Math.max(1, Math.ceil(remainingMs / 1_000));
+
+  return timeout.call(pipeline, { seconds });
 }
 
 function imageProcessingTimeout(): AppError {
@@ -535,8 +662,20 @@ function imageProcessingTimeout(): AppError {
   );
 }
 
+function clientAborted(): AppError {
+  return createImageAppError(
+    "CLIENT_ABORTED",
+    "Image processing request was aborted.",
+    499
+  );
+}
+
 function isImageProcessingTimeout(error: unknown): boolean {
   return error instanceof AppError && error.code === "IMAGE_PROCESSING_TIMEOUT";
+}
+
+function isClientAborted(error: unknown): boolean {
+  return error instanceof AppError && error.code === "CLIENT_ABORTED";
 }
 
 function isSharpPixelLimitError(error: unknown): boolean {
@@ -544,6 +683,10 @@ function isSharpPixelLimitError(error: unknown): boolean {
     error instanceof Error &&
     /pixel limit|Input image exceeds limit/i.test(error.message)
   );
+}
+
+function isSharpTimeoutError(error: unknown): boolean {
+  return error instanceof Error && /timeout|timed out/i.test(error.message);
 }
 
 function emitProcessingDiagnostic(

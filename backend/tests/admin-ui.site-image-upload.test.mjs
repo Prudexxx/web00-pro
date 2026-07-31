@@ -85,21 +85,30 @@ describe("admin shared site image upload helpers", () => {
     expect(JSON.stringify(payload)).not.toContain("C:\\secret");
   });
 
-  it("normalizes gallery partial results and selects only failed files for retry", () => {
+  it("normalizes gallery partial results and selects only retryable failed files for retry", () => {
     const files = [
       imageFile("ok.webp", "image/webp", 12),
-      imageFile("retry.png", "image/png", 12)
+      imageFile("retry.png", "image/png", 12),
+      imageFile("terminal.png", "image/png", 12)
     ];
     const clientFileIds = [
       "00000000-0000-4000-8000-000000000401",
-      "00000000-0000-4000-8000-000000000402"
+      "00000000-0000-4000-8000-000000000402",
+      "00000000-0000-4000-8000-000000000403"
     ];
     const result = normalizeGalleryBatchResult({
       failed: [{
         clientFileId: clientFileIds[1],
-        code: "IMAGE_TOO_LARGE",
+        code: "IMAGE_PROCESSING_TIMEOUT",
         index: 1,
-        message: "Too large."
+        message: "Image processing timed out.",
+        retryable: true
+      }, {
+        clientFileId: clientFileIds[2],
+        code: "IMAGE_PIXEL_LIMIT_EXCEEDED",
+        index: 2,
+        message: "Too many pixels.",
+        retryable: false
       }],
       succeeded: [{
         clientFileId: clientFileIds[0],
@@ -113,10 +122,11 @@ describe("admin shared site image upload helpers", () => {
     });
 
     expect(result.counts).toEqual({
-      failed: 1,
+      failed: 2,
       succeeded: 1,
-      total: 2
+      total: 3
     });
+    expect(result.failed.map((item) => item.retryable)).toEqual([true, false]);
     expect(selectFailedGalleryFiles(result)).toEqual([
       {
         clientFileId: clientFileIds[1],

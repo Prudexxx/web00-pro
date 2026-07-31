@@ -58,17 +58,22 @@ export function createSiteImageController(options: {
       }
     },
     addGallerySingle: async (request, response, next) => {
+      const abortState = createRequestAbortState(request);
+
       try {
         const { id } = parseSiteImageParams(request.params);
         const result = await options.service.gallery.addSingle({
           context: createContext(request as AuthRequest, response, now),
           file: await options.parser.parseSingle(request),
+          signal: abortState.signal,
           siteId: id
         });
 
         response.status(result.replayed ? 200 : 201).json({ data: result });
       } catch (error) {
         next(error);
+      } finally {
+        abortState.cleanup();
       }
     },
     deleteGalleryImage: async (request, response, next) => {
@@ -101,6 +106,8 @@ export function createSiteImageController(options: {
       }
     },
     replacePreview: async (request, response, next) => {
+      const abortState = createRequestAbortState(request);
+
       try {
         const { id } = parseSiteImageParams(request.params);
 
@@ -108,11 +115,14 @@ export function createSiteImageController(options: {
           data: await options.service.preview.replacePreview({
             context: createContext(request as AuthRequest, response, now),
             file: await options.parser.parseSingle(request),
+            signal: abortState.signal,
             siteId: id
           })
         });
       } catch (error) {
         next(error);
+      } finally {
+        abortState.cleanup();
       }
     },
     reorderGallery: async (request, response, next) => {
@@ -130,6 +140,32 @@ export function createSiteImageController(options: {
         next(error);
       }
     }
+  };
+}
+
+function createRequestAbortState(request: NodeJS.ReadableStream): {
+  cleanup: () => void;
+  signal: AbortSignal;
+} {
+  const abortController = new AbortController();
+  const abort = () => {
+    abortController.abort();
+  };
+  const abortOnEarlyClose = () => {
+    if (!isReadableEnded(request)) {
+      abort();
+    }
+  };
+
+  request.once("aborted", abort);
+  request.once("close", abortOnEarlyClose);
+
+  return {
+    cleanup() {
+      request.removeListener("aborted", abort);
+      request.removeListener("close", abortOnEarlyClose);
+    },
+    signal: abortController.signal
   };
 }
 

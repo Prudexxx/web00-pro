@@ -37,6 +37,9 @@ export type ImageProcessorDiagnosticStage =
   | "IMAGE_PROCESS_COMPLETED";
 
 export type ImageProcessingDiagnosticStage =
+  | "QUEUE_ACQUIRED"
+  | "QUEUE_REJECTED"
+  | "QUEUE_TIMEOUT"
   | "METADATA_READ"
   | "PROCESSING_COMPLETED"
   | "PROCESSING_STARTED"
@@ -70,12 +73,17 @@ export interface ImageProcessor {
     onStage?: (stage: ImageProcessorDiagnosticStage) => void;
     siteId: string;
     slot: ImageSlot;
+    signal?: AbortSignal | undefined;
     source: Buffer;
   }): Promise<ProcessedImage>;
 }
 
 export interface ImagePipelineSemaphore {
-  run<T>(operation: () => Promise<T>): Promise<T>;
+  run<T>(
+    operation: () => Promise<T>,
+    options?: { signal?: AbortSignal | undefined }
+  ): Promise<T>;
+  stats?(): { active: number; queued: number };
 }
 
 export interface AssetUploadCoordinator {

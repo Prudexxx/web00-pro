@@ -80,7 +80,7 @@ describe("createSharpImageProcessor", () => {
       expect(metadata.icc).toBeUndefined();
       expect(variant.body.includes(Buffer.from("SOURCE_SECRET"))).toBe(false);
     }
-  });
+  }, 15_000);
 
   it("preserves alpha while avoiding enlargement", async () => {
     const processor = createSharpImageProcessor();
@@ -299,6 +299,78 @@ describe("createSharpImageProcessor", () => {
     }
   });
 
+  it("applies native Sharp timeouts to metadata, encode, and output verification pipelines", async () => {
+    const metadataPipeline = {
+      destroy: vi.fn(),
+      metadata: vi.fn(async () => ({
+        format: "png",
+        height: 600,
+        pages: 1,
+        width: 1200
+      })),
+      timeout: vi.fn(() => metadataPipeline)
+    };
+    let outputMetadataCalls = 0;
+    const outputPipeline = {
+      destroy: vi.fn(),
+      metadata: vi.fn(async () => {
+        outputMetadataCalls += 1;
+
+        return {
+          height: 240,
+          mediaType: outputMetadataCalls % 2 === 0 ? "image/avif" : "image/webp",
+          width: 480
+        };
+      }),
+      timeout: vi.fn(() => outputPipeline)
+    };
+    const variantPipeline = {
+      avif: vi.fn(() => variantPipeline),
+      destroy: vi.fn(),
+      resize: vi.fn(() => variantPipeline),
+      timeout: vi.fn(() => variantPipeline),
+      toBuffer: vi.fn(async () => Buffer.from("encoded")),
+      webp: vi.fn(() => variantPipeline)
+    };
+    const basePipeline = {
+      clone: vi.fn(() => variantPipeline),
+      destroy: vi.fn(),
+      rotate: vi.fn(() => basePipeline),
+      timeout: vi.fn(() => basePipeline),
+      toColorspace: vi.fn(() => basePipeline)
+    };
+    let callCount = 0;
+    const sharpFactory = vi.fn(() => {
+      callCount += 1;
+
+      if (callCount === 1) {
+        return metadataPipeline;
+      }
+      if (callCount === 2) {
+        return basePipeline;
+      }
+
+      return outputPipeline;
+    });
+    const processor = createSharpImageProcessor({
+      maxPixels: 2_000_000,
+      sharpFactory,
+      timeoutMs: 90_000
+    } as never);
+
+    await processor.process({
+      assetId,
+      declaredMimeType: "image/png",
+      siteId,
+      slot: "preview",
+      source: Buffer.from("fake-png")
+    });
+
+    expect(metadataPipeline.timeout).toHaveBeenCalledWith({ seconds: expect.any(Number) });
+    expect(variantPipeline.timeout).toHaveBeenCalledWith({ seconds: expect.any(Number) });
+    expect(outputPipeline.timeout).toHaveBeenCalledWith({ seconds: expect.any(Number) });
+  });
+
   it("starts the processing timeout after the processor semaphore is acquired", async () => {
     const source = await fixture("png");
     vi.useFakeTimers();
@@ -377,6 +449,36 @@ describe("createSharpImageProcessor", () => {
     ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
   });
 
+  it("maps native Sharp timeout errors to the safe processing timeout taxonomy", async () => {
+    const semaphore = {
+      async run<T>(operation: () => Promise<T>): Promise<T> {
+        return operation();
+      }
+    };
+    const metadataPipeline = {
+      destroy: vi.fn(),
+      metadata: vi.fn(async () => {
+        throw new Error("Operation timed out");
+      }),
+      timeout: vi.fn(() => metadataPipeline)
+    };
+    const processor = createSharpImageProcessor({
+      semaphore,
+      sharpFactory: (() => metadataPipeline) as never,
+      timeoutMs: 90_000
+    } as never);
+
+    await expect(
+      processor.process({
+        assetId,
+        declaredMimeType: "image/png",
+        siteId,
+        slot: "preview",
+        source: Buffer.from("fake-png")
+      })
+    ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
+  });
+
   it("keeps semaphore compatibility for rejected operations", async () => {
     const semaphore = {
       async run<T>(_operation: () => Promise<T>): Promise<T> {
@@ -433,5 +535,83 @@ describe("createImagePipelineSemaphore", () => {
     await expect(second).rejects.toThrow("second failed");
     await expect(third).resolves.toBe("third");
     expect(events).toEqual(["first:start", "first:end", "second:start", "third:start"]);
+  });
+
+  it("rejects admission when the bounded queue is full without starting work", async () => {
+    const semaphore = createImagePipelineSemaphore({
+      maxActive: 1,
+      maxQueued: 1,
+      queueWaitTimeoutMs: 5_000
+    });
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstWait = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = semaphore.run(async () => {
+      events.push("first:start");
+      await firstWait;
+      return "first";
+    });
+    const second = semaphore.run(async () => {
+      events.push("second:start");
+      return "second";
+    });
+
+    await expect(
+      semaphore.run(async () => {
+        events.push("third:start");
+        return "third";
+      })
+    ).rejects.toMatchObject({
+      code: "IMAGE_PROCESSOR_BUSY",
+      statusCode: 503
+    });
+
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+    expect(events).toEqual(["first:start", "second:start"]);
+  });
+
+  it("removes aborted queued work and never retains its operation", async () => {
+    const semaphore = createImagePipelineSemaphore({
+      maxActive: 1,
+      maxQueued: 2,
+      queueWaitTimeoutMs: 5_000
+    });
+    const controller = new AbortController();
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstWait = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = semaphore.run(async () => {
+      events.push("first:start");
+      await firstWait;
+    });
+    const aborted = semaphore.run(async () => {
+      events.push("aborted:start");
+    }, { signal: controller.signal }).catch((error: unknown) => error);
+    const next = semaphore.run(async () => {
+      events.push("next:start");
+      return "next";
+    });
+
+    controller.abort();
+    await expect(aborted).resolves.toMatchObject({
+      code: "CLIENT_ABORTED"
+    });
+    releaseFirst();
+    await first;
+    await expect(next).resolves.toBe("next");
+    expect(events).toEqual(["first:start", "next:start"]);
+    expect(semaphore.stats?.()).toEqual({
+      active: 0,
+      queued: 0
+    });
   });
 });

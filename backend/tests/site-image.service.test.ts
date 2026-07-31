@@ -129,7 +129,7 @@ function createFakes(overrides: {
     })
   };
   const processor: ImageProcessor = {
-    timeoutMs: 150_000,
+    timeoutMs: 90_000,
     process: vi.fn(async (input) => {
       events.push("process");
 
@@ -771,7 +771,7 @@ describe("GalleryImageService", () => {
     expect(fakes.repository.deleteGalleryImage).not.toHaveBeenCalled();
   });
 
-  it("processes gallery batches with concurrency two and attaches in input order", async () => {
+  it("processes gallery batches sequentially and attaches in input order", async () => {
     const fakes = createFakes();
     const attachOrder: string[] = [];
     let activeProcessors = 0;
@@ -847,10 +847,10 @@ describe("GalleryImageService", () => {
       succeeded: [{ index: 0 }, { index: 1 }, { index: 2 }]
     });
 
-    expect(maxActiveProcessors).toBe(2);
+    expect(maxActiveProcessors).toBe(1);
     expect(
-      fakes.events.indexOf(`process:end:${otherAssetId}`)
-    ).toBeLessThan(fakes.events.indexOf(`process:end:${assetId}`));
+      fakes.events.indexOf(`process:end:${assetId}`)
+    ).toBeLessThan(fakes.events.indexOf(`process:start:${otherAssetId}`));
     expect(attachOrder).toEqual([assetId, otherAssetId, thirdAssetId]);
   });
 
@@ -921,14 +921,16 @@ describe("GalleryImageService", () => {
         code: "IMAGE_PROCESSING_TIMEOUT",
         index: 3,
         message: "Image processing timed out.",
-        requestId: "req_owner_gallery_batch"
+        requestId: "req_owner_gallery_batch",
+        retryable: true
       },
       {
         clientFileId: galleryIds[4],
         code: "IMAGE_PROCESSING_TIMEOUT",
         index: 4,
         message: "Image processing timed out.",
-        requestId: "req_owner_gallery_batch"
+        requestId: "req_owner_gallery_batch",
+        retryable: true
       }
     ]);
     expect(fakes.cleanup.createUploadReservations).toHaveBeenCalledTimes(3);
@@ -959,6 +961,73 @@ describe("GalleryImageService", () => {
     );
     expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
       /Screenshot_|storage\/v1|postgres|prisma|libvips|token|secret/i
+    );
+  });
+
+  it("marks retryability per failed gallery item and passes finite storage operation contexts", async () => {
+    const retryableId = "00000000-0000-4000-8000-000000000431";
+    const terminalId = "00000000-0000-4000-8000-000000000432";
+    const fakes = createFakes();
+
+    fakes.processor.process = vi.fn(async (input) => {
+      if (input.assetId === retryableId) {
+        throw new AppError({
+          code: "IMAGE_PROCESSING_TIMEOUT",
+          message: "Image processing timed out.",
+          statusCode: 503
+        });
+      }
+      if (input.assetId === terminalId) {
+        throw new AppError({
+          code: "IMAGE_PIXEL_LIMIT_EXCEEDED",
+          message: "Image dimensions exceed the approved limits.",
+          statusCode: 422
+        });
+      }
+
+      return processedImageFor(input.assetId, input.slot);
+    });
+
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+    const result = await service.gallery.addBatch({
+      context,
+      files: [assetId, retryableId, terminalId].map((id, index) => ({
+        alt: `Gallery ${index + 1}`,
+        assetId: id,
+        declaredMimeType: "image/png",
+        index,
+        source: Buffer.from(`source-${index}`)
+      })),
+      siteId
+    });
+
+    expect(result.failed).toEqual([
+      expect.objectContaining({
+        clientFileId: retryableId,
+        code: "IMAGE_PROCESSING_TIMEOUT",
+        retryable: true
+      }),
+      expect.objectContaining({
+        clientFileId: terminalId,
+        code: "IMAGE_PIXEL_LIMIT_EXCEEDED",
+        retryable: false
+      })
+    ]);
+    expect(fakes.storage.uploadObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          requestId: context.requestId,
+          signal: expect.any(AbortSignal),
+          timeoutMs: expect.any(Number)
+        })
+      })
     );
   });
 
@@ -1051,6 +1120,7 @@ describe("GalleryImageService", () => {
       });
 
       await vi.advanceTimersByTimeAsync(46_000);
+      await vi.advanceTimersByTimeAsync(46_000);
 
       await expect(result).resolves.toMatchObject({
         failed: [],
@@ -1081,7 +1151,14 @@ describe("GalleryImageService", () => {
     fakes.processor.process = vi.fn(async (input) => {
       fakes.events.push(`process:start:${input.assetId}`);
       resolveProcessorStarted();
-      await processorReleased;
+      await new Promise<void>((resolve, reject) => {
+        input.signal?.addEventListener(
+          "abort",
+          () => reject(input.signal?.reason ?? abortError),
+          { once: true }
+        );
+        processorReleased.then(resolve);
+      });
 
       return {
         assetId: input.assetId,
@@ -1149,7 +1226,6 @@ describe("GalleryImageService", () => {
 
     await processorStarted;
     abortController.abort(abortError);
-    releaseProcessor();
     await expect(batchResult).rejects.toMatchObject({
       code: "VALIDATION_ERROR"
     });
@@ -1197,7 +1273,7 @@ describe("GalleryImageService", () => {
         siteId
       }).catch((error: unknown) => error);
 
-      await vi.advanceTimersByTimeAsync(180_000);
+      await vi.advanceTimersByTimeAsync(220_000);
 
       await expect(batchError).resolves.toMatchObject({
         code: "IMAGE_PROCESSING_TIMEOUT"
