@@ -1,4 +1,6 @@
 export const CATALOG_PUBLIC_ASSET_BASE = "https://prudexxx.github.io/web00-pro/";
+export const CATALOG_PUBLIC_ASSET_ORIGIN =
+  readCatalogPublicAssetOrigin(CATALOG_PUBLIC_ASSET_BASE);
 
 const maxCatalogAssetUrlLength = 2048;
 const legacyWeb00Prefix = "/web00-pro/";
@@ -135,7 +137,7 @@ function isSafeLegacyAssetPath(path: string): boolean {
 }
 
 function isFinalCatalogAssetUrl(url: URL): boolean {
-  if (url.protocol !== "https:" || url.origin !== "https://prudexxx.github.io") {
+  if (url.protocol !== "https:" || url.origin !== CATALOG_PUBLIC_ASSET_ORIGIN) {
     return false;
   }
   if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
@@ -184,4 +186,20 @@ function decodeUrlComponentSafely(text: string): string | null {
   } catch {
     return null;
   }
+}
+
+function readCatalogPublicAssetOrigin(base: string): string {
+  const parsed = new URL(base);
+
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.search !== "" ||
+    parsed.hash !== ""
+  ) {
+    throw new Error("Invalid catalog public asset base.");
+  }
+
+  return parsed.origin;
 }

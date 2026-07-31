@@ -16,6 +16,7 @@ import { parseStorageEnv, toStorageConfig } from "./config/storage-env.js";
 import { createPrismaClient } from "./db/prisma.js";
 import type { PrismaClient } from "./generated/prisma/client.js";
 import { createLogger, type AppLogger } from "./lib/logger.js";
+import { CATALOG_PUBLIC_ASSET_ORIGIN } from "./lib/catalog-asset-url.js";
 import { createAccessTokenService } from "./modules/auth/access-token.service.js";
 import { createAuthAuditService } from "./modules/auth/auth-audit.js";
 import { createAuthCookieService } from "./modules/auth/auth-cookie.js";
@@ -189,6 +190,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       : { ...adminRouterOptions, now: options.now }
   );
   const adminUiRoutes = createAdminUiRouter({
+    catalogPublicOrigin: CATALOG_PUBLIC_ASSET_ORIGIN,
     nodeEnv: options.env.NODE_ENV,
     storagePublicOrigin: new URL(options.storageConfig.publicBaseUrl).origin
   });
