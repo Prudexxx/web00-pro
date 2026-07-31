@@ -116,6 +116,51 @@ describe("admin API client", () => {
     expect(authStore.getAccessToken()).toBe("memory-token-b");
   });
 
+  it("preserves X-Request-Id when expired auth refreshes and replays a JSON mutation", async () => {
+    const authStore = createAuthStore();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(authExpiredResponse("req_expired_create"))
+      .mockResolvedValueOnce(jsonResponse(200, {
+        data: {
+          accessToken: "memory-token-create-new",
+          user: safeUser("admin")
+        }
+      }))
+      .mockResolvedValueOnce(jsonResponse(201, {
+        data: {
+          id: "site-created"
+        }
+      }));
+    const api = createApiClient({ authStore, fetchImpl });
+
+    authStore.setAuthenticated({
+      accessToken: "memory-token-create-old",
+      user: safeUser("admin")
+    });
+
+    await expect(api.requestJson("/api/admin/sites", {
+      body: { title: "Create draft" },
+      headers: {
+        "X-Request-Id": "req_create_stable"
+      },
+      method: "POST"
+    })).resolves.toEqual({
+      data: {
+        id: "site-created"
+      }
+    });
+
+    const createCalls = fetchImpl.mock.calls.filter(([url]) => url === "/api/admin/sites");
+
+    expect(createCalls).toHaveLength(2);
+    expect(readHeader(createCalls[0][1], "X-Request-Id")).toBe("req_create_stable");
+    expect(readHeader(createCalls[1][1], "X-Request-Id")).toBe("req_create_stable");
+    expect(readHeader(createCalls[0][1], "Authorization")).toBe("Bearer memory-token-create-old");
+    expect(readHeader(createCalls[1][1], "Authorization")).toBe("Bearer memory-token-create-new");
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/auth/refresh")).toHaveLength(1);
+  });
+
   it("limits JSON replay to one retry and does not refresh FORBIDDEN responses", async () => {
     const authStore = createAuthStore();
     const fetchImpl = vi

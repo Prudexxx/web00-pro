@@ -40,6 +40,24 @@ describe("admin site create durable idempotency", () => {
     expect(JSON.stringify(state.audits[0]?.afterJson)).not.toContain("token-secret");
   });
 
+  it("keeps the advisory lock inside the create transaction before replay, category, site, and audit work", async () => {
+    const { order, repository } = createStatefulRepository({ recordOrder: true });
+
+    await expect(repository.createDraft(validInput(), context)).resolves.toMatchObject({
+      slug: "site-create-idempotency"
+    });
+
+    expect(order).toEqual([
+      "transaction:start",
+      "lock",
+      "replay",
+      "category",
+      "site:create",
+      "audit:create",
+      "transaction:end"
+    ]);
+  });
+
   it("rejects the same requestId with a different normalized payload", async () => {
     const { calls, repository } = createStatefulRepository();
 
@@ -158,7 +176,16 @@ describe("admin site create durable idempotency", () => {
   });
 });
 
-function createStatefulRepository(options: { failFirstSiteCreate?: boolean } = {}) {
+function createStatefulRepository(options: {
+  failFirstSiteCreate?: boolean;
+  recordOrder?: boolean;
+} = {}) {
+  const order: string[] = [];
+  const record = (event: string): void => {
+    if (options.recordOrder === true) {
+      order.push(event);
+    }
+  };
   const state = {
     audits: [] as Array<Record<string, unknown>>,
     nextSiteCreateFails: options.failFirstSiteCreate === true,
@@ -173,13 +200,18 @@ function createStatefulRepository(options: { failFirstSiteCreate?: boolean } = {
     siteFindUnique: vi.fn()
   };
   const tx = {
-    $queryRaw: calls.queryRaw.mockImplementation(async () => [{ pg_advisory_xact_lock: "" }]),
+    $queryRaw: calls.queryRaw.mockImplementation(async () => {
+      record("lock");
+      return [{ acquired: 1 }];
+    }),
     auditLog: {
       create: calls.auditCreate.mockImplementation(async ({ data }) => {
+        record("audit:create");
         state.audits.push({ ...data });
         return data;
       }),
       findFirst: calls.auditFindFirst.mockImplementation(async ({ where }) => (
+        record("replay"),
         state.audits.find((audit) => (
           audit.actorUserId === where.actorUserId &&
           audit.requestId === where.requestId &&
@@ -189,10 +221,14 @@ function createStatefulRepository(options: { failFirstSiteCreate?: boolean } = {
       ))
     },
     category: {
-      findUnique: calls.categoryFindUnique.mockResolvedValue({ active: true })
+      findUnique: calls.categoryFindUnique.mockImplementation(async () => {
+        record("category");
+        return { active: true };
+      })
     },
     site: {
       create: calls.siteCreate.mockImplementation(async ({ data }) => {
+        record("site:create");
         if (state.nextSiteCreateFails) {
           state.nextSiteCreateFails = false;
           throw new Error("rolled back insert");
@@ -217,11 +253,17 @@ function createStatefulRepository(options: { failFirstSiteCreate?: boolean } = {
     }
   };
   const prisma = {
-    $transaction: vi.fn(async (operation: (transaction: typeof tx) => Promise<unknown>) => operation(tx))
+    $transaction: vi.fn(async (operation: (transaction: typeof tx) => Promise<unknown>) => {
+      record("transaction:start");
+      const result = await operation(tx);
+      record("transaction:end");
+      return result;
+    })
   };
 
   return {
     calls,
+    order,
     repository: createPrismaAdminSiteRepository({ prisma: prisma as never }),
     state
   };
@@ -255,7 +297,7 @@ function createLockedRepository() {
   const acquireLock = async (): Promise<unknown[]> => {
     if (!lockHeld) {
       lockHeld = true;
-      return [{ pg_advisory_xact_lock: "" }];
+      return [{ acquired: 1 }];
     }
 
     gates.secondLockEntered.resolve();
@@ -264,7 +306,7 @@ function createLockedRepository() {
     });
     lockHeld = true;
 
-    return [{ pg_advisory_xact_lock: "" }];
+    return [{ acquired: 1 }];
   };
   const tx = {
     $queryRaw: calls.queryRaw.mockImplementation(acquireLock),

@@ -243,6 +243,30 @@ export function createSiteEditorScreen(options) {
     );
   }
 
+  function renderCurrentFormErrors(form, errors, error = null) {
+    for (const target of form.querySelectorAll("[data-field-error]")) {
+      const name = target.getAttribute("data-field-error");
+
+      if (name === "_form") {
+        continue;
+      }
+
+      target.textContent = Array.isArray(errors?.[name]) ? errors[name].join(" ") : "";
+    }
+
+    renderFormLevelError(form, formLevelMessage(errors), readRequestId(error));
+
+    if (hasAdvancedErrors(errors)) {
+      form.querySelector('[data-section="advanced-site-settings"]')?.setAttribute("open", "");
+    }
+  }
+
+  function formLevelMessage(errors) {
+    const messages = Array.isArray(errors?._form) ? errors._form : [];
+
+    return messages.join(" ");
+  }
+
   function createForm(errors) {
     const form = createElement("form", {
       documentRef,
@@ -292,7 +316,7 @@ export function createSiteEditorScreen(options) {
         validateImageSelection(imageSelection);
         if (!networkOnline) {
           persistDraft(form);
-          renderForm({
+          renderCurrentFormErrors(form, {
             _form: ["Соединение нестабильно. Форма сохранена локально."]
           });
           statusRegion.textContent = "Соединение нестабильно. Форма сохранена локально.";
@@ -330,14 +354,14 @@ export function createSiteEditorScreen(options) {
 
         setSaveState(form, saveStateForError(error));
         if (error?.code === "INVALID_RESPONSE") {
-          renderFormLevelError(form, safeMessage(error));
+          renderFormLevelError(form, safeMessage(error), readRequestId(error));
           renderErrorStatus(error);
           return;
         }
 
-        renderForm(nextErrors);
+        renderCurrentFormErrors(form, nextErrors, error);
         renderErrorStatus(error);
-        focusFirstInvalid(formHost.querySelector("form"), mapped);
+        focusFirstInvalid(form, mapped);
       } finally {
         busy = false;
         const nextButton = formHost.querySelector('[data-action="save-site"]');
@@ -1265,11 +1289,23 @@ export function createSiteEditorScreen(options) {
     });
   }
 
-  function renderFormLevelError(form, message) {
+  function renderFormLevelError(form, message, requestId = null) {
     const target = form?.querySelector?.('[data-field-error="_form"]');
 
     if (target !== null && target !== undefined) {
-      target.textContent = message;
+      const children = [];
+
+      if (typeof message === "string" && message.length > 0) {
+        children.push(createElement("span", {
+          documentRef,
+          text: message
+        }));
+      }
+      if (typeof requestId === "string" && requestId.length > 0) {
+        children.push(createRequestIdControl(requestId, { documentRef }));
+      }
+
+      replaceContent(target, ...children);
     }
   }
 
@@ -1281,8 +1317,10 @@ export function createSiteEditorScreen(options) {
       })
     ];
 
-    if (typeof error?.requestId === "string") {
-      children.push(createRequestIdControl(error.requestId, { documentRef }));
+    const requestId = readRequestId(error);
+
+    if (requestId !== null) {
+      children.push(createRequestIdControl(requestId, { documentRef }));
     }
 
     replaceContent(statusRegion, ...children);
@@ -1646,9 +1684,9 @@ export function createSiteEditorScreen(options) {
     }
 
     setSaveState(form, "failedNetwork");
-    renderForm({
+    renderCurrentFormErrors(form, {
       _form: ["Сервер не ответил. Запись не найдена. Можно повторить."]
-    });
+    }, error);
     statusRegion.textContent = "Сервер не ответил. Запись не найдена. Можно повторить.";
     onStatus("Сервер не ответил. Запись не найдена. Можно повторить.");
     return true;
@@ -1895,10 +1933,10 @@ function safeMessage(error) {
     return "Эта операция уже использована с другими данными. Начните новую карточку или обновите форму.";
   }
   if (error?.code === "IDEMPOTENCY_REPLAY_UNAVAILABLE") {
-    return "Не удалось восстановить результат предыдущего сохранения. Передайте requestId разработчику.";
+    return "Не удалось восстановить результат предыдущего сохранения.";
   }
   if (error?.code === "INTERNAL_ERROR" || /prisma|sql|database|stack/i.test(String(error?.message ?? ""))) {
-    return "Не удалось сохранить. Передайте requestId разработчику.";
+    return "Не удалось сохранить карточку.";
   }
   if (typeof error?.message === "string" && error.message.length > 0) {
     return error.message;

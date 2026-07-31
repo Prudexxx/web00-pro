@@ -116,7 +116,7 @@ export function createPrismaAdminSiteRepository(
 
   return {
     async createDraft(input, context) {
-      let stage: SiteCreateDraftStage = "CATEGORY_LOOKUP_STARTED";
+      let stage: SiteCreateDraftStage = "IDEMPOTENCY_LOCK_STARTED";
       let transactionCallbackCompleted = false;
       const startedAt = Date.now();
       const setStage = (nextStage: SiteCreateDraftStage): void => {
@@ -126,13 +126,19 @@ export function createPrismaAdminSiteRepository(
       try {
         const requestFingerprint = createSiteCreateRequestFingerprint(input);
         const site = await prisma.$transaction(async (tx) => {
+          setStage("IDEMPOTENCY_LOCK_STARTED");
           await acquireCreateDraftIdempotencyLock(tx, context);
+          setStage("IDEMPOTENCY_LOCK_COMPLETED");
+          setStage("REPLAY_LOOKUP_STARTED");
           const replay = await resolveCreateDraftReplay(tx, {
             context,
             requestFingerprint
           });
+          setStage("REPLAY_LOOKUP_COMPLETED");
 
           if (replay !== null) {
+            setStage("TRANSACTION_COMMIT_PENDING");
+            transactionCallbackCompleted = true;
             return replay;
           }
 
@@ -548,8 +554,35 @@ async function acquireCreateDraftIdempotencyLock(
   context: AdminMutationContext
 ): Promise<void> {
   const lockIdentity = `${context.actor.id}:${context.requestId}`;
+  const rows = await tx.$queryRaw<Array<{ acquired: bigint | number }>>`
+    WITH lock AS (
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockIdentity}, 0))
+    )
+    SELECT 1::int AS acquired
+    FROM lock
+  `;
 
-  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockIdentity}, 0))`;
+  if (!isExpectedCreateDraftLockRows(rows)) {
+    throw malformedCreateDraftIdempotencyLockResult();
+  }
+}
+
+function isExpectedCreateDraftLockRows(rows: unknown): boolean {
+  if (!Array.isArray(rows) || rows.length !== 1) {
+    return false;
+  }
+
+  const acquired = (rows[0] as { acquired?: unknown } | undefined)?.acquired;
+
+  return acquired === 1 || acquired === 1n;
+}
+
+function malformedCreateDraftIdempotencyLockResult(): AppError {
+  return new AppError({
+    code: "INTERNAL_ERROR",
+    message: "Internal server error.",
+    statusCode: 500
+  });
 }
 
 async function resolveCreateDraftReplay(

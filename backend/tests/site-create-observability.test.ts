@@ -26,6 +26,10 @@ const context: AdminMutationContext = {
 describe("site create draft observability", () => {
   it("exposes the approved site create draft stage map", () => {
     expect(SITE_CREATE_DRAFT_STAGES).toEqual([
+      "IDEMPOTENCY_LOCK_STARTED",
+      "IDEMPOTENCY_LOCK_COMPLETED",
+      "REPLAY_LOOKUP_STARTED",
+      "REPLAY_LOOKUP_COMPLETED",
       "CATEGORY_LOOKUP_STARTED",
       "CATEGORY_LOOKUP_COMPLETED",
       "SITE_INSERT_STARTED",
@@ -35,6 +39,60 @@ describe("site create draft observability", () => {
       "TRANSACTION_COMMIT_PENDING",
       "REQUEST_COMPLETED"
     ]);
+  });
+
+  it("reports IDEMPOTENCY_LOCK_STARTED when the raw advisory lock fails before category lookup", async () => {
+    const lockError = prismaLikeError("P2010", {
+      code: "XX000",
+      message:
+        "Failed to deserialize column of type void while running SELECT pg_advisory_xact_lock with secret-title"
+    });
+    const { calls, events, repository } = createRepository({ queryRawError: lockError });
+
+    await expect(repository.createDraft(validInput(), context)).rejects.toBe(lockError);
+
+    expect(calls.queryRaw).toHaveBeenCalledTimes(1);
+    expect(calls.auditFindFirst).not.toHaveBeenCalled();
+    expect(calls.categoryFindUnique).not.toHaveBeenCalled();
+    expect(calls.siteCreate).not.toHaveBeenCalled();
+    expect(calls.auditCreate).not.toHaveBeenCalled();
+
+    const event = singleFailureEvent(events);
+
+    expect(event).toMatchObject({
+      databaseErrorCode: "XX000",
+      databaseErrorMessageCategory: "RAW_RESULT_DECODING_FAILED",
+      event: "site.create_draft.failed",
+      prismaCode: "P2010",
+      stage: "IDEMPOTENCY_LOCK_STARTED",
+      transactionCallbackCompleted: false
+    });
+    expect(JSON.stringify(event)).not.toContain("pg_advisory_xact_lock");
+    expect(JSON.stringify(event)).not.toContain("secret-title");
+    expect(JSON.stringify(event)).not.toContain("Failed to deserialize");
+  });
+
+  it("rejects malformed advisory lock scalar results before replay, category, site, or audit writes", async () => {
+    const { calls, events, repository } = createRepository({
+      queryRawResult: [{ pg_advisory_xact_lock: "" }]
+    });
+
+    await expect(repository.createDraft(validInput(), context)).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+      message: "Internal server error.",
+      statusCode: 500
+    });
+
+    expect(calls.queryRaw).toHaveBeenCalledTimes(1);
+    expect(calls.auditFindFirst).not.toHaveBeenCalled();
+    expect(calls.categoryFindUnique).not.toHaveBeenCalled();
+    expect(calls.siteCreate).not.toHaveBeenCalled();
+    expect(calls.auditCreate).not.toHaveBeenCalled();
+    expect(singleFailureEvent(events)).toMatchObject({
+      prismaCode: null,
+      stage: "IDEMPOTENCY_LOCK_STARTED",
+      transactionCallbackCompleted: false
+    });
   });
 
   it("reports CATEGORY_LOOKUP_STARTED when category lookup fails", async () => {
@@ -205,23 +263,39 @@ function createRepository(overrides: {
   categoryError?: unknown;
   commitError?: unknown;
   logger?: AppLogger;
+  queryRawError?: unknown;
+  queryRawResult?: unknown[];
   siteCreateError?: unknown;
 } = {}) {
   const events: SiteCreateDraftFailedLogEntry[] = [];
+  const calls = {
+    auditCreate: vi.fn(),
+    auditFindFirst: vi.fn(),
+    categoryFindUnique: vi.fn(),
+    queryRaw: vi.fn(),
+    siteCreate: vi.fn(),
+    siteFindUnique: vi.fn()
+  };
   const tx = {
-    $queryRaw: vi.fn(async () => [{ pg_advisory_xact_lock: "" }]),
+    $queryRaw: calls.queryRaw.mockImplementation(async () => {
+      if (overrides.queryRawError !== undefined) {
+        throw overrides.queryRawError;
+      }
+
+      return overrides.queryRawResult ?? [{ acquired: 1 }];
+    }),
     auditLog: {
-      create: vi.fn(async () => {
+      create: calls.auditCreate.mockImplementation(async () => {
         if (overrides.auditCreateError !== undefined) {
           throw overrides.auditCreateError;
         }
 
         return {};
       }),
-      findFirst: vi.fn(async () => null)
+      findFirst: calls.auditFindFirst.mockImplementation(async () => null)
     },
     category: {
-      findUnique: vi.fn(async () => {
+      findUnique: calls.categoryFindUnique.mockImplementation(async () => {
         if (overrides.categoryError !== undefined) {
           throw overrides.categoryError;
         }
@@ -230,14 +304,14 @@ function createRepository(overrides: {
       })
     },
     site: {
-      create: vi.fn(async () => {
+      create: calls.siteCreate.mockImplementation(async () => {
         if (overrides.siteCreateError !== undefined) {
           throw overrides.siteCreateError;
         }
 
         return siteRecord();
       }),
-      findUnique: vi.fn(async () => null)
+      findUnique: calls.siteFindUnique.mockImplementation(async () => null)
     }
   };
   const prisma = {
@@ -266,7 +340,7 @@ function createRepository(overrides: {
     prisma: prisma as never
   });
 
-  return { events, repository };
+  return { calls, events, repository };
 }
 
 function singleFailureEvent(events: SiteCreateDraftFailedLogEntry[]): SiteCreateDraftFailedLogEntry {
@@ -275,9 +349,13 @@ function singleFailureEvent(events: SiteCreateDraftFailedLogEntry[]): SiteCreate
   return events[0] as SiteCreateDraftFailedLogEntry;
 }
 
-function prismaLikeError(code: string): Error & { code: string } {
+function prismaLikeError(
+  code: string,
+  meta?: Record<string, unknown>
+): Error & { code: string; meta?: Record<string, unknown> } {
   return Object.assign(new Error(`raw Prisma message for ${code}`), {
     code,
+    ...(meta === undefined ? {} : { meta }),
     name: "PrismaClientKnownRequestError"
   });
 }
