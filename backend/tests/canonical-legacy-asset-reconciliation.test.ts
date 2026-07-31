@@ -49,6 +49,49 @@ describe("canonical legacy asset reconciliation", () => {
     expect(repo.auditRows).toHaveLength(0);
   });
 
+  it.each([
+    ["null preview", "mebel", null, "missing", true, null],
+    ["exact canonical absolute preview", "mebel", canonicalPreviewFor("mebel"), "already-canonical", false, null],
+    ["bare legacy preview path", "mebel", "assets/img/previews/mebel-home.png", "legacy-canonical", true, null],
+    ["dot-prefixed legacy preview path", "massage", "./assets/img/previews/massage-home.png", "legacy-canonical", true, null],
+    ["web00-prefixed legacy preview path", "drova", "/web00-pro/assets/img/previews/drova-home.png", "legacy-canonical", true, null],
+    ["legacy preview resolving to another canonical asset", "mebel", "assets/img/previews/drova-home.png", "blocked", false, "PREVIEW_URL_CONFLICT:mebel"],
+    ["unrelated managed absolute preview", "mebel", "https://storage.example.test/unexpected.webp", "blocked", false, "PREVIEW_URL_CONFLICT:mebel"],
+    ["javascript preview", "mebel", "javascript:alert(1)", "blocked", false, "PREVIEW_URL_CONFLICT:mebel"],
+    ["data preview", "mebel", "data:image/png;base64,AAAA", "blocked", false, "PREVIEW_URL_CONFLICT:mebel"],
+    ["traversal preview", "mebel", "assets/img/previews/../drova-home.png", "blocked", false, "PREVIEW_URL_CONFLICT:mebel"]
+  ] as const)("%s reports precise preview planning state", async (
+    _label,
+    slug,
+    previewImageUrl,
+    expectedState,
+    expectedPlannedPreviewUpdate,
+    expectedBlocker
+  ) => {
+    const repo = createFakeRepository({
+      sites: replaceSite(slug, { previewImageUrl })
+    });
+
+    const report = await reconcileCanonicalLegacyAssets({
+      catalog,
+      context: operationContext,
+      repository: repo
+    });
+
+    const target = targetFor(report, slug);
+    expect(target.previewState).toBe(expectedState);
+    expect(target.plannedPreviewUpdate).toBe(expectedPlannedPreviewUpdate);
+    if (expectedBlocker === null) {
+      expect(target.blockers).not.toContain(`PREVIEW_URL_CONFLICT:${slug}`);
+    } else {
+      expect(report.status).toBe("blocked");
+      expect(target.blockers).toContain(expectedBlocker);
+      expect(report.blockers).toContain(expectedBlocker);
+    }
+    expect(repo.writeAttempts).toBe(0);
+    expect(repo.auditRows).toHaveLength(0);
+  });
+
   it("apply without confirm performs zero writes", async () => {
     const repo = createFakeRepository();
 
@@ -152,6 +195,90 @@ describe("canonical legacy asset reconciliation", () => {
         sourceSite(slug).galleryImages.map((image) => `https://prudexxx.github.io/web00-pro/${image.url}`)
       );
     }
+  });
+
+  it("production-like legacy previews dry-run as ready normalization work", async () => {
+    const repo = createFakeRepository({
+      sites: createProductionLikeLegacyPreviewSites()
+    });
+
+    const report = await reconcileCanonicalLegacyAssets({
+      catalog,
+      context: operationContext,
+      repository: repo
+    });
+
+    expect(report.status).toBe("ready");
+    expect(report.blockers).toEqual([]);
+    expect(report.totals).toMatchObject({
+      plannedGalleryUrlUpdates: 12,
+      plannedPreviewUpdates: 3,
+      targetSites: 3
+    });
+    for (const slug of CANONICAL_LEGACY_ASSET_TARGET_SLUGS) {
+      expect(targetFor(report, slug)).toMatchObject({
+        blockers: [],
+        plannedPreviewUpdate: true,
+        previewState: "legacy-canonical"
+      });
+    }
+    expect(repo.writeAttempts).toBe(0);
+    expect(repo.auditRows).toHaveLength(0);
+  });
+
+  it("apply normalizes production-like legacy previews and twelve gallery URLs", async () => {
+    const repo = createFakeRepository({
+      sites: createProductionLikeLegacyPreviewSites()
+    });
+
+    const report = await reconcileCanonicalLegacyAssets({
+      apply: true,
+      catalog,
+      confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
+      context: operationContext,
+      repository: repo
+    });
+
+    expect(report.status).toBe("applied");
+    expect(report.totals).toMatchObject({
+      appliedSiteUpdates: 3,
+      plannedGalleryUrlUpdates: 12,
+      plannedPreviewUpdates: 3
+    });
+    for (const slug of CANONICAL_LEGACY_ASSET_TARGET_SLUGS) {
+      const site = repo.site(slug);
+      expect(site.previewImageUrl).toBe(canonicalPreviewFor(slug));
+      expect(site.galleryImages.map((image) => image.url)).toEqual(
+        sourceSite(slug).galleryImages.map((image) => `https://prudexxx.github.io/web00-pro/${image.url}`)
+      );
+    }
+  });
+
+  it("second apply after legacy preview normalization is already-reconciled", async () => {
+    const repo = createFakeRepository({
+      sites: createProductionLikeLegacyPreviewSites()
+    });
+
+    await reconcileCanonicalLegacyAssets({
+      apply: true,
+      catalog,
+      confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
+      context: operationContext,
+      repository: repo
+    });
+    const auditCount = repo.auditRows.length;
+    const second = await reconcileCanonicalLegacyAssets({
+      apply: true,
+      catalog,
+      confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
+      context: operationContext,
+      repository: repo
+    });
+
+    expect(second.status).toBe("already-reconciled");
+    expect(second.totals.plannedPreviewUpdates).toBe(0);
+    expect(second.totals.plannedGalleryUrlUpdates).toBe(0);
+    expect(repo.auditRows).toHaveLength(auditCount);
   });
 
   it("passes all three expected sites to apply in deterministic lock order before writing", async () => {
@@ -516,6 +643,29 @@ function siteFixture(
     title: source.title,
     ...rest
   };
+}
+
+function createProductionLikeLegacyPreviewSites(): CanonicalAssetReconciliationSite[] {
+  return createCanonicalSites().map((site) => ({
+    ...site,
+    previewImageUrl: sourceSite(site.slug).previewImageUrl
+  }));
+}
+
+function canonicalPreviewFor(slug: CanonicalLegacyAssetTargetSlug): string {
+  return `https://prudexxx.github.io/web00-pro/${sourceSite(slug).previewImageUrl}`;
+}
+
+function targetFor(
+  report: Awaited<ReturnType<typeof reconcileCanonicalLegacyAssets>>,
+  slug: CanonicalLegacyAssetTargetSlug
+) {
+  const target = report.targets.find((item) => item.slug === slug);
+  if (target === undefined) {
+    throw new Error(`Missing report target ${slug}`);
+  }
+
+  return target;
 }
 
 function categoryIdFor(categorySlug: string): string {
