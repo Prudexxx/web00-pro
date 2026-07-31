@@ -32,6 +32,8 @@ export interface AuthSecurityLogEntry {
 }
 
 export interface SiteCreateDraftFailedLogEntry {
+  databaseErrorCode: string | null;
+  databaseErrorMessageCategory: string | null;
   elapsedMs: number;
   environment: AppEnv["NODE_ENV"] | string;
   errorClass: string;

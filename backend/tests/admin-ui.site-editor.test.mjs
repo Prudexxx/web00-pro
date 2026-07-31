@@ -870,7 +870,7 @@ describe("admin site editor screen", () => {
     expect(apiClient.requestMultipart).not.toHaveBeenCalled();
   });
 
-  it("creates once, uploads selected preview/gallery, and shows a completed one-click success", async () => {
+  it("creates once, uploads selected preview/five gallery files, and shows a completed one-click success", async () => {
     const documentRef = createFakeDocument();
     const requests = [];
     const apiClient = {
@@ -906,15 +906,17 @@ describe("admin site editor screen", () => {
           });
         }
         if (requestPath.endsWith("/images/gallery/batch")) {
+          const metadata = JSON.parse(options.body.get("metadata"));
+
           return Promise.resolve({
             data: {
               failed: [],
-              succeeded: [{
-                clientFileId: "00000000-0000-4000-8000-000000000402",
-                image: { assetId: "gallery-asset" },
-                index: 0,
+              succeeded: metadata.map((item, index) => ({
+                clientFileId: item.clientFileId,
+                image: { assetId: `gallery-asset-${index}` },
+                index,
                 replayed: false
-              }]
+              }))
             }
           });
         }
@@ -934,7 +936,11 @@ describe("admin site editor screen", () => {
       role: "editor",
       uuidFactory: createUuidSequence([
         "00000000-0000-4000-8000-000000000301",
-        "00000000-0000-4000-8000-000000000402"
+        "00000000-0000-4000-8000-000000000402",
+        "00000000-0000-4000-8000-000000000403",
+        "00000000-0000-4000-8000-000000000404",
+        "00000000-0000-4000-8000-000000000405",
+        "00000000-0000-4000-8000-000000000406"
       ])
     });
 
@@ -944,7 +950,13 @@ describe("admin site editor screen", () => {
     setValue(screen.element, "shortDescription", "Short");
     setFiles(screen.element, "previewImage", [imageFile("preview.jpg", "image/jpeg", 12)]);
     setValue(screen.element, "previewAlt", "Preview alt");
-    setFiles(screen.element, "galleryBatchImages", [imageFile("gallery.webp", "image/webp", 12)]);
+    setFiles(screen.element, "galleryBatchImages", [
+      imageFile("gallery-1.webp", "image/webp", 12),
+      imageFile("gallery-2.webp", "image/webp", 12),
+      imageFile("gallery-3.webp", "image/webp", 12),
+      imageFile("gallery-4.webp", "image/webp", 12),
+      imageFile("gallery-5.webp", "image/webp", 12)
+    ]);
     setValue(screen.element, "galleryBatchAlt", "Gallery alt");
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
     await waitFor(() => screen.element.textContent.includes("Карточка и изображения сохранены."));
@@ -959,6 +971,15 @@ describe("admin site editor screen", () => {
     expect(requests.find((request) => request.requestPath.endsWith("/images/preview")).options.body.get("clientFileId")).toBe(
       "00000000-0000-4000-8000-000000000301"
     );
+    expect(JSON.parse(
+      requests.find((request) => request.requestPath.endsWith("/images/gallery/batch")).options.body.get("metadata")
+    ).map((item) => item.clientFileId)).toEqual([
+      "00000000-0000-4000-8000-000000000402",
+      "00000000-0000-4000-8000-000000000403",
+      "00000000-0000-4000-8000-000000000404",
+      "00000000-0000-4000-8000-000000000405",
+      "00000000-0000-4000-8000-000000000406"
+    ]);
     expect(onSaved).toHaveBeenCalledTimes(1);
 
     screen.element.querySelector('[data-action="manage-images"]').dispatchEvent(fakeEvent("click"));
@@ -1179,6 +1200,160 @@ describe("admin site editor screen", () => {
     expect(screen.element.querySelector('[name="title"]').value).toBe("Malformed create");
     expect(screen.element.querySelector('[name="previewImage"]').files[0].name).toBe("preview.png");
     expect(apiClient.requestMultipart).not.toHaveBeenCalled();
+  });
+
+  it("preserves selected create files, requestId UX, and stable retry after an HTTP 500", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    let createAttempts = 0;
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          createAttempts += 1;
+          if (createAttempts === 1) {
+            return Promise.reject({
+              code: "INTERNAL_ERROR",
+              message:
+                "PrismaClientKnownRequestError P2010 SELECT pg_advisory_xact_lock secret-title",
+              requestId: "req_create_raw_lock",
+              status: 500
+            });
+          }
+
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000930",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.endsWith("/images/preview")) {
+          return Promise.resolve({
+            data: {
+              previewImage: {
+                assetId: "preview-after-retry",
+                url: "https://storage.example.test/preview-after-retry.webp"
+              }
+            }
+          });
+        }
+        if (requestPath.endsWith("/images/gallery/batch")) {
+          return Promise.resolve({
+            data: {
+              failed: [],
+              succeeded: JSON.parse(options.body.get("metadata")).map((item, index) => ({
+                clientFileId: item.clientFileId,
+                image: { assetId: `gallery-after-retry-${index}` },
+                index,
+                replayed: false
+              }))
+            }
+          });
+        }
+        throw new Error(`Unexpected multipart path ${requestPath}`);
+      })
+    };
+    const onSaved = vi.fn();
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      role: "editor",
+      uuidFactory: createUuidSequence([
+        "00000000-0000-4000-8000-000000000931",
+        "00000000-0000-4000-8000-000000000941",
+        "00000000-0000-4000-8000-000000000942",
+        "00000000-0000-4000-8000-000000000943",
+        "00000000-0000-4000-8000-000000000944",
+        "00000000-0000-4000-8000-000000000945"
+      ])
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Дом для Буси");
+    setValue(screen.element, "slug", "dom-dlya-busi");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "previewImage", [imageFile("preview-busi.png", "image/png", 12)]);
+    setValue(screen.element, "previewAlt", "Preview alt");
+    setFiles(screen.element, "galleryBatchImages", [
+      imageFile("gallery-1.webp", "image/webp", 12),
+      imageFile("gallery-2.webp", "image/webp", 12),
+      imageFile("gallery-3.webp", "image/webp", 12),
+      imageFile("gallery-4.webp", "image/webp", 12),
+      imageFile("gallery-5.webp", "image/webp", 12)
+    ]);
+    setValue(screen.element, "galleryBatchAlt", "Gallery alt");
+
+    const originalForm = screen.element.querySelector("form");
+    const originalPreviewInput = screen.element.querySelector('[name="previewImage"]');
+    const originalGalleryInput = screen.element.querySelector('[name="galleryBatchImages"]');
+
+    originalForm.dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("req_create_raw_lock"));
+
+    const createRequestsAfterFailure = requests.filter((request) => request.requestPath === "/api/admin/sites");
+
+    expect(createRequestsAfterFailure).toHaveLength(1);
+    expect(apiClient.requestMultipart).not.toHaveBeenCalled();
+    expect(screen.element.querySelector("form")).toBe(originalForm);
+    expect(screen.element.querySelector('[name="previewImage"]')).toBe(originalPreviewInput);
+    expect(screen.element.querySelector('[name="galleryBatchImages"]')).toBe(originalGalleryInput);
+    expect(originalPreviewInput.files[0].name).toBe("preview-busi.png");
+    expect(originalGalleryInput.files.map((file) => file.name)).toEqual([
+      "gallery-1.webp",
+      "gallery-2.webp",
+      "gallery-3.webp",
+      "gallery-4.webp",
+      "gallery-5.webp"
+    ]);
+    expect(screen.element.querySelector('[name="title"]').value).toBe("Дом для Буси");
+    expect(screen.element.querySelector('[data-action="save-site"]').disabled).toBe(false);
+    expect(screen.element.textContent).toContain("Не удалось сохранить карточку.");
+    expect(screen.element.textContent).toContain("req_create_raw_lock");
+    expect(screen.element.textContent).toContain("Скопировать requestId");
+    expect(screen.element.textContent).not.toContain("Передайте requestId разработчику");
+    expect(screen.element.textContent).not.toMatch(/Prisma|P2010|pg_advisory|SELECT|secret-title/i);
+
+    originalForm.dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Карточка и изображения сохранены."));
+
+    const createRequests = requests.filter((request) => request.requestPath === "/api/admin/sites");
+    const previewRequests = requests.filter((request) => request.requestPath.endsWith("/images/preview"));
+    const galleryRequests = requests.filter((request) => request.requestPath.endsWith("/images/gallery/batch"));
+
+    expect(createRequests).toHaveLength(2);
+    expect(createRequests[1].options.headers["X-Request-Id"]).toBe(
+      createRequests[0].options.headers["X-Request-Id"]
+    );
+    expect(previewRequests).toHaveLength(1);
+    expect(previewRequests[0].options.body.get("clientFileId")).toBe(
+      "00000000-0000-4000-8000-000000000931"
+    );
+    expect(galleryRequests).toHaveLength(1);
+    expect(JSON.parse(galleryRequests[0].options.body.get("metadata")).map((item) => item.clientFileId)).toEqual([
+      "00000000-0000-4000-8000-000000000941",
+      "00000000-0000-4000-8000-000000000942",
+      "00000000-0000-4000-8000-000000000943",
+      "00000000-0000-4000-8000-000000000944",
+      "00000000-0000-4000-8000-000000000945"
+    ]);
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
   it("does not accept a malformed update response as a saved edit", async () => {
