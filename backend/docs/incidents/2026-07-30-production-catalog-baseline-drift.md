@@ -1,6 +1,6 @@
 # Production catalog baseline drift — 2026-07-30
 
-Status: recorded incident, no production repair performed.
+Status: owner baseline decision recorded; no Codex production repair or reconciliation apply performed.
 
 ## Context
 
@@ -9,6 +9,31 @@ Status: recorded incident, no production repair performed.
 - Deployed production commit under audit: `7f1abddc7e0bf5bc076bf495f79aadf1e0bcc522`
 - Production API observed only with bounded anonymous GET requests.
 - No production POST/PATCH/PUT/DELETE, SQL, seed, migration, deploy, category edit, or card repair was performed.
+
+## Owner baseline outcome recorded after audit
+
+Owner approved the canonical manifest from `backend/prisma/seed-data/web00-catalog.json`:
+
+- canonical sites: 15
+- canonical categories: 7
+
+Owner production audit and manual cleanup outcome:
+
+- `mebel` existed as soft-deleted, was restored by owner through `/admin`, and is now an active draft.
+- `massage` existed as soft-deleted, was restored by owner through `/admin`, and is now an active draft.
+- `drova` existed as soft-deleted, was restored by owner through `/admin`, and is now an active draft.
+- The restored `mebel`, `massage`, and `drova` cards remain unpublished.
+- Their source data was not lost: each restored card still has four gallery records, but preview is missing and legacy gallery URLs did not render in admin.
+- Test site `opo` / `ui` was owner soft-deleted and then permanently deleted.
+- Test category `product-123` / `Купи Автомобиль` was deleted after owner confirmed site count `0`.
+- Physical person attribution is not proven because the relevant actions used one admin account.
+- No owner publish action for `mebel`, `massage`, or `drova` was performed during this cleanup.
+
+Legacy image defect discovered:
+
+- Restored cards have missing previews.
+- Each restored card has four unresolved legacy gallery URLs.
+- The defect is URL-origin resolution: stored legacy relative paths such as `assets/img/...` must resolve against `https://prudexxx.github.io/web00-pro/`, not the Render admin origin.
 
 ## Observed public production sites
 
@@ -100,6 +125,14 @@ Expected canonical categories: 7
 
 No changed title/category/status field is asserted here beyond the public identity/count drift above.
 
+## Updated drift status after owner action
+
+- Canonical identity decision is complete: 15 sites / 7 categories.
+- Production canonical identity cleanup was completed by owner for the test artifacts listed above.
+- `mebel`, `massage`, and `drova` are restored but intentionally remain draft/unpublished.
+- Remaining known blocker is canonical legacy asset reconciliation: preview restoration and gallery URL normalization for only `mebel`, `massage`, and `drova`.
+- Codex did not run reconciliation apply and did not mutate production.
+
 ## Source and migration notes
 
 - Canonical source data contains `mebel`, `massage`, and `drova` as published/active records.
@@ -113,18 +146,21 @@ No changed title/category/status field is asserted here beyond the public identi
 - The public production API did not expose direct details for `mebel`, `massage`, or `drova`.
 - The public production categories endpoint exposed an additional `product-123` category.
 - The source canonical snapshot in this repository contains 15 sites and 7 categories.
+- Owner approved the source canonical snapshot as the intended manifest.
+- Owner restored `mebel`, `massage`, and `drova` as active drafts.
+- Owner removed the confirmed test site/category artifacts `opo` / `ui` and `product-123`.
+- The unresolved gallery display defect is consistent with legacy relative asset URLs resolving against the wrong origin.
 
 ## What is not proven
 
-- No data loss is proven.
-- No deletion actor, timestamp, or root cause is proven.
-- No database row state is proven for missing cards.
-- No authenticated admin audit evidence is captured here.
-- It is not proven whether `product-123` is a test artifact, a real business category, an intended canonical record, or an erroneous record.
+- Physical person attribution is not proven because the actions used one admin account.
+- Codex did not independently inspect production secrets, database URLs, private cookies, or tokens.
+- Codex did not run production reconciliation apply.
+- Codex did not prove real PostgreSQL integration behavior for the reconciliation path because no isolated test DB was provided.
 
 ## Why direct repair is prohibited
 
-Repairing this drift would require an owner decision about the intended canonical truth. Directly recreating `mebel`, `massage`, or `drova`, or editing/removing `product-123`, could overwrite legitimate production intent. Production mutation is therefore blocked until the owner approves an exact manifest.
+Repairing this drift required an owner decision about the intended canonical truth. That decision is now recorded as 15 sites / 7 categories. Remaining automated repair is still prohibited for Codex in this task: production reconciliation apply must be run only by the owner through the guarded reconciliation runbook.
 
 ## Owner audit checklist
 
@@ -144,7 +180,4 @@ Use `/admin` manually. Do not copy or expose emails, tokens, cookies, passwords,
    - entityId
    - requestId
 5. Do not change cards or categories during this audit.
-6. Decide the approved manifest before any live canary:
-   - Option 1: 15 cards / 7 categories
-   - Option 2: 12 cards / 8 categories
-   - Option 3: another exact identity manifest
+6. Use `backend/docs/WEB00_CANONICAL_ASSET_RECONCILIATION.md` for the next owner-controlled dry-run/apply review.

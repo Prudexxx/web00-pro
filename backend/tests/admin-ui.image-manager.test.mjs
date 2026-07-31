@@ -34,6 +34,115 @@ describe("admin image manager screen", () => {
     expect(canManageImages(siteFixture({ status: "archived" }), "admin")).toBe(false);
   });
 
+  it("renders canonical legacy preview and gallery URLs through the public frontend base without changing mutation payloads", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
+          return Promise.resolve({
+            data: siteFixture({
+              galleryImages: [
+                galleryFixture({
+                  alt: "\"><script>alert(1)</script>",
+                  assetId: "00000000-0000-4000-8000-000000000201",
+                  sortOrder: 0,
+                  url: "assets/img/solution-gallery/mebel-01.png"
+                })
+              ],
+              previewImageUrl: "assets/img/previews/mebel-home.png"
+            })
+          });
+        }
+        if (requestPath.endsWith("/images/gallery") && options.method === "PATCH") {
+          return Promise.resolve({ data: { images: [galleryFixture({ sortOrder: 4 })] } });
+        }
+        if (requestPath.includes("/images/gallery/") && options.method === "DELETE") {
+          return Promise.resolve({ data: { images: [] } });
+        }
+        throw new Error(`Unexpected JSON path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const screen = createImageManagerScreen({
+      apiClient,
+      documentRef,
+      onBack: vi.fn(),
+      onSiteUpdated: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+
+    const images = screen.element.querySelectorAll("img");
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "https://prudexxx.github.io/web00-pro/assets/img/previews/mebel-home.png",
+      "https://prudexxx.github.io/web00-pro/assets/img/solution-gallery/mebel-01.png"
+    ]);
+    expect(images[1].getAttribute("alt")).toBe("\"><script>alert(1)</script>");
+    expect(screen.element.textContent).toContain("Изображение из публичного каталога");
+    expect(screen.element.textContent).not.toContain("URL изображения недоступен.");
+
+    setValue(screen.element, "gallerySortOrder", "4");
+    setValue(screen.element, "galleryItemAlt", "Updated legacy alt");
+    screen.element.querySelector('[data-action="reorder-gallery"]').dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => requests.some((request) => request.options.method === "PATCH"));
+
+    const reorder = requests.find((request) => request.options.method === "PATCH");
+    expect(reorder.options.body).toEqual({
+      items: [
+        {
+          alt: "Updated legacy alt",
+          assetId: "00000000-0000-4000-8000-000000000201",
+          sortOrder: 4
+        }
+      ]
+    });
+    expect(JSON.stringify(reorder.options.body)).not.toMatch(/url|storagePath|prudexxx|web00-pro/);
+
+    screen.element.querySelector('[data-action="delete-gallery-image"]').dispatchEvent(fakeEvent("click"));
+    screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => requests.some((request) => request.options.method === "DELETE"));
+
+    expect(requests.find((request) => request.options.method === "DELETE").requestPath).toBe(
+      "/api/admin/sites/00000000-0000-4000-8000-000000000101/images/gallery/00000000-0000-4000-8000-000000000201"
+    );
+  });
+
+  it("keeps managed absolute URLs unchanged and keeps unsafe gallery URLs on the placeholder path", async () => {
+    const documentRef = createFakeDocument();
+    const screen = createImageManagerScreen({
+      apiClient: createImageApi(siteFixture({
+        galleryImages: [
+          galleryFixture({ url: "https://storage.example.test/gallery.webp" }),
+          galleryFixture({
+            assetId: "00000000-0000-4000-8000-000000000202",
+            url: "javascript:alert(1)"
+          })
+        ],
+        previewImageUrl: "https://storage.example.test/preview.webp"
+      })),
+      documentRef,
+      onBack: vi.fn(),
+      onSiteUpdated: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+
+    const images = screen.element.querySelectorAll("img");
+    expect(images.map((image) => image.getAttribute("src"))).toEqual([
+      "https://storage.example.test/preview.webp",
+      "https://storage.example.test/gallery.webp"
+    ]);
+    expect(screen.element.textContent).toContain("URL изображения недоступен.");
+  });
+
   it("uploads preview with exact multipart fields, no manual Content-Type, no replay, and a new UUID per explicit retry", async () => {
     const documentRef = createFakeDocument();
     const requests = [];
