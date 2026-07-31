@@ -47,8 +47,36 @@ export interface SiteCreateDraftFailedLogEntry {
   transactionCallbackCompleted: boolean;
 }
 
+export interface GalleryImageFileLogEntry {
+  clientFileId: string;
+  durationMs?: number | undefined;
+  environment: AppEnv["NODE_ENV"] | string;
+  errorCategory?: string | undefined;
+  event: "site.gallery_image.file";
+  format?: "avif" | "jpeg" | "png" | "webp" | undefined;
+  height?: number | undefined;
+  level: "error" | "info";
+  orientation?: number | null | undefined;
+  pixels?: number | undefined;
+  requestId: string;
+  service: string;
+  stage:
+    | "FILE_COMPLETED"
+    | "METADATA_READ"
+    | "PROCESSING_COMPLETED"
+    | "PROCESSING_STARTED"
+    | "PROCESSING_TIMEOUT"
+    | "STORAGE_UPLOAD_COMPLETED"
+    | "STORAGE_UPLOAD_STARTED";
+  time: string;
+  timeoutMs?: number | undefined;
+  variantCount?: number | undefined;
+  width?: number | undefined;
+}
+
 export type AppLogEntry =
   | AuthSecurityLogEntry
+  | GalleryImageFileLogEntry
   | LifecycleLogEntry
   | RequestLogEntry
   | SiteCreateDraftFailedLogEntry;

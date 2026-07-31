@@ -16,6 +16,7 @@ import {
 import type {
   AssetUploadCoordinator,
   ImageProcessor,
+  ImageProcessingDiagnosticEvent,
   ManagedGalleryImage,
   ManagedImageUrlPolicy,
   ParsedImageFile,
@@ -362,7 +363,7 @@ async function attachGalleryBatchCandidates(
         replayed: false
       });
     } catch (error) {
-      failed.push(toGalleryBatchFailure(candidate.file, error));
+      failed.push(toGalleryBatchFailure(candidate.file, error, input.context.requestId));
     }
   }
 
@@ -377,6 +378,9 @@ async function prepareGalleryBatchCandidate(
   options: CreateSiteImageServiceOptions,
   input: SiteImageUploadInput & { timeoutState: GalleryBatchTimeoutState }
 ): Promise<GalleryBatchUploadCandidate> {
+  const fileStartedAt = Date.now();
+  let latestMetadata: ImageProcessingDiagnosticEvent | undefined;
+
   try {
     return await options.coordinator.runExclusive(
       `${input.siteId}:gallery:${input.file.assetId}`,
@@ -414,12 +418,65 @@ async function prepareGalleryBatchCandidate(
 
         assertGalleryBatchCanContinue(input.timeoutState);
 
-        const processed = await options.processor.process({
-          assetId: input.file.assetId,
-          declaredMimeType: input.file.declaredMimeType,
-          siteId: input.siteId,
-          slot: "gallery",
-          source: input.file.source
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          requestId: input.context.requestId,
+          stage: "PROCESSING_STARTED",
+          timeoutMs: readProcessorTimeoutMs(options.processor)
+        });
+
+        let processed: Awaited<ReturnType<ImageProcessor["process"]>>;
+
+        try {
+          processed = await options.processor.process({
+            assetId: input.file.assetId,
+            declaredMimeType: input.file.declaredMimeType,
+            onDiagnostic: (event) => {
+              if (event.stage !== "METADATA_READ") {
+                return;
+              }
+
+              latestMetadata = event;
+              logGalleryImageFileStage(options, {
+                ...toGalleryImageMetadataLogFields(event),
+                clientFileId: input.file.assetId,
+                requestId: input.context.requestId,
+                stage: "METADATA_READ",
+                timeoutMs: readProcessorTimeoutMs(options.processor)
+              });
+            },
+            siteId: input.siteId,
+            slot: "gallery",
+            source: input.file.source
+          });
+        } catch (error) {
+          if (isImageProcessingTimeoutError(error)) {
+            logGalleryImageFileStage(options, {
+              ...toGalleryImageMetadataLogFields(latestMetadata),
+              clientFileId: input.file.assetId,
+              durationMs: Date.now() - fileStartedAt,
+              errorCategory: readGalleryImageErrorCategory(error),
+              requestId: input.context.requestId,
+              stage: "PROCESSING_TIMEOUT",
+              timeoutMs: readProcessorTimeoutMs(options.processor)
+            });
+          }
+
+          throw error;
+        }
+
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          durationMs: Date.now() - fileStartedAt,
+          format: processed.originalFormat,
+          height: processed.originalHeight,
+          orientation: processed.originalOrientation ?? null,
+          pixels: processed.originalPixels,
+          requestId: input.context.requestId,
+          stage: "PROCESSING_COMPLETED",
+          timeoutMs: readProcessorTimeoutMs(options.processor),
+          variantCount: processed.variants.length,
+          width: processed.originalWidth
         });
 
         assertGalleryBatchCanContinue(input.timeoutState);
@@ -439,6 +496,15 @@ async function prepareGalleryBatchCandidate(
           runAfter: addMinutes(input.context.now, 15)
         });
 
+        const uploadStartedAt = Date.now();
+
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          requestId: input.context.requestId,
+          stage: "STORAGE_UPLOAD_STARTED",
+          variantCount: processed.variants.length
+        });
+
         for (const variant of processed.variants) {
           assertGalleryBatchCanContinue(input.timeoutState);
 
@@ -453,7 +519,23 @@ async function prepareGalleryBatchCandidate(
           assertGalleryBatchCanContinue(input.timeoutState);
         }
 
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          durationMs: Date.now() - uploadStartedAt,
+          requestId: input.context.requestId,
+          stage: "STORAGE_UPLOAD_COMPLETED",
+          variantCount: processed.variants.length
+        });
+
         assertGalleryBatchCanContinue(input.timeoutState);
+
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          durationMs: Date.now() - fileStartedAt,
+          requestId: input.context.requestId,
+          stage: "FILE_COMPLETED",
+          variantCount: processed.variants.length
+        });
 
         return {
           file: input.file,
@@ -470,7 +552,7 @@ async function prepareGalleryBatchCandidate(
     );
   } catch (error) {
     return {
-      failure: toGalleryBatchFailure(input.file, error),
+      failure: toGalleryBatchFailure(input.file, error, input.context.requestId),
       kind: "failed"
     };
   }
@@ -1008,14 +1090,135 @@ function toGalleryBatchCancellationError(error: unknown): AppError {
 
 function toGalleryBatchFailure(
   file: ParsedImageFile,
-  error: unknown
+  error: unknown,
+  requestId?: string
 ): GalleryBatchResponse["failed"][number] {
+  const safeRequestId = readSafeLogIdentifier(requestId);
+
   return {
     clientFileId: file.assetId,
     code: error instanceof AppError ? error.code : "INTERNAL_ERROR",
     index: file.index,
-    message: error instanceof AppError ? error.message : "Internal server error."
+    message: error instanceof AppError ? error.message : "Internal server error.",
+    ...(safeRequestId === undefined ? {} : { requestId: safeRequestId })
   };
+}
+
+function logGalleryImageFileStage(
+  options: CreateSiteImageServiceOptions,
+  input: {
+    clientFileId: string;
+    durationMs?: number | undefined;
+    errorCategory?: string | undefined;
+    format?: ImageProcessingDiagnosticEvent["format"] | undefined;
+    height?: number | undefined;
+    orientation?: number | null | undefined;
+    pixels?: number | undefined;
+    requestId: string;
+    stage:
+      | "FILE_COMPLETED"
+      | "METADATA_READ"
+      | "PROCESSING_COMPLETED"
+      | "PROCESSING_STARTED"
+      | "PROCESSING_TIMEOUT"
+      | "STORAGE_UPLOAD_COMPLETED"
+      | "STORAGE_UPLOAD_STARTED";
+    timeoutMs?: number | undefined;
+    variantCount?: number | undefined;
+    width?: number | undefined;
+  }
+): void {
+  if (options.diagnostics === undefined) {
+    return;
+  }
+
+  const clientFileId = readSafeLogIdentifier(input.clientFileId);
+  const requestId = readSafeLogIdentifier(input.requestId);
+
+  if (clientFileId === undefined || requestId === undefined) {
+    return;
+  }
+
+  try {
+    options.diagnostics.logger.log({
+      clientFileId,
+      durationMs: normalizeNonNegativeLogInteger(input.durationMs),
+      environment: options.diagnostics.environment,
+      errorCategory: readSafeLogIdentifier(input.errorCategory),
+      event: "site.gallery_image.file",
+      format: input.format,
+      height: normalizePositiveLogInteger(input.height),
+      level: input.stage === "PROCESSING_TIMEOUT" ? "error" : "info",
+      orientation:
+        input.orientation === null ? null : normalizePositiveLogInteger(input.orientation),
+      pixels: normalizePositiveLogInteger(input.pixels),
+      requestId,
+      service: options.diagnostics.service,
+      stage: input.stage,
+      time: options.diagnostics.now().toISOString(),
+      timeoutMs: normalizePositiveLogInteger(input.timeoutMs),
+      variantCount: normalizeNonNegativeLogInteger(input.variantCount),
+      width: normalizePositiveLogInteger(input.width)
+    });
+  } catch {
+    return;
+  }
+}
+
+function toGalleryImageMetadataLogFields(
+  event: ImageProcessingDiagnosticEvent | undefined
+): {
+  durationMs?: number | undefined;
+  format?: ImageProcessingDiagnosticEvent["format"] | undefined;
+  height?: number | undefined;
+  orientation?: number | null | undefined;
+  pixels?: number | undefined;
+  width?: number | undefined;
+} {
+  return {
+    durationMs: event?.durationMs,
+    format: event?.format,
+    height: event?.height,
+    orientation: event?.orientation,
+    pixels: event?.pixels,
+    width: event?.width
+  };
+}
+
+function readProcessorTimeoutMs(processor: ImageProcessor): number | undefined {
+  return normalizePositiveLogInteger(processor.timeoutMs);
+}
+
+function isImageProcessingTimeoutError(error: unknown): boolean {
+  return error instanceof AppError && error.code === "IMAGE_PROCESSING_TIMEOUT";
+}
+
+function readGalleryImageErrorCategory(error: unknown): string {
+  return error instanceof AppError ? error.code : "INTERNAL_ERROR";
+}
+
+function readSafeLogIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,120}$/.test(value)) {
+    return undefined;
+  }
+
+  return value;
+}
+
+function normalizePositiveLogInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return Math.trunc(value);
+}
+
+function normalizeNonNegativeLogInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+
+  return Math.trunc(value);
 }
 
 function logPreviewUploadFailed(

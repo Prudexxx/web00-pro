@@ -192,6 +192,15 @@ describe("app/server auth integration boundary", () => {
     expect(source).toContain("parseAuthEnv(process.env, { nodeEnv: env.NODE_ENV })");
   });
 
+  it("wires bounded image processing config from safe env into the Sharp processor", () => {
+    const source = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+
+    expect(source).toContain("parseImageProcessingEnv(process.env)");
+    expect(source).toContain("toImageProcessingConfig");
+    expect(source).toContain("imageProcessingConfig.timeoutMs");
+    expect(source).toContain("imageProcessingConfig.maxConcurrency");
+  });
+
   it("wires public CORS and readiness through app/server composition", () => {
     const appSource = readFileSync(join(process.cwd(), "src", "app.ts"), "utf8");
     const serverSource = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");

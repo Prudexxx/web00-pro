@@ -62,6 +62,7 @@ export type GalleryBatchResponse = {
     code: string;
     index: number;
     message: string;
+    requestId?: string;
   }>;
   succeeded: Array<{
     clientFileId: string;

@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import { createSharpImageProcessor } from "../src/modules/images/image-processor.js";
 import { createImagePipelineSemaphore } from "../src/modules/images/image-semaphore.js";
@@ -175,10 +175,211 @@ describe("createSharpImageProcessor", () => {
     ).rejects.toMatchObject({ code: "IMAGE_PIXEL_LIMIT_EXCEEDED" });
   });
 
-  it("times out a source pipeline with a safe error", async () => {
+  it("rejects oversized pixel counts after metadata preflight before variant encoding", async () => {
+    const toBuffer = vi.fn(async () => Buffer.from("should-not-encode"));
+    const metadataPipeline = {
+      metadata: vi.fn(async () => ({
+        format: "png",
+        height: 100,
+        orientation: 6,
+        pages: 1,
+        width: 100
+      })),
+      destroy: vi.fn()
+    };
+    const encodingPipeline = {
+      avif: vi.fn(() => encodingPipeline),
+      clone: vi.fn(() => encodingPipeline),
+      destroy: vi.fn(),
+      resize: vi.fn(() => encodingPipeline),
+      rotate: vi.fn(() => encodingPipeline),
+      toBuffer,
+      toColorspace: vi.fn(() => encodingPipeline),
+      webp: vi.fn(() => encodingPipeline)
+    };
+    let callCount = 0;
+    const sharpFactory = vi.fn((_input?: unknown, _options?: unknown) => {
+      callCount += 1;
+
+      return callCount === 1 ? metadataPipeline : encodingPipeline;
+    });
+    const processor = createSharpImageProcessor({
+      maxPixels: 9_999,
+      sharpFactory
+    } as never);
+
+    await expect(
+      processor.process({
+        assetId,
+        declaredMimeType: "image/png",
+        siteId,
+        slot: "preview",
+        source: Buffer.from("fake-png")
+      })
+    ).rejects.toMatchObject({ code: "IMAGE_PIXEL_LIMIT_EXCEEDED" });
+
+    expect(sharpFactory).toHaveBeenCalledTimes(1);
+    expect(sharpFactory.mock.calls[0]?.[1]).toMatchObject({
+      failOn: "error",
+      limitInputPixels: 9_999
+    });
+    expect(toBuffer).not.toHaveBeenCalled();
+  });
+
+  it("terminates an active Sharp pipeline when the configured processing timeout elapses", async () => {
+    vi.useFakeTimers();
+
+    try {
+      let rejectToBuffer: ((error: Error) => void) | undefined;
+      const metadataPipeline = {
+        metadata: vi.fn(async () => ({
+          format: "png",
+          height: 600,
+          pages: 1,
+          width: 1200
+        })),
+        destroy: vi.fn()
+      };
+      const variantPipeline = {
+        avif: vi.fn(() => variantPipeline),
+        destroy: vi.fn((error?: Error) => {
+          rejectToBuffer?.(error ?? new Error("destroyed"));
+          return variantPipeline;
+        }),
+        resize: vi.fn(() => variantPipeline),
+        toBuffer: vi.fn(
+          () =>
+            new Promise<Buffer>((_resolve, reject) => {
+              rejectToBuffer = reject;
+            })
+        ),
+        webp: vi.fn(() => variantPipeline)
+      };
+      const basePipeline = {
+        clone: vi.fn(() => variantPipeline),
+        destroy: vi.fn(),
+        rotate: vi.fn(() => basePipeline),
+        toColorspace: vi.fn(() => basePipeline)
+      };
+      let callCount = 0;
+      const sharpFactory = vi.fn((_input?: unknown, _options?: unknown) => {
+        callCount += 1;
+
+        return callCount === 1 ? metadataPipeline : basePipeline;
+      });
+      const processor = createSharpImageProcessor({
+        sharpFactory,
+        timeoutMs: 60_000
+      } as never);
+      const result = processor
+        .process({
+          assetId,
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source: Buffer.from("fake-png")
+        })
+        .catch((error: unknown) => error);
+
+      await Promise.resolve();
+      await Promise.resolve();
+      for (let index = 0; index < 10 && variantPipeline.toBuffer.mock.calls.length === 0; index += 1) {
+        await Promise.resolve();
+      }
+      expect(variantPipeline.toBuffer).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(result).resolves.toMatchObject({
+        code: "IMAGE_PROCESSING_TIMEOUT"
+      });
+      expect(variantPipeline.destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts the processing timeout after the processor semaphore is acquired", async () => {
+    const source = await fixture("png");
+    vi.useFakeTimers();
+
+    try {
+      let releaseQueue!: () => void;
+      const queued = new Promise<void>((resolve) => {
+        releaseQueue = resolve;
+      });
+      const semaphore = {
+        async run<T>(operation: () => Promise<T>): Promise<T> {
+          await queued;
+
+          return operation();
+        }
+      };
+      const processor = createSharpImageProcessor({ semaphore, timeoutMs: 1 });
+      let settled = false;
+      const result = processor
+        .process({
+          assetId,
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source
+        })
+        .then(
+          (value) => {
+            settled = true;
+            return { status: "fulfilled" as const, value };
+          },
+          (error: unknown) => {
+            settled = true;
+            return { error, status: "rejected" as const };
+          }
+        );
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+
+      releaseQueue();
+      const outcome = await result;
+
+      expect(outcome.status).toBe("fulfilled");
+      if (outcome.status === "fulfilled") {
+        expect(outcome.value.variants).toHaveLength(2);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a genuinely hung source pipeline with a safe error", async () => {
+    const semaphore = {
+      async run<T>(operation: () => Promise<T>): Promise<T> {
+        return operation();
+      }
+    };
+    const processor = createSharpImageProcessor({
+      semaphore,
+      sharpFactory: (() => ({
+        destroy: vi.fn(),
+        metadata: () => new Promise(() => undefined)
+      })) as never,
+      timeoutMs: 1
+    } as never);
+
+    await expect(
+      processor.process({
+        assetId,
+        declaredMimeType: "image/png",
+        siteId,
+        slot: "preview",
+        source: Buffer.from("fake-png")
+      })
+    ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
+  });
+
+  it("keeps semaphore compatibility for rejected operations", async () => {
     const semaphore = {
       async run<T>(_operation: () => Promise<T>): Promise<T> {
-        await new Promise(() => undefined);
         throw new AppError({
           code: "INTERNAL_ERROR",
           message: "unreachable",
@@ -196,7 +397,7 @@ describe("createSharpImageProcessor", () => {
         slot: "preview",
         source: await fixture("png")
       })
-    ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 });
 

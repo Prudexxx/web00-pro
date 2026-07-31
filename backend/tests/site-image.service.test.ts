@@ -46,6 +46,39 @@ function publicUrl(width: number, format: "avif" | "webp", slot = "preview", id 
   return `https://storage.example.test/storage/v1/object/public/web00-catalog-images/${variantPath(width, format, slot, id)}`;
 }
 
+function processedImageFor(
+  id: string,
+  slot: "gallery" | "preview"
+): Awaited<ReturnType<ImageProcessor["process"]>> {
+  return {
+    assetId: id,
+    originalFormat: "png",
+    originalHeight: 600,
+    originalOrientation: null,
+    originalPixels: 720_000,
+    originalWidth: 1200,
+    variants: [480, 960, 1200].flatMap((width) => [
+      {
+        body: Buffer.from(`webp-${id}-${width}`),
+        contentType: "image/webp" as const,
+        format: "webp" as const,
+        height: width / 2,
+        path: variantPath(width, "webp", slot, id),
+        width
+      },
+      {
+        body: Buffer.from(`avif-${id}-${width}`),
+        contentType: "image/avif" as const,
+        format: "avif" as const,
+        height: width / 2,
+        path: variantPath(width, "avif", slot, id),
+        width
+      }
+    ]),
+    widths: [480, 960, 1200]
+  };
+}
+
 function createFakes(overrides: {
   site?: Partial<Awaited<ReturnType<SiteImageRepository["getSiteForImageMutation"]>>>;
 } = {}) {
@@ -96,32 +129,11 @@ function createFakes(overrides: {
     })
   };
   const processor: ImageProcessor = {
+    timeoutMs: 150_000,
     process: vi.fn(async (input) => {
       events.push("process");
-      return {
-        assetId: input.assetId,
-        originalHeight: 600,
-        originalWidth: 1200,
-        variants: [480, 960, 1200].flatMap((width) => [
-          {
-            body: Buffer.from(`webp-${width}`),
-            contentType: "image/webp" as const,
-            format: "webp" as const,
-            height: width / 2,
-            path: variantPath(width, "webp", input.slot, input.assetId),
-            width
-          },
-          {
-            body: Buffer.from(`avif-${width}`),
-            contentType: "image/avif" as const,
-            format: "avif" as const,
-            height: width / 2,
-            path: variantPath(width, "avif", input.slot, input.assetId),
-            width
-          }
-        ]),
-        widths: [480, 960, 1200]
-      };
+
+      return processedImageFor(input.assetId, input.slot);
     })
   };
   const storage: ImageStorage = {
@@ -840,6 +852,213 @@ describe("GalleryImageService", () => {
       fakes.events.indexOf(`process:end:${otherAssetId}`)
     ).toBeLessThan(fakes.events.indexOf(`process:end:${assetId}`));
     expect(attachOrder).toEqual([assetId, otherAssetId, thirdAssetId]);
+  });
+
+  it("preserves three successes and two timed-out failures in the owner five-gallery batch without orphaned uploads", async () => {
+    const fakes = createFakes();
+    const galleryIds = [
+      "00000000-0000-4000-8000-000000000401",
+      "00000000-0000-4000-8000-000000000402",
+      "00000000-0000-4000-8000-000000000403",
+      "00000000-0000-4000-8000-000000000404",
+      "00000000-0000-4000-8000-000000000405"
+    ];
+    const timedOutIds = new Set(galleryIds.slice(3));
+    const logger = { log: vi.fn() };
+
+    fakes.processor.process = vi.fn(async (input) => {
+      input.onDiagnostic?.({
+        durationMs: 7,
+        format: "png",
+        height: 600,
+        orientation: null,
+        pixels: 720_000,
+        stage: "METADATA_READ",
+        width: 1200
+      });
+
+      if (timedOutIds.has(input.assetId)) {
+        throw new AppError({
+          code: "IMAGE_PROCESSING_TIMEOUT",
+          message: "Image processing timed out.",
+          statusCode: 503
+        });
+      }
+
+      return processedImageFor(input.assetId, input.slot);
+    });
+
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      diagnostics: {
+        environment: "production",
+        logger,
+        now: () => new Date("2026-07-31T12:00:00.000Z"),
+        service: "web00-backend"
+      },
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+    const result = await service.gallery.addBatch({
+      context: { ...context, requestId: "req_owner_gallery_batch" },
+      files: galleryIds.map((id, index) => ({
+        alt: `Gallery ${index + 1}`,
+        assetId: id,
+        declaredMimeType: "image/png",
+        index,
+        source: Buffer.from(`source-${index}`)
+      })),
+      siteId
+    });
+
+    expect(result.succeeded.map((item) => item.clientFileId)).toEqual(galleryIds.slice(0, 3));
+    expect(result.failed).toEqual([
+      {
+        clientFileId: galleryIds[3],
+        code: "IMAGE_PROCESSING_TIMEOUT",
+        index: 3,
+        message: "Image processing timed out.",
+        requestId: "req_owner_gallery_batch"
+      },
+      {
+        clientFileId: galleryIds[4],
+        code: "IMAGE_PROCESSING_TIMEOUT",
+        index: 4,
+        message: "Image processing timed out.",
+        requestId: "req_owner_gallery_batch"
+      }
+    ]);
+    expect(fakes.cleanup.createUploadReservations).toHaveBeenCalledTimes(3);
+    expect(fakes.storage.uploadObject).toHaveBeenCalledTimes(18);
+    expect(fakes.repository.addGalleryImage).toHaveBeenCalledTimes(3);
+
+    const loggedStages = logger.log.mock.calls.map(([entry]) => entry.stage);
+
+    expect(loggedStages).toEqual(
+      expect.arrayContaining([
+        "PROCESSING_STARTED",
+        "METADATA_READ",
+        "PROCESSING_COMPLETED",
+        "PROCESSING_TIMEOUT",
+        "STORAGE_UPLOAD_STARTED",
+        "STORAGE_UPLOAD_COMPLETED",
+        "FILE_COMPLETED"
+      ])
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientFileId: galleryIds[3],
+        errorCategory: "IMAGE_PROCESSING_TIMEOUT",
+        requestId: "req_owner_gallery_batch",
+        stage: "PROCESSING_TIMEOUT",
+        timeoutMs: expect.any(Number)
+      })
+    );
+    expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
+      /Screenshot_|storage\/v1|postgres|prisma|libvips|token|secret/i
+    );
+  });
+
+  it("treats retry/replay of an already attached batch clientFileId as idempotent without duplicate assets", async () => {
+    const existingAssetId = "00000000-0000-4000-8000-000000000501";
+    const fakes = createFakes({
+      site: {
+        galleryImages: [
+          {
+            alt: "Already uploaded",
+            assetId: existingAssetId,
+            sortOrder: 0,
+            storagePath: `sites/${siteId}/gallery/${existingAssetId}`,
+            url: publicUrl(1200, "webp", "gallery", existingAssetId),
+            widths: [480, 960, 1200]
+          }
+        ]
+      }
+    });
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+
+    await expect(
+      service.gallery.addBatch({
+        context,
+        files: [
+          {
+            alt: "Retry",
+            assetId: existingAssetId,
+            declaredMimeType: "image/png",
+            index: 0,
+            source: Buffer.from("same-file")
+          }
+        ],
+        siteId
+      })
+    ).resolves.toMatchObject({
+      failed: [],
+      succeeded: [
+        {
+          clientFileId: existingAssetId,
+          index: 0,
+          replayed: true
+        }
+      ]
+    });
+    expect(fakes.processor.process).not.toHaveBeenCalled();
+    expect(fakes.cleanup.createUploadReservations).not.toHaveBeenCalled();
+    expect(fakes.storage.uploadObject).not.toHaveBeenCalled();
+    expect(fakes.repository.addGalleryImage).not.toHaveBeenCalled();
+  });
+
+  it("lets two PNG files exceed the old 45s processor timeout and still complete under the bounded batch policy", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const fakes = createFakes();
+
+      fakes.processor.process = vi.fn(
+        (input) =>
+          new Promise<Awaited<ReturnType<ImageProcessor["process"]>>>((resolve) => {
+            setTimeout(() => resolve(processedImageFor(input.assetId, input.slot)), 46_000);
+          })
+      );
+
+      const service = createSiteImageService({
+        cleanup: fakes.cleanup,
+        coordinator: createAssetUploadCoordinator(),
+        imageUrlPolicy: policy,
+        processor: fakes.processor,
+        repository: fakes.repository,
+        storage: fakes.storage
+      });
+      const result = service.gallery.addBatch({
+        context,
+        files: [assetId, otherAssetId].map((id, index) => ({
+          alt: `Slow PNG ${index + 1}`,
+          assetId: id,
+          declaredMimeType: "image/png",
+          index,
+          source: Buffer.from(`slow-${index}`)
+        })),
+        siteId
+      });
+
+      await vi.advanceTimersByTimeAsync(46_000);
+
+      await expect(result).resolves.toMatchObject({
+        failed: [],
+        succeeded: [{ clientFileId: assetId }, { clientFileId: otherAssetId }]
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cancels streamed gallery batch work after request abort before reservations or uploads", async () => {

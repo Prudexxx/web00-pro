@@ -41,14 +41,15 @@ export function createSiteImageController(options: {
 
       try {
         const { id } = parseSiteImageParams(request.params);
+        const context = createContext(request as AuthRequest, response, now);
         const result = await options.service.gallery.addBatchStream({
-          context: createContext(request as AuthRequest, response, now),
+          context,
           files: options.parser.parseBatchStream(request),
           signal: abortController.signal,
           siteId: id
         });
 
-        response.status(200).json({ data: result });
+        response.status(200).json({ data: result, requestId: context.requestId });
       } catch (error) {
         next(error);
       } finally {
