@@ -142,7 +142,7 @@ export interface CanonicalAssetReconciliationTargetReport {
   gallerySourceMatch: boolean | null;
   plannedGalleryUrlUpdates: number;
   plannedPreviewUpdate: boolean;
-  previewState: "already-canonical" | "blocked" | "missing" | "unknown";
+  previewState: "already-canonical" | "blocked" | "legacy-canonical" | "missing" | "unknown";
   slug: CanonicalLegacyAssetTargetSlug;
   status: string | null;
   titleMatch: boolean | null;
@@ -459,6 +459,15 @@ function planPreviewState(
       blocker: null,
       needsUpdate: false,
       state: "already-canonical"
+    };
+  }
+
+  const resolvedCurrent = resolveCatalogAssetUrl(current);
+  if (resolvedCurrent?.source === "legacy" && resolvedCurrent.url === expectedPreviewUrl) {
+    return {
+      blocker: null,
+      needsUpdate: true,
+      state: "legacy-canonical"
     };
   }
 

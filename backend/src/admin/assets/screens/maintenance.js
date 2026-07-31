@@ -13,6 +13,13 @@ const CANONICAL_ASSETS_APPLY_PATH =
   "/api/admin/maintenance/canonical-assets/reconcile";
 const CANONICAL_ASSETS_CONFIRMATION = "WEB00-CANONICAL-ASSETS-15-7";
 const EXPECTED_TARGET_SLUGS = Object.freeze(["mebel", "massage", "drova"]);
+const EXPECTED_PREVIEW_STATES = Object.freeze([
+  "already-canonical",
+  "blocked",
+  "legacy-canonical",
+  "missing",
+  "unknown"
+]);
 const INVALID_RESPONSE_MESSAGE = "Сервер вернул некорректный ответ.";
 const APPLY_BLOCKED_MESSAGE = "Восстановление не выполнено. Повторите проверку состояния.";
 const UNEXPECTED_APPLY_FAILURE_MESSAGE = "Не удалось восстановить изображения.";
@@ -341,7 +348,7 @@ export function createMaintenanceScreen(options) {
             children: [
               tableCell(documentRef, "Slug", target.slug ?? ""),
               tableCell(documentRef, "Status", target.status ?? ""),
-              tableCell(documentRef, "Preview", target.plannedPreviewUpdate === true ? "planned" : target.previewState ?? ""),
+              tableCell(documentRef, "Preview", previewStateLabel(target)),
               tableCell(documentRef, "Gallery URL", target.plannedGalleryUrlUpdates ?? 0),
               tableCell(documentRef, "Blockers", Array.isArray(target.blockers) ? target.blockers.join(", ") : "")
             ]
@@ -538,6 +545,25 @@ function tableCell(documentRef, label, text) {
   });
 }
 
+function previewStateLabel(target) {
+  if (target.previewState === "missing") {
+    return "Preview отсутствует";
+  }
+  if (target.previewState === "legacy-canonical") {
+    return "Legacy Preview будет нормализован";
+  }
+  if (target.previewState === "already-canonical") {
+    return "Preview уже канонический";
+  }
+  if (target.previewState === "blocked") {
+    return "Конфликт Preview";
+  }
+
+  return target.plannedPreviewUpdate === true
+    ? "Preview будет обновлён"
+    : "Preview не определён";
+}
+
 function readStringArray(value) {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
     return null;
@@ -558,6 +584,15 @@ function readTargets(value) {
       return null;
     }
     if (readStringArray(target.blockers) === null) {
+      return null;
+    }
+    if (!EXPECTED_PREVIEW_STATES.includes(target.previewState)) {
+      return null;
+    }
+    if (typeof target.plannedPreviewUpdate !== "boolean") {
+      return null;
+    }
+    if (readNonNegativeInteger(target.plannedGalleryUrlUpdates) === null) {
       return null;
     }
     targets.push(target);

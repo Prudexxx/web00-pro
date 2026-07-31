@@ -55,6 +55,46 @@ describe("admin maintenance canonical assets screen", () => {
     expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(false);
   });
 
+  it("renders Russian preview state labels including legacy normalization", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn(() => Promise.resolve({
+        data: {
+          ...readyReport(),
+          targets: [
+            targetReport("mebel", {
+              plannedPreviewUpdate: true,
+              previewState: "missing"
+            }),
+            targetReport("massage", {
+              plannedPreviewUpdate: true,
+              previewState: "legacy-canonical"
+            }),
+            targetReport("drova", {
+              plannedPreviewUpdate: false,
+              previewState: "already-canonical"
+            })
+          ]
+        }
+      }))
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.textContent.includes("Legacy Preview будет нормализован"));
+
+    expect(screen.element.textContent).toContain("Preview отсутствует");
+    expect(screen.element.textContent).toContain("Legacy Preview будет нормализован");
+    expect(screen.element.textContent).toContain("Preview уже канонический");
+    expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(false);
+  });
+
   it("keeps apply disabled when dry-run has blockers", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {
@@ -85,6 +125,40 @@ describe("admin maintenance canonical assets screen", () => {
     click(screen.element, '[data-action="check-canonical-assets"]');
     await waitFor(() => screen.element.textContent.includes("GALLERY_URL_MISMATCH:mebel:0"));
 
+    expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(true);
+  });
+
+  it("renders preview conflict labels and keeps apply disabled", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn(() => Promise.resolve({
+        data: {
+          ...readyReport(),
+          blockers: ["PREVIEW_URL_CONFLICT:mebel"],
+          status: "blocked",
+          targets: [
+            targetReport("mebel", {
+              blockers: ["PREVIEW_URL_CONFLICT:mebel"],
+              plannedPreviewUpdate: false,
+              previewState: "blocked"
+            }),
+            ...readyReport().targets.slice(1)
+          ]
+        }
+      }))
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.textContent.includes("Конфликт Preview"));
+
+    expect(screen.element.textContent).toContain("PREVIEW_URL_CONFLICT:mebel");
     expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(true);
   });
 
@@ -394,7 +468,7 @@ function readyReport() {
   };
 }
 
-function targetReport(slug) {
+function targetReport(slug, overrides = {}) {
   return {
     active: true,
     blockers: [],
@@ -408,7 +482,8 @@ function targetReport(slug) {
     previewState: "missing",
     slug,
     status: "draft",
-    titleMatch: true
+    titleMatch: true,
+    ...overrides
   };
 }
 
