@@ -6,8 +6,17 @@ export const CANONICAL_LEGACY_ASSET_TARGET_SLUGS = [
   "drova"
 ] as const;
 
+export const CANONICAL_LEGACY_ASSET_LOCK_ORDER = [
+  "drova",
+  "massage",
+  "mebel"
+] as const satisfies readonly CanonicalLegacyAssetTargetSlug[];
+
 export const CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION =
   "WEB00-CANONICAL-ASSETS-15-7";
+
+export const RECONCILIATION_STATE_CHANGED_MESSAGE =
+  "Данные карточек изменились. Повторите проверку состояния.";
 
 export type CanonicalLegacyAssetTargetSlug =
   (typeof CANONICAL_LEGACY_ASSET_TARGET_SLUGS)[number];
@@ -65,6 +74,7 @@ export interface CanonicalAssetReconciliationRepository {
   applyCanonicalAssetChanges(input: {
     changes: CanonicalAssetReconciliationChange[];
     context: CanonicalAssetReconciliationContext;
+    expectedSites: CanonicalAssetReconciliationSite[];
   }): Promise<void>;
   findSitesBySlugs(
     slugs: readonly CanonicalLegacyAssetTargetSlug[]
@@ -109,6 +119,7 @@ export interface CanonicalAssetReconciliationAuditSnapshot {
 
 export interface CanonicalAssetReconciliationReport {
   blockers: string[];
+  message?: string;
   mode: "apply" | "dry-run";
   status: "already-reconciled" | "applied" | "blocked" | "ready";
   targets: CanonicalAssetReconciliationTargetReport[];
@@ -139,6 +150,13 @@ export interface CanonicalAssetReconciliationTargetReport {
 interface SitePlan {
   change: CanonicalAssetReconciliationChange | null;
   report: CanonicalAssetReconciliationTargetReport;
+}
+
+export class ReconciliationStateChangedError extends Error {
+  public constructor() {
+    super(RECONCILIATION_STATE_CHANGED_MESSAGE);
+    this.name = "ReconciliationStateChangedError";
+  }
 }
 
 export async function reconcileCanonicalLegacyAssets(
@@ -217,9 +235,21 @@ export async function reconcileCanonicalLegacyAssets(
   try {
     await options.repository.applyCanonicalAssetChanges({
       changes,
-      context: options.context
+      context: options.context,
+      expectedSites: selectExpectedSitesForApply(foundBySlug)
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ReconciliationStateChangedError) {
+      return {
+        blockers: ["RECONCILIATION_STATE_CHANGED"],
+        message: RECONCILIATION_STATE_CHANGED_MESSAGE,
+        mode,
+        status: "blocked",
+        targets: plans.map((plan) => plan.report),
+        totals
+      };
+    }
+
     return {
       blockers: ["APPLY_TRANSACTION_FAILED"],
       mode,
@@ -556,6 +586,19 @@ function cloneGallery(
   galleryImages: CanonicalAssetGalleryImage[]
 ): CanonicalAssetGalleryImage[] {
   return galleryImages.map((image) => ({ ...image }));
+}
+
+function cloneSite(site: CanonicalAssetReconciliationSite): CanonicalAssetReconciliationSite {
+  return {
+    ...site,
+    galleryImages: cloneGallery(site.galleryImages)
+  };
+}
+
+function selectExpectedSitesForApply(
+  foundBySlug: Map<string, CanonicalAssetReconciliationSite>
+): CanonicalAssetReconciliationSite[] {
+  return CANONICAL_LEGACY_ASSET_LOCK_ORDER.map((slug) => cloneSite(foundBySlug.get(slug)!));
 }
 
 function isTargetSlug(value: string): value is CanonicalLegacyAssetTargetSlug {

@@ -41,11 +41,20 @@ The resolver rejects:
 - backslash path tricks
 - encoded scheme tricks
 - traversal such as `../`
+- encoded traversal such as `%2e%2e` and double-encoded traversal such as `%252e%252e`
+- encoded slash/backslash escape attempts
+- query/hash suffixes on legacy paths
 - unexpected relative prefixes
 - malformed URLs
 - excessively long values
 
 The resolver performs no network request. It returns a controlled result/null and never relies on the admin Render origin.
+
+For legacy paths, the final resolved URL must remain inside:
+
+`https://prudexxx.github.io/web00-pro/assets/`
+
+The final-path guard rejects normalized URL escapes even when the input looked like an `assets/...` string before URL normalization.
 
 ## Public API behavior
 
@@ -68,13 +77,44 @@ Admin image manager display uses the resolved presentation URL only:
 - delete/reorder payloads continue to use existing `assetId`, `sortOrder`, and `alt` contract fields;
 - render does not mutate stored data.
 
-## CLI
+## Admin maintenance workflow
+
+Render Free does not provide a reliable owner Shell/SSH/one-off-job path for this operation. PR #7 therefore includes one authenticated admin-only maintenance action:
+
+- dry-run: `GET /api/admin/maintenance/canonical-assets`
+- apply: `POST /api/admin/maintenance/canonical-assets/reconcile`
+- admin UI: `/admin` → `Обслуживание` → `Восстановление канонических изображений`
+
+RBAC:
+
+- anonymous requests: `401`;
+- editor requests: `403`;
+- admin dry-run: read-only report;
+- admin apply: exact confirmation required.
+
+Apply confirmation:
+
+`WEB00-CANONICAL-ASSETS-15-7`
+
+The admin UI keeps apply disabled until the latest dry-run report is `ready` and has zero blockers. The confirmation dialog requires the exact confirmation string. A successful apply shows that the cards remain drafts and are not published.
+
+If card state changes between dry-run planning and transactional apply, the backend returns the controlled state-change failure:
+
+`RECONCILIATION_STATE_CHANGED`
+
+Message:
+
+`Данные карточек изменились. Повторите проверку состояния.`
+
+The UI shows safe failure copy and requestId only; it must not display database URLs, Prisma internals, tokens, cookies, or passwords.
+
+## CLI local/test helper
 
 Script:
 
 `npm run catalog:reconcile-legacy-assets`
 
-Default mode is dry-run.
+Default mode is dry-run. The CLI remains useful for local/test verification and deterministic test injection, but the production-owner path on Render Free is the authenticated admin maintenance workflow above.
 
 The CLI targets only:
 
@@ -162,7 +202,15 @@ If one site fails:
 
 ## Apply behavior
 
-In one controlled transaction, for each changed site:
+In one controlled transaction:
+
+- all three target rows are locked in deterministic slug order: `drova`, `massage`, `mebel`;
+- the locked rows are re-read after the locks are acquired;
+- the full expected state from planning is compared against the locked current state before any write;
+- lifecycle, identity, category/title, preview, gallery URL, gallery alt, gallery sort order, and storage metadata changes during the race window block the operation;
+- if the full recheck fails, zero site updates and zero audit rows are retained.
+
+After the lock/recheck succeeds, for each changed site:
 
 - `previewImageUrl: null` becomes the exact canonical absolute preview URL;
 - exact canonical preview is no-op;
@@ -227,6 +275,12 @@ If any update or audit insert fails:
 - first/second site changes are not retained;
 - no partial audit rows are retained.
 
+If any target row changes after the initial plan but before transactional apply:
+
+- the transaction performs zero reconciliation writes;
+- the operation reports `RECONCILIATION_STATE_CHANGED`;
+- the owner must repeat dry-run before trying again.
+
 A second apply after a successful apply is a controlled no-op:
 
 - zero semantic changes;
@@ -238,6 +292,10 @@ A second apply after a successful apply is a controlled no-op:
 Implemented deterministic tests cover:
 
 - resolver accept/reject matrix;
+- encoded traversal, encoded separator, query/hash, and final-path escape rejection;
+- backend/browser resolver parity;
+- admin maintenance route RBAC and exact confirmation;
+- admin maintenance UI dry-run/apply/blocked/failure behavior;
 - admin legacy display;
 - public API normalization;
 - dry-run zero writes;
@@ -248,6 +306,8 @@ Implemented deterministic tests cover:
 - unexpected preview blocker;
 - preview restoration for three sites;
 - gallery URL normalization for twelve entries;
+- deterministic lock order and expected-site handoff;
+- in-transaction full state recheck blockers;
 - preservation of assetId/storage metadata/alt/order/lifecycle fields;
 - one audit row per changed site;
 - rollback on third-site failure;
@@ -265,18 +325,20 @@ This is intentional until an isolated test database is provided.
 After PR #7 is reviewed and deployed by the owner:
 
 1. Confirm branch and deployment point are the intended PR #7 state.
-2. Run the CLI without `--apply`.
-3. Review the dry-run report for all three target cards.
-4. Confirm no blocker is present.
-5. Run apply only if the owner approves:
-   `npm run catalog:reconcile-legacy-assets -- --apply --confirm=WEB00-CANONICAL-ASSETS-15-7`
-6. Verify in `/admin`:
+2. Open `/admin` as an administrator.
+3. Open `Обслуживание` → `Восстановление канонических изображений`.
+4. Run dry-run with `Проверить состояние`.
+5. Review the dry-run report for all three target cards.
+6. Confirm no blocker is present and the report status is `ready`.
+7. Run apply only if the owner approves, using the exact confirmation string:
+   `WEB00-CANONICAL-ASSETS-15-7`
+8. Verify in `/admin`:
    - `mebel`, `massage`, and `drova` are still drafts;
    - `active=true`;
    - previews render;
    - four gallery images render for each card;
    - order is unchanged.
-7. Verify public API only after the owner chooses whether these drafts should remain hidden or be published later.
+9. Verify public API only after the owner chooses whether these drafts should remain hidden or be published later.
 
 Do not publish the three cards as part of reconciliation.
 

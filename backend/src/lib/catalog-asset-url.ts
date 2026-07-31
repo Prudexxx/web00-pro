@@ -2,6 +2,7 @@ export const CATALOG_PUBLIC_ASSET_BASE = "https://prudexxx.github.io/web00-pro/"
 
 const maxCatalogAssetUrlLength = 2048;
 const legacyWeb00Prefix = "/web00-pro/";
+const legacyPublicAssetPathPrefix = "/web00-pro/assets/";
 const allowedAbsoluteProtocols = new Set(["http:", "https:"]);
 const blockedSchemesPattern = /^[a-z][a-z0-9+.-]*:/i;
 const unsafeLegacyPathCharacters = /[\u0000-\u001F\u007F<>"'`{}|^[\]]/u;
@@ -70,13 +71,25 @@ function resolveAbsoluteUrl(text: string): CatalogAssetUrlResolution | null {
 }
 
 function resolveLegacyAssetPath(text: string): CatalogAssetUrlResolution | null {
-  const legacyPath = normalizeLegacyAssetPath(text);
+  const decodedPath = decodeLegacyPathFully(text);
+  if (decodedPath === null) {
+    return null;
+  }
+
+  for (const candidate of decodedPath.candidates) {
+    const candidatePath = normalizeLegacyAssetPath(candidate);
+    if (candidatePath === null || !isSafeLegacyAssetPath(candidatePath)) {
+      return null;
+    }
+  }
+
+  const legacyPath = normalizeLegacyAssetPath(decodedPath.value);
   if (legacyPath === null || !isSafeLegacyAssetPath(legacyPath)) {
     return null;
   }
 
   const url = new URL(legacyPath, CATALOG_PUBLIC_ASSET_BASE);
-  if (!url.href.startsWith(CATALOG_PUBLIC_ASSET_BASE)) {
+  if (!isFinalCatalogAssetUrl(url)) {
     return null;
   }
 
@@ -104,7 +117,13 @@ function isSafeLegacyAssetPath(path: string): boolean {
   if (!path.startsWith("assets/")) {
     return false;
   }
-  if (path.includes("\\") || path.includes(":") || unsafeLegacyPathCharacters.test(path)) {
+  if (
+    path.includes("\\") ||
+    path.includes(":") ||
+    path.includes("?") ||
+    path.includes("#") ||
+    unsafeLegacyPathCharacters.test(path)
+  ) {
     return false;
   }
   if (/\s/u.test(path)) {
@@ -113,6 +132,50 @@ function isSafeLegacyAssetPath(path: string): boolean {
 
   const segments = path.split("/");
   return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function isFinalCatalogAssetUrl(url: URL): boolean {
+  if (url.protocol !== "https:" || url.origin !== "https://prudexxx.github.io") {
+    return false;
+  }
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
+    return false;
+  }
+  if (!url.pathname.startsWith(legacyPublicAssetPathPrefix)) {
+    return false;
+  }
+
+  const relativePath = url.pathname.slice(legacyPublicAssetPathPrefix.length);
+  if (relativePath.length === 0) {
+    return false;
+  }
+
+  return relativePath
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function decodeLegacyPathFully(text: string): { candidates: string[]; value: string } | null {
+  const candidates = [text];
+  let current = text;
+
+  for (let index = 0; index < 2; index += 1) {
+    const decoded = decodeUrlComponentSafely(current);
+    if (decoded === null) {
+      return null;
+    }
+    if (decoded === current) {
+      break;
+    }
+
+    candidates.push(decoded);
+    current = decoded;
+  }
+
+  return {
+    candidates,
+    value: current
+  };
 }
 
 function decodeUrlComponentSafely(text: string): string | null {

@@ -36,7 +36,11 @@ The production baseline incident is documented in `backend/docs/incidents/2026-0
 13. Catalog legacy asset URL resolution is centralized for backend output and admin display.
 14. Admin image manager renders approved legacy `assets/...` paths through the public frontend base without changing stored data on GET/render.
 15. Public catalog mapper returns consumer-independent absolute image URLs and omits unsafe gallery URLs from public output.
-16. Guarded canonical asset reconciliation CLI is implemented for only `mebel`, `massage`, and `drova`, with dry-run default, apply confirmation, transaction/rollback, audit, and idempotency tests.
+16. Guarded canonical asset reconciliation logic targets only `mebel`, `massage`, and `drova`, with dry-run default, apply confirmation, transaction/rollback, audit, and idempotency tests.
+17. Render Free operational gap is closed by an authenticated admin-only maintenance workflow in `/admin`; the CLI remains local/test helper only.
+18. Canonical reconciliation apply now locks all three rows with `FOR UPDATE ORDER BY slug`, re-reads the locked rows, and performs a full in-transaction state comparison before any write.
+19. State changes after dry-run planning return controlled `RECONCILIATION_STATE_CHANGED` with zero reconciliation writes and zero audit rows.
+20. Legacy asset URL resolution now blocks encoded traversal, encoded separator escapes, query/hash suffixes on legacy paths, and final URL escapes outside `/web00-pro/assets/`.
 
 ## Production baseline drift
 
@@ -67,13 +71,18 @@ No Codex production repair, reconciliation apply, SQL, seed, migration, deploy, 
 Implemented in this PR:
 
 - safe resolver for absolute managed URLs and approved legacy asset paths;
+- final-path guard that keeps legacy URLs inside `https://prudexxx.github.io/web00-pro/assets/`;
 - admin image manager display fix for legacy preview/gallery URLs;
 - public API image URL normalization independent of consumer origin;
-- `npm run catalog:reconcile-legacy-assets` CLI entrypoint;
+- admin-only maintenance workflow for Render Free operation;
+- `npm run catalog:reconcile-legacy-assets` CLI entrypoint for local/test use;
 - hard target list: `mebel`, `massage`, `drova`;
 - apply guard: `--apply --confirm=WEB00-CANONICAL-ASSETS-15-7`;
+- HTTP/admin apply confirmation: `WEB00-CANONICAL-ASSETS-15-7`;
 - all-or-nothing repository contract with audit entries only for changed sites;
-- deterministic tests for dry-run, apply guards, blockers, rollback, idempotency, preservation, and safe output.
+- row locks plus full in-transaction state recheck before writes;
+- controlled `RECONCILIATION_STATE_CHANGED` failure for dry-run/apply race windows;
+- deterministic tests for dry-run, apply guards, RBAC, UI flow, blockers, rollback, idempotency, preservation, and safe output.
 
 Not performed in this PR:
 
@@ -120,10 +129,11 @@ Before live canary, the owner must:
 
 1. Review PR #7 reconciliation changes.
 2. Deploy PR #7 only after approval.
-3. Run the reconciliation CLI first in dry-run mode in the intended environment.
-4. If dry-run report is clean, run apply with the exact confirmation string.
-5. Verify `mebel`, `massage`, and `drova` remain draft/unpublished and images render.
-6. Optionally provide an isolated test PostgreSQL connection if real DB-backed tests are required before Product Final.
+3. Open `/admin` as administrator and use `Обслуживание` → `Восстановление канонических изображений`.
+4. Run the maintenance dry-run first.
+5. If dry-run report is clean, run apply with the exact confirmation string.
+6. Verify `mebel`, `massage`, and `drova` remain draft/unpublished and images render.
+7. Optionally provide an isolated test PostgreSQL connection if real DB-backed tests are required before Product Final.
 
 ## Canary status
 

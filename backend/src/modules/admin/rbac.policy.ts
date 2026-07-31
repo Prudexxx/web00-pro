@@ -19,7 +19,8 @@ export const B5_PERMISSIONS = [
   "user.read",
   "user.changeRole",
   "user.disable",
-  "user.enable"
+  "user.enable",
+  "maintenance.canonicalAssets"
 ] as const satisfies readonly B5Permission[];
 
 const EDITOR_PERMISSIONS = [

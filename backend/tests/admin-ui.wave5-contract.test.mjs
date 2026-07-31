@@ -25,7 +25,7 @@ describe("admin ui wave 5 contract", () => {
     const mainSource = readAsset("src/admin/assets/main.js");
 
     expect(visibleNavigation("editor").map((item) => item.id)).toEqual(["sites", "categories"]);
-    expect(visibleNavigation("admin").map((item) => item.id)).toEqual(["sites", "categories", "users", "audit"]);
+    expect(visibleNavigation("admin").map((item) => item.id)).toEqual(["sites", "categories", "users", "audit", "maintenance"]);
     expect(mainSource).toContain("createCategoriesScreen");
     expect(mainSource).toContain("createUsersScreen");
     expect(mainSource).toContain("createAuditScreen");

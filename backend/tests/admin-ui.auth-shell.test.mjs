@@ -653,7 +653,8 @@ describe("admin auth shell", () => {
       "Сайты",
       "Категории",
       "Пользователи",
-      "Журнал"
+      "Журнал",
+      "Обслуживание"
     ]);
     expect(shell.querySelector('[data-section="sites"]').getAttribute("aria-current")).toBe("page");
   });

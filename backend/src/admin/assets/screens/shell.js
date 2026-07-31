@@ -2,7 +2,8 @@ const NAVIGATION = Object.freeze([
   { id: "sites", label: "Сайты", roles: ["admin", "editor"] },
   { id: "categories", label: "Категории", roles: ["admin", "editor"] },
   { id: "users", label: "Пользователи", roles: ["admin"] },
-  { id: "audit", label: "Журнал", roles: ["admin"] }
+  { id: "audit", label: "Журнал", roles: ["admin"] },
+  { id: "maintenance", label: "Обслуживание", roles: ["admin"] }
 ]);
 
 const ROLE_LABELS = Object.freeze({

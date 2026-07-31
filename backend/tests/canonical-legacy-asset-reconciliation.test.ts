@@ -5,6 +5,7 @@ import {
   CANONICAL_LEGACY_ASSET_TARGET_SLUGS,
   formatCanonicalAssetReconciliationReport,
   reconcileCanonicalLegacyAssets,
+  ReconciliationStateChangedError,
   type CanonicalLegacyAssetTargetSlug,
   type CanonicalAssetReconciliationRepository,
   type CanonicalAssetReconciliationSite
@@ -153,6 +154,64 @@ describe("canonical legacy asset reconciliation", () => {
     }
   });
 
+  it("passes all three expected sites to apply in deterministic lock order before writing", async () => {
+    const repo = createFakeRepository();
+
+    await reconcileCanonicalLegacyAssets({
+      apply: true,
+      catalog,
+      confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
+      context: operationContext,
+      repository: repo
+    });
+
+    expect(repo.lastExpectedSiteSlugs).toEqual(["drova", "massage", "mebel"]);
+    expect(repo.events.slice(0, 6)).toEqual([
+      "lock:drova",
+      "lock:massage",
+      "lock:mebel",
+      "recheck:drova",
+      "recheck:massage",
+      "recheck:mebel"
+    ]);
+    expect(repo.events.findIndex((event) => event.startsWith("update:"))).toBeGreaterThan(
+      repo.events.findIndex((event) => event === "recheck:mebel")
+    );
+  });
+
+  it.each([
+    ["title changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.title = "Changed title"; }],
+    ["category changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.categorySlug = "services"; }],
+    ["preview changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.previewImageUrl = "https://storage.example.test/race.webp"; }],
+    ["gallery URL changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.galleryImages[0]!.url = "https://storage.example.test/race-gallery.webp"; }],
+    ["gallery alt changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.galleryImages[0]!.alt = "Changed alt"; }],
+    ["gallery order changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.galleryImages[0]!.sortOrder = 99; }],
+    ["site is published after dry-run", (site: CanonicalAssetReconciliationSite) => { site.status = "published"; site.publishedAt = "2026-07-31T12:00:00.000Z"; }],
+    ["site is deleted after dry-run", (site: CanonicalAssetReconciliationSite) => { site.deletedAt = "2026-07-31T12:00:00.000Z"; }],
+    ["site is disabled after dry-run", (site: CanonicalAssetReconciliationSite) => { site.active = false; }]
+  ])("%s returns RECONCILIATION_STATE_CHANGED with zero reconciliation writes", async (_label, mutateSite) => {
+    const repo = createFakeRepository({
+      mutateBeforeApply: (sites) => {
+        mutateSite(repo.site("mebel"));
+        expect(sites).toBe(repo.sites);
+      }
+    });
+
+    const report = await reconcileCanonicalLegacyAssets({
+      apply: true,
+      catalog,
+      confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
+      context: operationContext,
+      repository: repo
+    });
+
+    expect(report.status).toBe("blocked");
+    expect(report.blockers).toContain("RECONCILIATION_STATE_CHANGED");
+    expect(report.message).toBe("Данные карточек изменились. Повторите проверку состояния.");
+    expect(repo.mutationWrites).toBe(0);
+    expect(repo.auditRows).toHaveLength(0);
+  });
+
   it("preserves assetId, storage metadata, alt/order, lifecycle fields, and identity fields", async () => {
     const repo = createFakeRepository();
     const before = snapshotSites(repo.sites);
@@ -296,19 +355,27 @@ describe("canonical legacy asset reconciliation", () => {
 
 function createFakeRepository(options: {
   failOnChangeIndex?: number;
+  mutateBeforeApply?: (sites: CanonicalAssetReconciliationSite[]) => void;
   sites?: CanonicalAssetReconciliationSite[];
 } = {}): CanonicalAssetReconciliationRepository & {
   auditRows: FakeAuditRow[];
+  events: string[];
+  lastExpectedSiteSlugs: string[];
   lastRequestedSlugs: string[];
+  mutationWrites: number;
   site(slug: string): CanonicalAssetReconciliationSite;
   sites: CanonicalAssetReconciliationSite[];
   writeAttempts: number;
 } {
   const state = cloneSites(options.sites ?? createCanonicalSites());
   const auditRows: FakeAuditRow[] = [];
+  const events: string[] = [];
   const repo = {
     auditRows,
+    events,
+    lastExpectedSiteSlugs: [] as string[],
     lastRequestedSlugs: [] as string[],
+    mutationWrites: 0,
     sites: state,
     writeAttempts: 0,
     async findSitesBySlugs(slugs: readonly string[]) {
@@ -320,6 +387,18 @@ function createFakeRepository(options: {
       const beforeSites = cloneSites(state);
       const beforeAudit = [...auditRows];
       try {
+        repo.lastExpectedSiteSlugs = input.expectedSites.map((site) => site.slug);
+        for (const expected of input.expectedSites) {
+          events.push(`lock:${expected.slug}`);
+        }
+        options.mutateBeforeApply?.(state);
+        for (const expected of input.expectedSites) {
+          events.push(`recheck:${expected.slug}`);
+          const current = state.find((site) => site.slug === expected.slug);
+          if (current === undefined || JSON.stringify(normalizeSiteForComparison(current)) !== JSON.stringify(normalizeSiteForComparison(expected))) {
+            throw new ReconciliationStateChangedError();
+          }
+        }
         input.changes.forEach((change, index) => {
           if (options.failOnChangeIndex === index) {
             throw new Error("simulated write failure");
@@ -328,8 +407,10 @@ function createFakeRepository(options: {
           if (target === undefined) {
             throw new Error("site missing during write");
           }
+          events.push(`update:${change.slug}`);
           target.previewImageUrl = change.after.previewImageUrl;
           target.galleryImages = cloneGallery(change.after.galleryImages);
+          repo.mutationWrites += 1;
           auditRows.push({
             action: "site.reconcile_canonical_assets",
             afterJson: change.audit.afterJson,
@@ -342,6 +423,7 @@ function createFakeRepository(options: {
       } catch (error) {
         state.splice(0, state.length, ...beforeSites);
         auditRows.splice(0, auditRows.length, ...beforeAudit);
+        repo.mutationWrites = 0;
         throw error;
       }
     },
@@ -354,13 +436,23 @@ function createFakeRepository(options: {
     }
   } satisfies CanonicalAssetReconciliationRepository & {
     auditRows: FakeAuditRow[];
+    events: string[];
+    lastExpectedSiteSlugs: string[];
     lastRequestedSlugs: string[];
+    mutationWrites: number;
     site(slug: string): CanonicalAssetReconciliationSite;
     sites: CanonicalAssetReconciliationSite[];
     writeAttempts: number;
   };
 
   return repo;
+}
+
+function normalizeSiteForComparison(site: CanonicalAssetReconciliationSite): CanonicalAssetReconciliationSite {
+  return {
+    ...site,
+    galleryImages: cloneGallery(site.galleryImages)
+  };
 }
 
 function createCanonicalSites(): CanonicalAssetReconciliationSite[] {

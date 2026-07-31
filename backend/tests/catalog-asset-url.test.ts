@@ -65,4 +65,18 @@ describe("catalog asset URL resolver", () => {
       expect(resolveCatalogAssetUrl(value), value).toBeNull();
     }
   });
+
+  it("rejects encoded traversal, encoded separators, and legacy query/hash suffixes after final URL normalization", () => {
+    for (const value of [
+      "assets/%2e%2e/file.png",
+      "assets/%252e%252e/file.png",
+      "assets/a/%2e%2e/file.png",
+      "assets/%2fweb00-pro/assets/file.png",
+      "assets/%255cprivate.png",
+      "assets/img/previews/mebel-home.png?cache=1",
+      "assets/img/previews/mebel-home.png#preview"
+    ]) {
+      expect(resolveCatalogAssetUrl(value), value).toBeNull();
+    }
+  });
 });
