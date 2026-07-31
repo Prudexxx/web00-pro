@@ -858,10 +858,9 @@ describe("admin site editor screen", () => {
 
     await screen.load();
     expect(screen.element.textContent).toContain("Изображения — необязательно");
-    expect(screen.element.textContent).toContain("Описание preview изображения");
-    expect(screen.element.textContent).toContain("Описание gallery изображений");
-    expect(screen.element.textContent).not.toContain("Alt для preview");
-    expect(screen.element.textContent).not.toContain("Alt для gallery");
+    expect(userFacingCopy(screen.element)).toContain("Описание главного изображения");
+    expect(userFacingCopy(screen.element)).toContain("Общее описание изображений галереи");
+    expect(userFacingCopy(screen.element)).not.toMatch(/\bAlt\b|preview|gallery|batch/i);
     setValue(screen.element, "title", "Image validation");
     setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
     setValue(screen.element, "shortDescription", "Short");
@@ -1097,14 +1096,14 @@ describe("admin site editor screen", () => {
     await waitFor(() => screen.element.textContent.includes("Карточка сохранена. Часть изображений не загрузилась."));
 
     expect(screen.element.textContent).toContain("1 успешно");
-    expect(screen.element.textContent).toContain("2 ошибка");
+    expect(screen.element.textContent).toContain("2 ошибки");
     expect(screen.element.textContent).toContain("req_preview_timeout");
     expect(screen.element.textContent).toContain("Успешно загружено");
-    expect(screen.element.textContent).toContain("Gallery: ok.webp");
+    expect(screen.element.textContent).toContain("Изображение галереи: ok.webp");
     expect(screen.element.textContent).toContain("Не загрузилось");
-    expect(screen.element.textContent).toContain("Preview: preview.png");
+    expect(screen.element.textContent).toContain("Главное изображение: preview.png");
     expect(screen.element.textContent).toContain("Сервер не ответил вовремя.");
-    expect(screen.element.textContent).toContain("Gallery: retry.webp");
+    expect(screen.element.textContent).toContain("Изображение галереи: retry.webp");
     expect(screen.element.textContent).toContain("Too large.");
     expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
 
@@ -1126,6 +1125,151 @@ describe("admin site editor screen", () => {
     ]);
     expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
     await waitFor(() => screen.element.textContent.includes("Карточка и изображения сохранены."));
+  });
+
+  it("carries requestId from a successful partial gallery batch envelope and retries only the two failed files", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    let galleryAttempts = 0;
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000999",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.endsWith("/images/preview")) {
+          return Promise.resolve({ data: { previewImage: { assetId: "preview-ok" } } });
+        }
+        if (requestPath.endsWith("/images/gallery/batch")) {
+          galleryAttempts += 1;
+          const metadata = JSON.parse(options.body.get("metadata"));
+
+          if (galleryAttempts > 1) {
+            return Promise.resolve({
+              data: {
+                failed: [],
+                succeeded: metadata.map((item, index) => ({
+                  clientFileId: item.clientFileId,
+                  image: { assetId: `gallery-retry-ok-${index}` },
+                  index,
+                  replayed: false
+                }))
+              },
+              requestId: "req_gallery_retry"
+            });
+          }
+
+          return Promise.resolve({
+            data: {
+              failed: [
+                {
+                  clientFileId: "00000000-0000-4000-8000-000000000404",
+                  code: "IMAGE_TOO_LARGE",
+                  index: 3,
+                  message: "Файл должен быть не больше 5 MB."
+                },
+                {
+                  clientFileId: "00000000-0000-4000-8000-000000000405",
+                  code: "STORAGE_UPLOAD_FAILED",
+                  index: 4,
+                  message: "Не удалось загрузить изображение.",
+                  requestId: "req_gallery_file_5"
+                }
+              ],
+              succeeded: [0, 1, 2].map((index) => ({
+                clientFileId: `00000000-0000-4000-8000-00000000040${index + 1}`,
+                image: { assetId: `gallery-ok-${index}` },
+                index,
+                replayed: false
+              }))
+            },
+            requestId: "req_gallery_partial"
+          });
+        }
+        throw new Error(`Unexpected multipart path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onImages: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      uuidFactory: createUuidSequence([
+        "00000000-0000-4000-8000-000000000301",
+        "00000000-0000-4000-8000-000000000401",
+        "00000000-0000-4000-8000-000000000402",
+        "00000000-0000-4000-8000-000000000403",
+        "00000000-0000-4000-8000-000000000404",
+        "00000000-0000-4000-8000-000000000405"
+      ])
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Gallery partial request");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    const retryGalleryFiles = [
+      imageFile("gallery-1.webp", "image/webp", 12),
+      imageFile("gallery-2.webp", "image/webp", 12),
+      imageFile("gallery-3.webp", "image/webp", 12),
+      imageFile("gallery-4.webp", "image/webp", 12),
+      imageFile("gallery-5.webp", "image/webp", 12)
+    ];
+    setFiles(screen.element, "previewImage", [imageFile("main.png", "image/png", 12)]);
+    setFiles(screen.element, "galleryBatchImages", retryGalleryFiles);
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+    await waitFor(() => screen.element.textContent.includes("Карточка сохранена. Часть изображений не загрузилась."));
+
+    expect(screen.element.textContent).toContain("4 успешно");
+    expect(screen.element.textContent).toContain("2 ошибки");
+    for (const fileName of [
+      "main.png",
+      "gallery-1.webp",
+      "gallery-2.webp",
+      "gallery-3.webp",
+      "gallery-4.webp",
+      "gallery-5.webp"
+    ]) {
+      expect(screen.element.textContent).toContain(fileName);
+    }
+    expect(screen.element.textContent).toContain("Файл должен быть не больше 5 MB.");
+    expect(screen.element.textContent).toContain("Не удалось загрузить изображение.");
+    expect(screen.element.textContent).toContain("req_gallery_partial");
+    expect(screen.element.textContent).toContain("req_gallery_file_5");
+    expect(screen.element.textContent).toContain("Скопировать requestId");
+    expect(screen.element.textContent).not.toMatch(/prisma|sql|storage\/v1/i);
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+
+    screen.element.querySelector('[data-action="retry-image-upload"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => requests.filter((request) => request.requestPath.endsWith("/images/gallery/batch")).length === 2);
+
+    const galleryRequests = requests.filter((request) => request.requestPath.endsWith("/images/gallery/batch"));
+    expect(JSON.parse(galleryRequests[1].options.body.get("metadata")).map((item) => item.clientFileId)).toEqual([
+      "00000000-0000-4000-8000-000000000404",
+      "00000000-0000-4000-8000-000000000405"
+    ]);
+    expect(galleryRequests[1].options.body.getAll("images")).toHaveLength(2);
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
   });
 
   it("uses the readiness attempt timeout for save preflight without changing ordinary GET timeout", async () => {
@@ -1737,6 +1881,23 @@ async function waitFor(predicate) {
     });
   }
   throw new Error("Timed out waiting for admin editor work.");
+}
+
+function userFacingCopy(root) {
+  return [
+    ...root.querySelectorAll("label"),
+    ...root.querySelectorAll("button"),
+    ...root.querySelectorAll("h2"),
+    ...root.querySelectorAll("h3"),
+    ...root.querySelectorAll("legend"),
+    ...root.querySelectorAll("p").filter((node) => {
+      const className = node.getAttribute("class") ?? "";
+
+      return className.includes("admin-field-help") ||
+        className.includes("admin-state") ||
+        className.includes("admin-upload-selection");
+    })
+  ].map((node) => node.textContent).join(" ");
 }
 
 async function flushPromises() {

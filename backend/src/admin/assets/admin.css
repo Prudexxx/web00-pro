@@ -618,12 +618,16 @@ textarea {
 }
 
 .admin-gallery-item {
-  grid-template-rows: minmax(140px, auto) auto minmax(42px, auto) auto minmax(38px, auto);
-  align-content: start;
+  grid-template-areas:
+    "image"
+    "legacy-marker"
+    "metadata"
+    "actions";
+  align-content: stretch;
 }
 
 .admin-preview-card img,
-.admin-gallery-item img {
+.admin-gallery-image-area img {
   width: 100%;
   aspect-ratio: 16 / 10;
   max-height: 220px;
@@ -633,10 +637,38 @@ textarea {
   background: #ffffff;
 }
 
+.admin-gallery-image-area {
+  grid-area: image;
+  display: grid;
+  align-items: start;
+  min-height: 140px;
+  min-width: 0;
+}
+
+.admin-gallery-legacy-marker {
+  grid-area: legacy-marker;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 22px;
+  min-width: 0;
+}
+
+.admin-gallery-metadata {
+  grid-area: metadata;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 42px;
+  min-width: 0;
+}
+
 .admin-gallery-item-actions {
+  grid-area: actions;
   display: flex;
   align-items: flex-end;
   min-height: 38px;
+  margin-top: auto;
 }
 
 .admin-upload-form {

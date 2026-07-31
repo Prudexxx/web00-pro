@@ -31,10 +31,10 @@ describe("admin shared site image upload helpers", () => {
       "Файл должен быть не больше 5 MB."
     );
     expect(() => validateBatch(Array.from({ length: 11 }, (_, index) => imageFile(`${index}.png`, "image/png", 12)))).toThrow(
-      "Gallery batch должен содержать не больше 10 файлов."
+      "Можно выбрать не больше 10 изображений за раз."
     );
     expect(() => validateBatch(Array.from({ length: 7 }, (_, index) => imageFile(`large-${index}.png`, "image/png", IMAGE_UPLOAD_LIMITS.fileBytes)))).toThrow(
-      "Gallery batch должен быть не больше 30 MB."
+      "Общий размер выбранных изображений должен быть не больше 30 MB."
     );
   });
 

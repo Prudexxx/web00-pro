@@ -77,7 +77,7 @@ export function createImageManagerScreen(options) {
               }),
               createElement("h2", {
                 documentRef,
-                text: "Preview и gallery"
+                text: "Главное изображение и галерея"
               })
             ]
           }),
@@ -194,13 +194,13 @@ export function createImageManagerScreen(options) {
       children: [
         createElement("h3", {
           documentRef,
-          text: "Preview"
+          text: "Главное изображение"
         }),
         previewUrl === null
           ? createElement("p", {
               documentRef,
               className: "admin-state",
-              text: "Preview не задан."
+              text: "Главное изображение не задано."
             })
           : createElement("div", {
               documentRef,
@@ -225,7 +225,7 @@ export function createImageManagerScreen(options) {
         ] : []),
         ...(canDelete && previewUrl !== null ? [createElement("button", {
             documentRef,
-            text: "Удалить preview",
+            text: "Удалить главное изображение",
             attributes: {
               "data-action": "delete-preview",
               type: "button"
@@ -267,12 +267,12 @@ export function createImageManagerScreen(options) {
         "data-action": "replace-preview"
       },
       children: [
-        labeled("Preview файл", fileInput),
-        labeled("Описание preview изображения", altInput),
+        labeled("Главное изображение", fileInput),
+        labeled("Описание главного изображения", altInput),
         selection,
         createElement("button", {
           documentRef,
-          text: "Заменить preview",
+          text: "Заменить главное изображение",
           attributes: {
             type: "submit"
           }
@@ -299,13 +299,13 @@ export function createImageManagerScreen(options) {
       children: [
         createElement("h3", {
           documentRef,
-          text: "Gallery"
+          text: "Галерея"
         }),
         gallery.length === 0
           ? createElement("p", {
               documentRef,
               className: "admin-state",
-              text: "Gallery пустая."
+              text: "Галерея пустая."
             })
           : createGalleryList(gallery, canMutate, canDelete),
         ...(canMutate ? [
@@ -332,6 +332,19 @@ export function createImageManagerScreen(options) {
   function createGalleryItem(image, canDelete) {
     const imageResolution = resolveImageUrl(image.url);
     const imageUrl = imageResolution?.url ?? null;
+    const imageNode = imageUrl === null
+      ? createElement("p", {
+          documentRef,
+          className: "admin-state",
+          text: "URL изображения недоступен."
+        })
+      : createElement("img", {
+          documentRef,
+          attributes: {
+            alt: image.alt ?? "",
+            src: imageUrl
+          }
+        });
 
     return createElement("article", {
       documentRef,
@@ -340,31 +353,45 @@ export function createImageManagerScreen(options) {
         "data-gallery-asset": image.assetId
       },
       children: [
-        imageUrl === null
-          ? createElement("p", {
-              documentRef,
-              className: "admin-state",
-              text: "URL изображения недоступен."
-            })
-          : createElement("img", {
-              documentRef,
-              attributes: {
-                alt: image.alt ?? "",
-                src: imageUrl
-              }
-            }),
-        ...legacyAssetMarker(imageResolution, documentRef),
-        createElement("p", {
+        createElement("div", {
           documentRef,
-          text: image.alt ?? ""
+          className: "admin-gallery-image-area",
+          attributes: {
+            "data-gallery-area": "image"
+          },
+          children: [imageNode]
         }),
-        createElement("p", {
+        createElement("div", {
           documentRef,
-          text: `Порядок: ${image.sortOrder ?? 0}`
+          className: "admin-gallery-legacy-marker",
+          attributes: {
+            "data-gallery-area": "legacy-marker"
+          },
+          children: legacyAssetMarker(imageResolution, documentRef)
+        }),
+        createElement("div", {
+          documentRef,
+          className: "admin-gallery-metadata",
+          attributes: {
+            "data-gallery-area": "metadata"
+          },
+          children: [
+            createElement("p", {
+              documentRef,
+              text: image.alt ?? ""
+            }),
+            createElement("p", {
+              documentRef,
+              text: `Порядок: ${image.sortOrder ?? 0}`
+            })
+          ]
         }),
         createElement("div", {
           documentRef,
           className: "admin-gallery-item-actions",
+          attributes: {
+            "data-gallery-area": "actions"
+          },
           children: canDelete ? [
             createElement("button", {
               documentRef,
@@ -472,8 +499,8 @@ export function createImageManagerScreen(options) {
         "data-action": "add-gallery-single"
       },
       children: [
-        labeled("Gallery файл", fileInput),
-        labeled("Описание gallery изображения", altInput),
+        labeled("Изображение галереи", fileInput),
+        labeled("Описание изображения", altInput),
         selection,
         createElement("button", {
           documentRef,
@@ -525,12 +552,12 @@ export function createImageManagerScreen(options) {
         "data-action": "add-gallery-batch"
       },
       children: [
-        labeled("Batch файлы", fileInput),
-        labeled("Описание batch изображений", altInput),
+        labeled("Выбрать несколько изображений", fileInput),
+        labeled("Общее описание выбранных изображений", altInput),
         selection,
         createElement("button", {
           documentRef,
-          text: "Загрузить batch",
+          text: "Загрузить выбранные изображения",
           attributes: {
             type: "submit"
           }
@@ -555,7 +582,7 @@ export function createImageManagerScreen(options) {
     }
 
     try {
-      const file = readSingleFile(fileInput, "preview");
+      const file = readSingleFile(fileInput, "Главное");
       const alt = normalizeAlt(altInput.value);
       validateImageFile(file);
       const response = await apiClient.requestMultipart(buildImagePath(siteId, "preview"), {
@@ -578,7 +605,7 @@ export function createImageManagerScreen(options) {
       };
       onSiteUpdated(currentSite);
       render();
-      setStatus("Preview обновлён.");
+      setStatus("Главное изображение обновлено.");
     } catch (error) {
       showInlineError(error);
       selection.textContent = selectedNames(fileInput.files);
@@ -594,7 +621,7 @@ export function createImageManagerScreen(options) {
     }
 
     try {
-      const file = readSingleFile(fileInput, "gallery");
+      const file = readSingleFile(fileInput, "Галерейное");
       const alt = normalizeAlt(altInput.value);
       validateImageFile(file);
       assertGalleryCapacity(readGallery(currentSite), 1);
@@ -616,7 +643,7 @@ export function createImageManagerScreen(options) {
       };
       onSiteUpdated(currentSite);
       render();
-      setStatus("Gallery изображение добавлено.");
+      setStatus("Изображение галереи добавлено.");
     } catch (error) {
       showInlineError(error);
       selection.textContent = selectedNames(fileInput.files);
@@ -697,7 +724,7 @@ export function createImageManagerScreen(options) {
       };
       onSiteUpdated(currentSite);
       render();
-      setStatus("Gallery порядок сохранён.");
+      setStatus("Порядок галереи сохранён.");
     } catch (error) {
       showInlineError(error);
     } finally {
@@ -707,8 +734,8 @@ export function createImageManagerScreen(options) {
 
   function openDeletePreviewDialog(invoker) {
     openDialog({
-      confirmLabel: "Удалить preview",
-      description: `Удалить preview сайта ${currentSite?.title ?? currentSite?.slug ?? siteId}.`,
+      confirmLabel: "Удалить главное изображение",
+      description: `Удалить главное изображение сайта ${currentSite?.title ?? currentSite?.slug ?? siteId}.`,
       onConfirm: async () => {
         await apiClient.requestJson(buildImagePath(siteId, "preview"), {
           method: "DELETE"
@@ -724,16 +751,16 @@ export function createImageManagerScreen(options) {
         };
         onSiteUpdated(currentSite);
         render();
-        setStatus("Preview удалён.");
+        setStatus("Главное изображение удалено.");
       },
-      title: "Удалить preview"
+      title: "Удалить главное изображение"
     }, invoker);
   }
 
   function openDeleteGalleryDialog(image, invoker) {
     openDialog({
       confirmLabel: "Удалить изображение",
-      description: `Удалить gallery image ${image.alt ?? image.assetId}.`,
+      description: `Удалить изображение галереи ${image.alt ?? image.assetId}.`,
       onConfirm: async () => {
         const response = await apiClient.requestJson(buildImagePath(siteId, "gallery-item", image.assetId), {
           method: "DELETE"
@@ -748,7 +775,7 @@ export function createImageManagerScreen(options) {
         };
         onSiteUpdated(currentSite);
         render();
-        setStatus("Gallery изображение удалено.");
+        setStatus("Изображение галереи удалено.");
       },
       title: "Удалить изображение"
     }, invoker);
@@ -827,8 +854,8 @@ export function createImageManagerScreen(options) {
     const succeeded = Array.isArray(result.succeeded) ? result.succeeded : [];
     const failed = Array.isArray(result.failed) ? result.failed : [];
     const statusText = failed.length > 0
-      ? `Частично загружено: ${succeeded.length} успешно, ${failed.length} ошибка.`
-      : `Batch загружен: ${succeeded.length} успешно.`;
+      ? `Частично загружено: ${succeeded.length} успешно, ${failed.length} ${formatImageErrorCount(failed.length)}.`
+      : `Выбранные изображения загружены: ${succeeded.length} успешно.`;
     const children = [
       createElement("span", {
         documentRef,
@@ -974,6 +1001,24 @@ function safeMessage(error) {
   }
 
   return "Не удалось выполнить действие.";
+}
+
+function formatImageErrorCount(count) {
+  const value = Math.abs(Number(count) || 0);
+  const lastTwoDigits = value % 100;
+  const lastDigit = value % 10;
+
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) {
+    return "ошибок";
+  }
+  if (lastDigit === 1) {
+    return "ошибка";
+  }
+  if (lastDigit >= 2 && lastDigit <= 4) {
+    return "ошибки";
+  }
+
+  return "ошибок";
 }
 
 function imageErrorMessage(error) {

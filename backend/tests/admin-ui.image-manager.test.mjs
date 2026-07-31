@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -25,10 +26,10 @@ describe("admin image manager screen", () => {
     await screen.load();
 
     expect(screen.element.textContent).toContain("CRM Site");
-    expect(screen.element.textContent).toContain("Описание preview изображения");
-    expect(screen.element.textContent).toContain("Описание gallery изображения");
-    expect(screen.element.textContent).toContain("Описание batch изображений");
-    expect(screen.element.textContent).not.toContain("Alt для batch");
+    expect(userFacingCopy(screen.element)).toContain("Описание главного изображения");
+    expect(userFacingCopy(screen.element)).toContain("Описание изображения");
+    expect(userFacingCopy(screen.element)).toContain("Общее описание выбранных изображений");
+    expect(userFacingCopy(screen.element)).not.toMatch(/\bAlt\b|preview|gallery|batch/i);
     expect(screen.element.querySelector("img")).toBeNull();
     expect(screen.element.querySelector('[data-action="replace-preview"]')).not.toBeNull();
     expect(canManageImages(siteFixture({ status: "draft" }), "editor")).toBe(true);
@@ -100,6 +101,9 @@ describe("admin image manager screen", () => {
     expect(screen.element.querySelector('[data-action="reorder-gallery"]')).toBeNull();
     expect(screen.element.querySelector('[data-action="delete-preview"]')).not.toBeNull();
     expect(screen.element.querySelector('[data-action="delete-gallery-image"]')).not.toBeNull();
+    expect(screen.element.querySelector('[data-gallery-area="image"]')).not.toBeNull();
+    expect(screen.element.querySelector('[data-gallery-area="metadata"]')).not.toBeNull();
+    expect(screen.element.querySelector('[data-gallery-area="actions"]')).not.toBeNull();
 
     screen.element.querySelector('[data-action="delete-preview"]').dispatchEvent(fakeEvent("click"));
     screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
@@ -110,6 +114,61 @@ describe("admin image manager screen", () => {
     await waitFor(() => requests.some((request) => request.requestPath.includes("/images/gallery/") && request.options.method === "DELETE"));
 
     expect(apiClient.requestMultipart).not.toHaveBeenCalled();
+  });
+
+  it("uses explicit gallery card regions for managed, legacy, missing-image, and cleanup-only cards", async () => {
+    const documentRef = createFakeDocument();
+    const managed = galleryFixture({
+      alt: "Managed ".repeat(40),
+      assetId: "00000000-0000-4000-8000-000000000201",
+      url: "https://storage.example.test/gallery-managed.webp"
+    });
+    const legacy = galleryFixture({
+      alt: "Legacy",
+      assetId: "00000000-0000-4000-8000-000000000202",
+      url: "assets/img/solution-gallery/mebel-01.png"
+    });
+    const missing = galleryFixture({
+      alt: "Missing",
+      assetId: "00000000-0000-4000-8000-000000000203",
+      url: "javascript:alert(1)"
+    });
+    const screen = createImageManagerScreen({
+      apiClient: createImageApi(siteFixture({
+        galleryImages: [managed, legacy, missing]
+      })),
+      documentRef,
+      onBack: vi.fn(),
+      onSiteUpdated: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+
+    const cards = screen.element.querySelectorAll("[data-gallery-asset]");
+    expect(cards).toHaveLength(3);
+    expect(cards.map((card) => card.children.map((child) => child.getAttribute?.("data-gallery-area")))).toEqual([
+      ["image", "legacy-marker", "metadata", "actions"],
+      ["image", "legacy-marker", "metadata", "actions"],
+      ["image", "legacy-marker", "metadata", "actions"]
+    ]);
+    expect(cards[0].querySelector('[data-gallery-area="image"]').querySelector("img")).not.toBeNull();
+    expect(cards[1].querySelector('[data-gallery-area="legacy-marker"]').textContent).toContain("Изображение из публичного каталога");
+    expect(cards[2].querySelector('[data-gallery-area="image"]').textContent).toContain("URL изображения недоступен.");
+    for (const card of cards) {
+      expect(card.querySelector('[data-gallery-area="metadata"]').textContent).toContain("Порядок:");
+      expect(card.querySelector('[data-gallery-area="actions"]').querySelector('[data-action="delete-gallery-image"]')).not.toBeNull();
+    }
+
+    const css = readFileSync(new URL("../src/admin/assets/admin.css", import.meta.url), "utf8");
+    expect(css).toContain("grid-template-areas");
+    expect(css).toContain("admin-gallery-image-area");
+    expect(css).toContain("admin-gallery-metadata");
+    expect(css).toContain("admin-gallery-legacy-marker");
+    expect(css).toContain("admin-gallery-item-actions");
+    expect(css).not.toMatch(/\.admin-gallery-item\s*\{[^}]*grid-template-rows/s);
   });
 
   it("renders canonical legacy preview and gallery URLs through the public frontend base without changing mutation payloads", async () => {
@@ -816,6 +875,23 @@ async function waitFor(predicate) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   throw new Error("Timed out waiting for image manager work.");
+}
+
+function userFacingCopy(root) {
+  return [
+    ...root.querySelectorAll("label"),
+    ...root.querySelectorAll("button"),
+    ...root.querySelectorAll("h2"),
+    ...root.querySelectorAll("h3"),
+    ...root.querySelectorAll("legend"),
+    ...root.querySelectorAll("p").filter((node) => {
+      const className = node.getAttribute("class") ?? "";
+
+      return className.includes("admin-field-help") ||
+        className.includes("admin-state") ||
+        className.includes("admin-upload-selection");
+    })
+  ].map((node) => node.textContent).join(" ");
 }
 
 async function flushPromises() {
