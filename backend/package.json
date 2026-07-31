@@ -10,6 +10,7 @@
     "build": "npm run prisma:generate && tsc -p tsconfig.build.json && node scripts/copy-admin-assets.mjs",
     "start": "node dist/server.js",
     "admin:bootstrap": "node dist/cli/admin-bootstrap.command.js",
+    "catalog:reconcile-legacy-assets": "node dist/cli/reconcile-canonical-legacy-assets.js",
     "storage:bootstrap": "node dist/cli/storage-bootstrap.command.js",
     "storage:cleanup": "node dist/cli/storage-cleanup.command.js",
     "user:create": "node dist/cli/user-create.command.js",

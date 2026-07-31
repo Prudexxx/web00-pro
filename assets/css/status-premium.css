@@ -61,8 +61,7 @@ body[data-page="status"] .btn--secondary {
 }
 
 body[data-page="status"] .side-contact,
-body[data-page="status"] .mobile-cta,
-body[data-page="status"] .footer [data-open-bug] {
+body[data-page="status"] .mobile-cta {
   display: none;
 }
 

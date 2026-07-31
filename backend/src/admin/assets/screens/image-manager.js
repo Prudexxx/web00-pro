@@ -6,6 +6,7 @@ import {
   setBusy
 } from "../dom.js";
 import { createConfirmationDialog } from "../dialog.js";
+import { resolveCatalogAssetUrl } from "../catalog-asset-url.js";
 import {
   IMAGE_UPLOAD_LIMITS,
   assertGalleryCapacity,
@@ -14,6 +15,7 @@ import {
   buildPreviewFormData,
   createRandomUuid,
   normalizeAlt,
+  normalizeGalleryBatchResult,
   readSingleFile,
   selectedNames,
   supportedImageTypes,
@@ -175,7 +177,8 @@ export function createImageManagerScreen(options) {
   }
 
   function createPreviewSection(canMutate) {
-    const previewUrl = normalizeImageUrl(currentSite?.previewImage?.url ?? currentSite?.previewImageUrl);
+    const previewResolution = resolveImageUrl(currentSite?.previewImage?.url ?? currentSite?.previewImageUrl);
+    const previewUrl = previewResolution?.url ?? null;
 
     return createElement("section", {
       documentRef,
@@ -205,7 +208,8 @@ export function createImageManagerScreen(options) {
                 createElement("p", {
                   documentRef,
                   text: previewUrl
-                })
+                }),
+                ...legacyAssetMarker(previewResolution, documentRef)
               ]
             }),
         ...(canMutate ? [
@@ -318,7 +322,8 @@ export function createImageManagerScreen(options) {
   }
 
   function createGalleryItem(image, canMutate) {
-    const imageUrl = normalizeImageUrl(image.url);
+    const imageResolution = resolveImageUrl(image.url);
+    const imageUrl = imageResolution?.url ?? null;
 
     return createElement("article", {
       documentRef,
@@ -340,6 +345,7 @@ export function createImageManagerScreen(options) {
                 src: imageUrl
               }
             }),
+        ...legacyAssetMarker(imageResolution, documentRef),
         createElement("p", {
           documentRef,
           text: image.alt ?? ""
@@ -629,7 +635,10 @@ export function createImageManagerScreen(options) {
         return;
       }
 
-      const result = response?.data ?? { failed: [], succeeded: [] };
+      const result = normalizeGalleryBatchResult(response?.data, {
+        clientFileIds,
+        files
+      });
       currentSite = {
         ...currentSite,
         galleryImages: [
@@ -904,24 +913,20 @@ function readGallery(site) {
   return Array.isArray(site?.galleryImages) ? site.galleryImages : [];
 }
 
-function normalizeImageUrl(value) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
+function resolveImageUrl(value) {
+  return resolveCatalogAssetUrl(value);
+}
 
-  const text = value.trim();
-  if (text.startsWith("/") && !text.startsWith("//")) {
-    return text;
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(text);
-  } catch {
-    return null;
-  }
-
-  return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+function legacyAssetMarker(resolution, documentRef) {
+  return resolution?.source === "legacy"
+    ? [
+        createElement("p", {
+          documentRef,
+          className: "admin-image-origin",
+          text: "Изображение из публичного каталога"
+        })
+      ]
+    : [];
 }
 
 function parseNonNegativeInteger(value, fieldName) {

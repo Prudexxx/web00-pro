@@ -44,7 +44,7 @@ export function readSiteFormDraft(storage, key) {
 
 export function writeSiteFormDraft(storage, key, draft) {
   if (!isStorageLike(storage)) {
-    return;
+    return false;
   }
 
   const fields = sanitizeFields(draft?.fields);
@@ -60,12 +60,24 @@ export function writeSiteFormDraft(storage, key, draft) {
     updatedAt: typeof draft?.updatedAt === "string" ? draft.updatedAt : new Date().toISOString()
   };
 
-  storage.setItem(key, JSON.stringify(payload));
+  try {
+    storage.setItem(key, JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function removeSiteFormDraft(storage, key) {
-  if (isStorageLike(storage)) {
+  if (!isStorageLike(storage)) {
+    return false;
+  }
+
+  try {
     storage.removeItem(key);
+    return true;
+  } catch {
+    return false;
   }
 }
 

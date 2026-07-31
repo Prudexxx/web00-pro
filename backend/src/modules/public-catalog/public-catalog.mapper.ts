@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  resolveCatalogAssetUrl,
+  toCatalogAssetUrl
+} from "../../lib/catalog-asset-url.js";
 import { AppError } from "../../lib/errors.js";
 import type { ManagedImageUrlPolicy } from "../images/image.types.js";
 import type {
@@ -56,6 +60,7 @@ export function mapSiteSummary(
   imageUrlPolicy?: ManagedImageUrlPolicy
 ): PublicSiteSummary {
   const siteId = typeof record.id === "string" ? record.id : "";
+  const previewImageUrl = toCatalogAssetUrl(record.previewImageUrl);
 
   return {
     category: {
@@ -81,7 +86,7 @@ export function mapSiteSummary(
             imageUrlPolicy.parseManagedPreview(siteId, record.previewImageUrl),
             imageUrlPolicy
           ),
-    previewImageUrl: record.previewImageUrl,
+    previewImageUrl,
     previewType: record.previewType,
     priceAmountCents: record.priceAmountCents,
     priceLabel: record.priceLabel,
@@ -110,22 +115,37 @@ function mapGalleryImages(
   siteId: string,
   imageUrlPolicy?: ManagedImageUrlPolicy
 ): PublicGalleryImage[] {
-  return images.map((image) => {
-    if (image.assetId === undefined || imageUrlPolicy === undefined || siteId === "") {
-      return image;
+  return images.flatMap((image) => {
+    const resolved = resolveCatalogAssetUrl(image.url);
+    if (resolved === null) {
+      return [];
     }
 
-    const managed = toManagedGalleryDescriptor(image, siteId, imageUrlPolicy);
+    const normalizedImage: PublicGalleryImage =
+      resolved.url === image.url
+        ? image
+        : {
+            ...image,
+            url: resolved.url
+          };
+
+    if (image.assetId === undefined || imageUrlPolicy === undefined || siteId === "") {
+      return [normalizedImage];
+    }
+
+    const managed = toManagedGalleryDescriptor(normalizedImage, siteId, imageUrlPolicy);
 
     if (managed === null) {
-      return image;
+      return [normalizedImage];
     }
 
-    return {
-      ...image,
-      alt: image.alt.trim() === "" ? siteTitle : image.alt,
-      variants: imageUrlPolicy.buildVariants(managed)
-    };
+    return [
+      {
+        ...normalizedImage,
+        alt: normalizedImage.alt.trim() === "" ? siteTitle : normalizedImage.alt,
+        variants: imageUrlPolicy.buildVariants(managed)
+      }
+    ];
   });
 }
 

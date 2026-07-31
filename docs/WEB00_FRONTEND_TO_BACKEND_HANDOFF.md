@@ -11,7 +11,7 @@ The local frontend provides a complete static product preview for WEB00 Pro 2.0:
 - project questionnaire UI;
 - local success/status flow;
 - project cabinet/status preview;
-- contacts/support/error-report frontend UI;
+- contacts/support frontend UI;
 - install/app frontend shell;
 - public legal pages;
 - localStorage-oriented preview behavior where backend is not yet available.
@@ -61,9 +61,11 @@ Backend should formalize this as:
 
 Do not introduce claims of real authorization, real manager assignment, real payment, or real backend state in public UI unless that backend behavior exists.
 
-## 4. Support and Error Report Contracts
+## 4. Support Contracts
 
-Support/error-report frontend should be connected as a secondary support workflow, not as a public bug-report CTA.
+Public bug-report CTA/modal/form is removed for release readiness. Support
+should be connected through owner-approved contact routes, not through a public
+bug-report control.
 
 Required backend fields:
 
@@ -79,6 +81,14 @@ Required backend fields:
 - admin response/status.
 
 File upload must initially store metadata safely and only accept files after backend security gates are in place.
+
+## 4.1 Public Catalog Runtime Policy
+
+Current owner policy has `staticFallbackEnabled=false` for the public catalog.
+If the live catalog API fails fatally, public catalog cards must not remain
+visible as if they were the current production catalog. The grid should render a
+fatal/empty state with bounded retry and should only show live API cards after a
+successful retry.
 
 ## 5. Upload and File Future
 
@@ -113,7 +123,7 @@ Do not change these frontend areas without product reason:
 
 - public language gate terms;
 - responsive Matryoshka hero composition;
-- no public bug-report CTA emphasis;
+- no public bug-report CTA/modal/form;
 - footer signature;
 - mobile navigation behavior;
 - pricing route/query semantics;

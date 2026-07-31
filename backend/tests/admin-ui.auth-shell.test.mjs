@@ -455,6 +455,69 @@ describe("admin auth shell", () => {
     expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(1);
   });
 
+  it("keeps warm only for authenticated visible online admin tabs with one timer", async () => {
+    vi.useFakeTimers();
+    const documentRef = createFakeDocument();
+    documentRef.visibilityState = "hidden";
+    documentRef.defaultView = { navigator: { onLine: true } };
+    const root = documentRef.createElement("main");
+    const fetchImpl = vi.fn((requestPath) => {
+      if (requestPath === "/api/auth/refresh") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            accessToken: "keepwarm-token",
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/auth/me") {
+        return Promise.resolve(jsonResponse(200, {
+          data: {
+            user: safeUser("admin")
+          }
+        }));
+      }
+      if (requestPath === "/api/ready") {
+        return Promise.resolve(jsonResponse(200, { status: "ready" }));
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    });
+
+    const app = await bootstrapAdminApp({
+      autoLoadScreens: false,
+      documentRef,
+      enableKeepWarm: true,
+      enableReadinessCheck: false,
+      fetchImpl,
+      keepWarmIntervalMs: 10,
+      root
+    });
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(0);
+
+    documentRef.visibilityState = "visible";
+    documentRef.defaultView.navigator.onLine = false;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(0);
+
+    documentRef.defaultView.navigator.onLine = true;
+    await vi.advanceTimersByTimeAsync(10);
+    await flushPromises();
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(1);
+
+    root.replaceChildren(root.children[0]);
+    await vi.advanceTimersByTimeAsync(10);
+    await flushPromises();
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(2);
+
+    app.destroy();
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromises();
+    expect(fetchImpl.mock.calls.filter(([url]) => url === "/api/ready")).toHaveLength(2);
+  });
+
   it("submits login credentials, clears the password field, calls me, and stores token only in memory", async () => {
     const documentRef = createFakeDocument();
     const root = documentRef.createElement("main");
@@ -590,7 +653,8 @@ describe("admin auth shell", () => {
       "Сайты",
       "Категории",
       "Пользователи",
-      "Журнал"
+      "Журнал",
+      "Обслуживание"
     ]);
     expect(shell.querySelector('[data-section="sites"]').getAttribute("aria-current")).toBe("page");
   });

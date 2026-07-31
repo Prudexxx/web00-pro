@@ -72,6 +72,7 @@ const LIFECYCLE_ACTIONS = {
 const LIFECYCLE_ERROR_MESSAGES = Object.freeze({
   SITE_NOT_DRAFT: "Опубликовать можно только черновик.",
   SITE_NOT_PUBLISHED: "Снять с публикации можно только опубликованную карточку.",
+  SITE_IMAGES_ATTACHED: "Перед окончательным удалением удалите preview и gallery.",
   SITE_PREVIEW_REQUIRED: "Перед публикацией добавьте preview-изображение."
 });
 
@@ -249,6 +250,7 @@ export function createSitesListScreen(options) {
 
     try {
       await apiClient.requestJson(action.path(validateUuid(site.id, "site")), {
+        allowNoContent: actionId === "permanent-delete",
         method: action.method
       });
       if (destroyed) {
@@ -261,12 +263,43 @@ export function createSitesListScreen(options) {
     } catch (error) {
       if (!destroyed) {
         const message = lifecycleErrorMessage(error);
-        statusRegion.textContent = message;
+        if (error?.code === "SITE_IMAGES_ATTACHED") {
+          renderImageCleanupDeleteBlock(site, error, message);
+        } else {
+          statusRegion.textContent = message;
+        }
         onStatus(message);
       }
 
       throw dialogError(error);
     }
+  }
+
+  function renderImageCleanupDeleteBlock(site, error, message) {
+    const children = [
+      createElement("span", {
+        documentRef,
+        text: message
+      })
+    ];
+
+    if (typeof error?.requestId === "string") {
+      children.push(createRequestIdControl(error.requestId, { documentRef }));
+    }
+
+    children.push(createElement("button", {
+      documentRef,
+      text: "Открыть изображения",
+      attributes: {
+        "data-action": "open-images-after-delete-block",
+        type: "button"
+      },
+      on: {
+        click: () => onImages(site.id)
+      }
+    }));
+
+    replaceContent(statusRegion, ...children);
   }
 
   return {

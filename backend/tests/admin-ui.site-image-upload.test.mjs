@@ -126,6 +126,32 @@ describe("admin shared site image upload helpers", () => {
     ]);
   });
 
+  it("rejects malformed gallery batch envelopes instead of treating them as zero successes", () => {
+    const context = {
+      clientFileIds: [
+        "00000000-0000-4000-8000-000000000401",
+        "00000000-0000-4000-8000-000000000402"
+      ],
+      files: [
+        imageFile("first.png", "image/png", 12),
+        imageFile("second.png", "image/png", 12)
+      ]
+    };
+
+    for (const result of [
+      undefined,
+      {},
+      { succeeded: [] },
+      { failed: [] },
+      { failed: {}, succeeded: [] },
+      { failed: [], succeeded: {} }
+    ]) {
+      expect(() => normalizeGalleryBatchResult(result, context)).toThrow(
+        "Сервер вернул некорректный ответ."
+      );
+    }
+  });
+
   it("rejects javascript and data URLs before submit payloads leave the browser", () => {
     for (const url of ["javascript:alert(1)", "data:text/html;base64,PHNjcmlwdD4="]) {
       expect(() => buildCreateSitePayload({

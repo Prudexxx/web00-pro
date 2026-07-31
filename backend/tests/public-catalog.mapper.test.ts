@@ -72,11 +72,11 @@ describe("public catalog mapper", () => {
           alt: "Preview",
           sortOrder: 0,
           storagePath: "catalog/sites/example/gallery/example-01.png",
-          url: "assets/img/solution-gallery/example-01.png"
+          url: "https://prudexxx.github.io/web00-pro/assets/img/solution-gallery/example-01.png"
         }
       ],
       previewImage: null,
-      previewImageUrl: "assets/img/previews/example.png",
+      previewImageUrl: "https://prudexxx.github.io/web00-pro/assets/img/previews/example.png",
       previewType: "iframe",
       priceAmountCents: 500000,
       priceLabel: "от 5 000 ₽",
@@ -101,6 +101,39 @@ describe("public catalog mapper", () => {
     ]) {
       expect(summary).not.toHaveProperty(field);
     }
+  });
+
+  it("normalizes legacy image URLs without mutating the source DB object", () => {
+    const record: PublicSiteRecord = {
+      ...siteRecord,
+      galleryImages: [
+        {
+          alt: "Legacy gallery",
+          sortOrder: 2,
+          storagePath: "catalog/sites/example/gallery/example-02.png",
+          url: "./assets/img/solution-gallery/example-02.png"
+        }
+      ],
+      previewImageUrl: "/web00-pro/assets/img/previews/example.png"
+    };
+    const originalPreview = record.previewImageUrl;
+    const originalGallery = JSON.stringify(record.galleryImages);
+
+    const summary = mapSiteSummary(record);
+
+    expect(summary.previewImageUrl).toBe(
+      "https://prudexxx.github.io/web00-pro/assets/img/previews/example.png"
+    );
+    expect(summary.galleryImages).toEqual([
+      {
+        alt: "Legacy gallery",
+        sortOrder: 2,
+        storagePath: "catalog/sites/example/gallery/example-02.png",
+        url: "https://prudexxx.github.io/web00-pro/assets/img/solution-gallery/example-02.png"
+      }
+    ]);
+    expect(record.previewImageUrl).toBe(originalPreview);
+    expect(JSON.stringify(record.galleryImages)).toBe(originalGallery);
   });
 
   it("adds managed preview and gallery variants while preserving legacy fields", () => {
@@ -177,6 +210,33 @@ describe("public catalog mapper", () => {
         "https://legacy.example.test/storage/v1/object/public/web00-catalog-images/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/33333333-3333-4333-8333-333333333333/1200.webp"
     });
     expect(summary.galleryImages[0]).not.toHaveProperty("variants");
+  });
+
+  it("does not publish unsafe image URLs as working public URLs", () => {
+    const record: PublicSiteRecord = {
+      ...siteRecord,
+      galleryImages: [
+        {
+          alt: "Unsafe gallery",
+          sortOrder: 0,
+          storagePath: "catalog/sites/example/gallery/unsafe.png",
+          url: "javascript:alert(1)"
+        },
+        {
+          alt: "Unexpected relative",
+          sortOrder: 1,
+          storagePath: "catalog/sites/example/gallery/unexpected.png",
+          url: "img/unexpected.png"
+        }
+      ],
+      previewImageUrl: "data:image/svg+xml,<svg></svg>"
+    };
+
+    const summary = mapSiteSummary(record);
+
+    expect(summary.previewImageUrl).toBeNull();
+    expect(summary.previewImage).toBeNull();
+    expect(summary.galleryImages).toEqual([]);
   });
 
   it("maps a site detail with only the approved additional fields", () => {

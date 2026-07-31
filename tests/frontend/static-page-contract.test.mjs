@@ -116,45 +116,18 @@ test("frontend B8 uses one canonical live API config and avoids production secre
   assert.doesNotMatch(main, /target="_blank" rel="noopener"(?! noreferrer)/);
 });
 
-test("B8 preserves pre-existing support and bug-report controls", async () => {
+test("public pages expose no forbidden bug-report controls, modal targets, or dead handlers", async () => {
   const main = await readFile("assets/js/main.js", "utf8");
 
-  assert.match(main, /let bugAttachment = null;/);
-  assert.match(main, /event\.target\.closest\("\[data-open-bug\]"\)/);
-  assert.match(main, /function openBugModal\(\)/);
-  assert.match(main, /function renderBugForm\([^)]*\)/);
-  assert.match(main, /function submitBugReport\(event\)/);
-  assert.match(main, /DATA\.createErrorReport \|\| DATA\.createBugReport/);
-  assert.match(main, /data-open-bug>Описать проблему<\/button>/);
+  assert.doesNotMatch(main, /data-open-bug/);
+  assert.doesNotMatch(main, /bugAttachment|openBugModal|renderBugForm|submitBugReport|bindBugErrorCleanup/);
+  assert.doesNotMatch(main, /createBugReport|createErrorReport/);
+  assert.doesNotMatch(main, /Сообщить об ошибке|Описать проблему|Попробовать ещё раз/);
 
-  const bugControlPages = [
-    ["app.html", /<button class="app-support-link" type="button" data-open-bug>Описать проблему<\/button>/],
-    ["cabinet.html", /<button class="btn btn--secondary cabinet-support-link" type="button" data-open-bug>Описать проблему<\/button>/],
-    ["contacts.html", /<button class="btn btn--secondary btn--full contact-error-card__action" type="button" data-open-bug>Описать проблему<\/button>/],
-  ];
-
-  for (const [page, pattern] of bugControlPages) {
+  for (const page of ROOT_MAIN_PAGES) {
     const html = await readFile(page, "utf8");
-    assert.match(html, pattern, `${page} should keep its pre-B8 support bug control`);
-  }
-
-  const bugModalPages = [
-    "app.html",
-    "cabinet.html",
-    "contacts.html",
-    "faq.html",
-    "how-it-works.html",
-    "index.html",
-    "pricing.html",
-    "services.html",
-    "solutions.html",
-    "status.html",
-  ];
-
-  for (const page of bugModalPages) {
-    const html = await readFile(page, "utf8");
-    assert.match(html, /data-modal="bug"/, `${page} should keep its pre-B8 bug modal`);
-    assert.match(html, /data-bug-modal-content/, `${page} should keep its pre-B8 bug modal target`);
+    assert.doesNotMatch(html, /data-open-bug|data-modal="bug"|data-bug-modal-content/, `${page} should not expose bug-report UI`);
+    assert.doesNotMatch(html, /Сообщить об ошибке|Описать проблему/, `${page} should not expose bug-report copy`);
   }
 });
 
@@ -162,9 +135,19 @@ test("main.js ignores non-applyable stale catalog results", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
   assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)\.then\(\(nextCatalogState\) => \{/);
-  assert.match(source, /if \(nextCatalogState\) catalogState = nextCatalogState;/);
+  assert.match(source, /applyCatalogState\(nextCatalogState\)/);
   assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)\.then\(\(nextPopularCatalogState\) => \{/);
   assert.match(source, /if \(nextPopularCatalogState\) popularCatalogState = nextPopularCatalogState;/);
+});
+
+test("main.js renders fatal and empty API catalog states without leaving stale static cards visible", async () => {
+  const source = await readFile("assets/js/main.js", "utf8");
+
+  assert.match(source, /function applyCatalogState\(nextCatalogState\)/);
+  assert.match(source, /if \(!nextCatalogState\) return false;/);
+  assert.match(source, /catalogState = nextCatalogState;/);
+  assert.match(source, /renderSolutions\(\);/);
+  assert.doesNotMatch(source, /Keep the currently visible saved catalog/);
 });
 
 test("B8 CSS supports catalog status and homepage API empty state without new global cards", async () => {

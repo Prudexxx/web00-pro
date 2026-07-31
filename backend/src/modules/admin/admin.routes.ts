@@ -10,6 +10,8 @@ import type { AdminSiteService } from "./sites/site.service.js";
 import { createSiteImageRouter } from "./images/site-image.routes.js";
 import type { SiteImageService } from "./images/site-image.service.js";
 import type { MultipartImageParser } from "../images/image.types.js";
+import { createAdminMaintenanceRouter } from "./maintenance/maintenance.routes.js";
+import type { AdminMaintenanceService } from "./maintenance/maintenance.service.js";
 import { createAdminUserRouter } from "./users/user.routes.js";
 import type { AdminUserService } from "./users/user.service.js";
 import type { AuthService } from "../auth/auth.types.js";
@@ -20,6 +22,7 @@ export interface AdminRouterOptions {
   categoryService: AdminCategoryService;
   imageParser?: MultipartImageParser;
   imageService?: SiteImageService;
+  maintenanceService?: AdminMaintenanceService;
   now?: () => Date;
   siteService: AdminSiteService;
   userService?: AdminUserService;
@@ -59,6 +62,15 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
     router.use(createAdminUserRouter(userRouterOptions));
   }
   router.use(createAdminAuditLogRouter({ service: options.auditLogService }));
+  if (options.maintenanceService !== undefined) {
+    router.use(
+      createAdminMaintenanceRouter(
+        options.now === undefined
+          ? { service: options.maintenanceService }
+          : { now: options.now, service: options.maintenanceService }
+      )
+    );
+  }
 
   return router;
 }

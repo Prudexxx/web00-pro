@@ -1,5 +1,10 @@
 # WEB00 Admin Product-Final Closeout
 
+QAmax update 2026-07-30: this document is no longer sufficient by itself to
+declare Product Final. Public production baseline drift is recorded in
+`backend/docs/incidents/2026-07-30-production-catalog-baseline-drift.md`.
+Live canary remains blocked until the owner approves the exact catalog manifest.
+
 ## 1. Final UX Model
 
 Admin create/edit is now built around a human workflow instead of backend field
@@ -71,7 +76,8 @@ Readiness/cold start:
 - If readiness is unavailable after the bounded deadline, a retry screen says
   `Backend пока недоступен` and `Введённые данные не потеряны`.
 - Keep-warm pings are limited to authenticated visible online admin tabs.
-- Keep-warm stops on logout/destroy and does not run from a service worker.
+- Keep-warm stops on hidden/offline/logout/destroy and does not run from a
+  service worker or external cron.
 
 Timeout model:
 
@@ -87,6 +93,8 @@ Image saga:
 - site create success is not rolled back by image upload failure;
 - partial image failures show saved card state, counts, requestId, and retry;
 - retry uploads only failed images and never repeats create POST;
+- malformed gallery batch envelopes are rejected instead of treated as a
+  zero-success upload;
 - after full reload, text can recover but files must be selected again.
 
 Safe errors/requestId:
@@ -94,8 +102,32 @@ Safe errors/requestId:
 - Unknown server errors expose controlled UI text and requestId.
 - requestId can be copied for diagnostics.
 - Raw Prisma/SQL details are not surfaced to the admin UI.
+- Empty, malformed, or non-JSON successful 2xx responses are rejected as
+  `INVALID_RESPONSE`.
+- Site create/update success requires valid returned entity identity before
+  drafts/files are cleared.
 
 ## 3. Backend Hardening
+
+Permanent delete:
+
+- Permanent site delete first re-fetches the exact site.
+- It is blocked while preview or gallery images remain attached.
+- The controlled 409 code is `SITE_IMAGES_ATTACHED`.
+- The blocked path does not call the repository permanent delete and does not
+  create a false permanent-delete audit.
+
+Image lifecycle/RBAC:
+
+- Preview/gallery attach, reorder, and delete re-check current site
+  lifecycle/RBAC inside the final DB transaction.
+- Stale pre-processing authorization is not sufficient for the final mutation.
+
+Build identity:
+
+- `GET /api/version` returns only safe service/commit/branch/version/environment
+  identity with `Cache-Control: no-store`.
+- It does not use the database or echo raw environment variables.
 
 demoMode:
 

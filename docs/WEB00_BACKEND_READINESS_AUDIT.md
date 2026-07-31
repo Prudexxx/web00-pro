@@ -66,7 +66,7 @@ flowchart TD
 | `/api/leads/:id` | GET | получить статус заявки |
 | `/api/leads/:id/events` | GET | история/таймлайн |
 | `/api/contact` | POST | быстрый контакт/вопрос |
-| `/api/bug-reports` | POST | report issue, если оставлять |
+| `/api/bug-reports` | POST | deprecated для public release; не подключать без нового owner approval |
 | `/api/catalog` | GET | каталог решений, если выносить из frontend |
 | `/api/pricing` | GET | тарифы, если управлять из админки |
 

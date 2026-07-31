@@ -5,6 +5,7 @@ import {
   createStableClientRequestId
 } from "../src/admin/assets/random-id.js";
 import {
+  removeSiteFormDraft,
   readSiteFormDraft,
   writeSiteFormDraft
 } from "../src/admin/assets/site-form-drafts.js";
@@ -71,6 +72,34 @@ describe("admin secure random IDs", () => {
     expect(mathRandom).not.toHaveBeenCalled();
 
     mathRandom.mockRestore();
+  });
+
+  it("treats storage getter, setItem, removeItem, quota, and malformed JSON failures as non-fatal", () => {
+    const throwingStorage = {
+      getItem: vi.fn(() => {
+        throw new DOMException("blocked", "SecurityError");
+      }),
+      removeItem: vi.fn(() => {
+        throw new DOMException("blocked", "SecurityError");
+      }),
+      setItem: vi.fn(() => {
+        throw new DOMException("quota", "QuotaExceededError");
+      })
+    };
+    const malformedStorage = {
+      getItem: vi.fn(() => "{"),
+      removeItem: vi.fn(),
+      setItem: vi.fn()
+    };
+
+    expect(readSiteFormDraft(throwingStorage, "draft:key")).toBeNull();
+    expect(() => writeSiteFormDraft(throwingStorage, "draft:key", {
+      fields: { title: "Draft" },
+      mode: "create",
+      updatedAt: "2026-07-30T00:00:00.000Z"
+    })).not.toThrow();
+    expect(() => removeSiteFormDraft(throwingStorage, "draft:key")).not.toThrow();
+    expect(readSiteFormDraft(malformedStorage, "draft:key")).toBeNull();
   });
 });
 

@@ -32,6 +32,13 @@ import { createPrismaAdminCategoryRepository } from "./modules/admin/categories/
 import { createAdminCategoryService } from "./modules/admin/categories/category.service.js";
 import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repository.js";
 import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
+import {
+  createAdminMaintenanceService,
+  readCanonicalAssetSourceCatalog
+} from "./modules/admin/maintenance/maintenance.service.js";
+import {
+  createPrismaCanonicalAssetReconciliationRepository
+} from "./modules/admin/sites/canonical-asset-reconciliation.repository.js";
 import { createPrismaAdminUserRepository } from "./modules/admin/users/user.repository.js";
 import { createAdminUserService } from "./modules/admin/users/user.service.js";
 import { createSiteImageService } from "./modules/admin/images/site-image.service.js";
@@ -168,6 +175,10 @@ export function startServer(options: StartServerOptions): StartedServer {
       repository: createPrismaSiteImageRepository({ prisma }),
       storage: imageStorage
     }),
+    maintenanceService: createAdminMaintenanceService({
+      readCatalog: readCanonicalAssetSourceCatalog,
+      repository: createPrismaCanonicalAssetReconciliationRepository({ prisma })
+    }),
     userService: createAdminUserService({
       repository: createPrismaAdminUserRepository({ prisma })
     })
@@ -190,7 +201,8 @@ export function startServer(options: StartServerOptions): StartedServer {
     publicCorsConfig: options.publicCorsConfig,
     publicCatalogService,
     readinessService,
-    trustProxyHops: options.authEnv.TRUST_PROXY_HOPS
+    trustProxyHops: options.authEnv.TRUST_PROXY_HOPS,
+    versionInfo: readRuntimeVersionInfo(process.env)
   };
   const app = createApp(
     options.now === undefined
@@ -355,6 +367,18 @@ function logLifecycle(options: LifecycleLogOptions): void {
     service: options.env.SERVICE_NAME,
     time: options.now().toISOString()
   });
+}
+
+function readRuntimeVersionInfo(env: NodeJS.ProcessEnv): {
+  branch: string | null;
+  commit: string | null;
+  version: string | null;
+} {
+  return {
+    branch: env.RENDER_GIT_BRANCH ?? null,
+    commit: env.RENDER_GIT_COMMIT ?? null,
+    version: env.npm_package_version ?? null
+  };
 }
 
 function isDirectRun(): boolean {

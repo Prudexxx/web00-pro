@@ -18,7 +18,7 @@ import {
 describe("admin audit screen", () => {
   it("keeps audit navigation and rendering admin-only", async () => {
     expect(visibleNavigation("editor").map((item) => item.id)).toEqual(["sites", "categories"]);
-    expect(visibleNavigation("admin").map((item) => item.id)).toEqual(["sites", "categories", "users", "audit"]);
+    expect(visibleNavigation("admin").map((item) => item.id)).toEqual(["sites", "categories", "users", "audit", "maintenance"]);
 
     const documentRef = createFakeDocument();
     const apiClient = { requestJson: vi.fn() };

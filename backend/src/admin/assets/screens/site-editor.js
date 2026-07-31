@@ -41,6 +41,7 @@ import {
   createRandomUuid,
   createStableClientRequestId
 } from "../random-id.js";
+import { ADMIN_REQUEST_TIMEOUTS } from "../api-client.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
 const READY_PATH = "/api/ready";
@@ -76,6 +77,8 @@ const FIELD_MAX_LENGTHS = Object.freeze({
 const URL_FIELDS = new Set(["demoLocalUrl", "demoUrl", "demoUrlSimple", "externalDemoUrl", "originalDemoUrl", "siteUrl"]);
 const REQUIRED_FIELDS = new Set(["categoryId", "shortDescription", "slug", "title"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const INVALID_RESPONSE_MESSAGE = "Сервер вернул некорректный ответ.";
+const DRAFT_STORAGE_WARNING = "Локальное автосохранение недоступно.";
 
 export function createSiteEditorScreen(options) {
   const documentRef = options?.documentRef ?? document;
@@ -107,6 +110,7 @@ export function createSiteEditorScreen(options) {
   let clientRequestId = null;
   let clientRequestIdError = null;
   let draftSaveTimer = null;
+  let draftStorageWarning = false;
   let dirty = false;
   let networkOnline = windowRef?.navigator?.onLine !== false;
   let slugManuallyEdited = mode !== "create";
@@ -233,6 +237,7 @@ export function createSiteEditorScreen(options) {
     replaceContent(
       formHost,
       ...(pendingDraft === null ? [] : [createDraftRecoveryBanner()]),
+      ...(draftStorageWarning ? [createDraftStorageWarning()] : []),
       ...(imageRecoveryNotice ? [createImageRecoveryNotice()] : []),
       form
     );
@@ -253,6 +258,7 @@ export function createSiteEditorScreen(options) {
         createAdvancedSection(errors),
         ...(mode === "create" ? [createImageSection(errors)] : []),
         ...(role === "admin" && mode === "edit" ? [createAdminSection(errors)] : []),
+        renderFormErrors(errors),
         createActions()
       ]
     });
@@ -295,14 +301,17 @@ export function createSiteEditorScreen(options) {
         }
         setSaveState(form, "warmingBackend");
         await ensureBackendReady();
-        const saved = mode === "create"
+        const savedResponse = mode === "create"
           ? await createSiteWithControlledRetry(payload, formState, form)
           : await updateSite(payload, form);
+        const saved = mode === "create"
+          ? readCreatedSiteFromResponse(savedResponse, formState)
+          : readUpdatedSiteFromResponse(savedResponse);
 
         if (mode === "create") {
-          await finishCreateSaga(saved?.data ?? saved, imageSelection, form);
+          await finishCreateSaga(saved, imageSelection, form);
         } else {
-          finishSuccessfulSave(saved?.data ?? null, form, "Сохранено.");
+          finishSuccessfulSave(saved, form, "Сохранено.");
         }
       } catch (error) {
         if (await handleNetworkFailure(error, formState, form)) {
@@ -320,6 +329,12 @@ export function createSiteEditorScreen(options) {
         }
 
         setSaveState(form, saveStateForError(error));
+        if (error?.code === "INVALID_RESPONSE") {
+          renderFormLevelError(form, safeMessage(error));
+          renderErrorStatus(error);
+          return;
+        }
+
         renderForm(nextErrors);
         renderErrorStatus(error);
         focusFirstInvalid(formHost.querySelector("form"), mapped);
@@ -404,6 +419,51 @@ export function createSiteEditorScreen(options) {
       },
       method: "POST"
     });
+  }
+
+  function readCreatedSiteFromResponse(response, formState) {
+    const site = readSiteResponseEntity(response);
+
+    if (site.slug !== formState?.slug) {
+      throw invalidSaveResponse();
+    }
+
+    return site;
+  }
+
+  function readUpdatedSiteFromResponse(response) {
+    const site = readSiteResponseEntity(response);
+
+    if (site.id !== siteId) {
+      throw invalidSaveResponse();
+    }
+
+    return site;
+  }
+
+  function readSiteResponseEntity(response) {
+    const site = response?.data;
+
+    if (
+      typeof site !== "object" ||
+      site === null ||
+      typeof site.id !== "string" ||
+      !UUID_PATTERN.test(site.id) ||
+      typeof site.slug !== "string" ||
+      site.slug.length === 0
+    ) {
+      throw invalidSaveResponse();
+    }
+
+    return site;
+  }
+
+  function invalidSaveResponse() {
+    const error = new Error(INVALID_RESPONSE_MESSAGE);
+
+    error.code = "INVALID_RESPONSE";
+    error.status = 0;
+    return error;
   }
 
   async function finishCreateSaga(saved, imageSelection, form) {
@@ -1190,6 +1250,29 @@ export function createSiteEditorScreen(options) {
     });
   }
 
+  function renderFormErrors(errors) {
+    const messages = Array.isArray(errors?._form) ? errors._form : [];
+
+    return createElement("p", {
+      documentRef,
+      className: "admin-state admin-state-error",
+      attributes: {
+        "aria-live": "polite",
+        "data-field-error": "_form",
+        role: "alert"
+      },
+      text: messages.join(" ")
+    });
+  }
+
+  function renderFormLevelError(form, message) {
+    const target = form?.querySelector?.('[data-field-error="_form"]');
+
+    if (target !== null && target !== undefined) {
+      target.textContent = message;
+    }
+  }
+
   function renderErrorStatus(error) {
     const children = [
       createElement("span", {
@@ -1259,6 +1342,17 @@ export function createSiteEditorScreen(options) {
           }
         })
       ]
+    });
+  }
+
+  function createDraftStorageWarning() {
+    return createElement("p", {
+      documentRef,
+      className: "admin-state admin-state-warning",
+      attributes: {
+        "data-draft-storage-warning": "true"
+      },
+      text: DRAFT_STORAGE_WARNING
     });
   }
 
@@ -1385,7 +1479,7 @@ export function createSiteEditorScreen(options) {
   }
 
   function persistDraft(form) {
-    writeSiteFormDraft(storage, draftKey, {
+    const stored = writeSiteFormDraft(storage, draftKey, {
       clientRequestId,
       fields: readFormState(form),
       hadImageSelection: hasSelectedImageFiles(form),
@@ -1395,6 +1489,10 @@ export function createSiteEditorScreen(options) {
       temporaryClientId: mode === "create" ? "new" : null,
       updatedAt: new Date().toISOString()
     });
+
+    if (storage !== null && stored === false) {
+      showDraftStorageWarning();
+    }
   }
 
   function resetClientRequestId() {
@@ -1422,7 +1520,17 @@ export function createSiteEditorScreen(options) {
 
   function clearDraft() {
     clearDraftSaveTimer();
-    removeSiteFormDraft(storage, draftKey);
+    const removed = removeSiteFormDraft(storage, draftKey);
+
+    if (storage !== null && removed === false && dirty) {
+      showDraftStorageWarning();
+    }
+  }
+
+  function showDraftStorageWarning() {
+    draftStorageWarning = true;
+    statusRegion.textContent = DRAFT_STORAGE_WARNING;
+    onStatus(DRAFT_STORAGE_WARNING);
   }
 
   function clearDraftSaveTimer() {
@@ -1512,7 +1620,8 @@ export function createSiteEditorScreen(options) {
   async function ensureBackendReady() {
     await apiClient.requestJson(READY_PATH, {
       auth: false,
-      method: "GET"
+      method: "GET",
+      timeoutMs: ADMIN_REQUEST_TIMEOUTS.readinessAttempt
     });
   }
 
@@ -1820,7 +1929,9 @@ function localizeSlugError(message, slug) {
 }
 
 function isNetworkFailure(error) {
-  return error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT" || error?.status === 0;
+  return error?.code === "NETWORK_ERROR" ||
+    error?.code === "REQUEST_TIMEOUT" ||
+    (error?.status === 0 && error?.code !== "INVALID_RESPONSE");
 }
 
 function isRetryableCreateFailure(error) {

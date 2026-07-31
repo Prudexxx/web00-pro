@@ -5,6 +5,7 @@ import { createAuthenticatedShell } from "./screens/shell.js";
 import { createAuditScreen } from "./screens/audit.js";
 import { createCategoriesScreen } from "./screens/categories.js";
 import { createImageManagerScreen } from "./screens/image-manager.js";
+import { createMaintenanceScreen } from "./screens/maintenance.js";
 import { createSiteEditorScreen } from "./screens/site-editor.js";
 import { createSitesListScreen } from "./screens/sites-list.js";
 import { createUsersScreen } from "./screens/users.js";
@@ -124,6 +125,9 @@ export async function bootstrapAdminApp(options = {}) {
       case "categories":
         showCategories();
         return true;
+      case "maintenance":
+        showMaintenance();
+        return true;
       case "sites":
         showSitesList();
         return true;
@@ -211,6 +215,19 @@ export async function bootstrapAdminApp(options = {}) {
       role: currentUser.role
     });
     shellElement.showContent("Журнал", currentScreen.element);
+    void currentScreen.load();
+  }
+
+  function showMaintenance() {
+    destroyCurrentScreen();
+    shellElement.setActiveSection("maintenance");
+    currentScreen = createMaintenanceScreen({
+      apiClient: api,
+      documentRef,
+      onStatus: shellElement.setStatus,
+      role: currentUser.role
+    });
+    shellElement.showContent("Обслуживание", currentScreen.element);
     void currentScreen.load();
   }
 
