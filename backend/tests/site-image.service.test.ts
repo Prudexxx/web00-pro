@@ -438,6 +438,49 @@ describe("PreviewImageService", () => {
       code: "SITE_PREVIEW_REQUIRED"
     });
   });
+
+  it("allows admin cleanup of preview on a soft-deleted site while keeping upload blocked", async () => {
+    const fakes = createFakes({
+      site: {
+        active: false,
+        deletedAt: new Date("2026-07-30T00:00:00.000Z"),
+        previewImageUrl: publicUrl(1200, "webp"),
+        status: "draft"
+      }
+    });
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+
+    await expect(service.preview.deletePreview({ context, siteId })).resolves.toMatchObject({
+      previewImage: null
+    });
+    expect(fakes.repository.deletePreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupPaths: expect.arrayContaining([variantPath(1200, "webp")])
+      })
+    );
+
+    await expect(
+      service.preview.replacePreview({
+        context,
+        file: {
+          alt: "",
+          assetId,
+          declaredMimeType: "image/png",
+          index: 0,
+          source: Buffer.from("source")
+        },
+        siteId
+      })
+    ).rejects.toMatchObject({ code: "SITE_IMAGE_STATE_FORBIDDEN" });
+    expect(fakes.processor.process).not.toHaveBeenCalled();
+  });
 });
 
 describe("GalleryImageService", () => {
@@ -624,6 +667,63 @@ describe("GalleryImageService", () => {
         cleanupPaths: expect.arrayContaining([variantPath(1200, "webp", "gallery")])
       })
     );
+  });
+
+  it("allows admin cleanup of gallery images on a soft-deleted site while keeping add and reorder blocked", async () => {
+    const fakes = createFakes({
+      site: {
+        active: false,
+        deletedAt: new Date("2026-07-30T00:00:00.000Z"),
+        galleryImages: [
+          {
+            alt: "Deleted gallery",
+            assetId,
+            sortOrder: 0,
+            storagePath: `sites/${siteId}/gallery/${assetId}`,
+            url: publicUrl(1200, "webp", "gallery")
+          }
+        ],
+        status: "draft"
+      }
+    });
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+
+    await expect(
+      service.gallery.deleteImage({ assetId, context, siteId })
+    ).resolves.toMatchObject({ images: [] });
+    expect(fakes.repository.deleteGalleryImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupPaths: expect.arrayContaining([variantPath(1200, "webp", "gallery")])
+      })
+    );
+
+    await expect(
+      service.gallery.addSingle({
+        context,
+        file: {
+          alt: "Gallery",
+          assetId: otherAssetId,
+          declaredMimeType: "image/png",
+          index: 0,
+          source: Buffer.from("source")
+        },
+        siteId
+      })
+    ).rejects.toMatchObject({ code: "SITE_IMAGE_STATE_FORBIDDEN" });
+    await expect(
+      service.gallery.reorder({
+        context,
+        items: [{ alt: "Deleted gallery", assetId, sortOrder: 0 }],
+        siteId
+      })
+    ).rejects.toMatchObject({ code: "SITE_IMAGE_STATE_FORBIDDEN" });
   });
 
   it("rejects gallery lookalikes before scheduling managed cleanup", async () => {

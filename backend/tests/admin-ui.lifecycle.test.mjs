@@ -44,7 +44,7 @@ describe("admin site lifecycle UI", () => {
     expect(getAvailableLifecycleActions(softDeletedSite, "editor")).toEqual([]);
   });
 
-  it("renders only restore and permanent delete for soft-deleted inactive admin rows", async () => {
+  it("renders restore, permanent delete, and image cleanup entry point for soft-deleted inactive admin rows", async () => {
     const documentRef = createFakeDocument();
     const apiClient = createListApi(siteFixture({
       active: false,
@@ -74,7 +74,7 @@ describe("admin site lifecycle UI", () => {
     expect(screen.element.querySelector('[data-lifecycle-action="soft-delete"]')).toBeNull();
     expect(screen.element.querySelector('[data-lifecycle-action="publish"]')).toBeNull();
     expect(screen.element.querySelector('[data-lifecycle-action="unpublish"]')).toBeNull();
-    expect(screen.element.querySelector('[data-action="manage-images"]')).toBeNull();
+    expect(screen.element.querySelector('[data-action="manage-images"]')).not.toBeNull();
   });
 
   it("does not render lifecycle buttons for editors", async () => {

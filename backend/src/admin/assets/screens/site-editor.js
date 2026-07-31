@@ -32,6 +32,8 @@ import {
   createClientFileId,
   normalizeAlt,
   normalizeGalleryBatchResult,
+  readResponseRequestId,
+  readSafeRequestId,
   selectedNames,
   supportedImageTypes,
   validateBatch,
@@ -524,12 +526,14 @@ export function createSiteEditorScreen(options) {
     };
     let failedCount = 0;
     let succeededCount = 0;
+    const failedItems = [];
     let requestId = null;
+    const succeededItems = [];
 
     if (imageSelection.previewFile !== null) {
       setSaveState(form, "uploadingPreview");
-      statusRegion.textContent = "Загружаем preview...";
-      onStatus("Загружаем preview...");
+      statusRegion.textContent = "Загружаем главное изображение...";
+      onStatus("Загружаем главное изображение...");
       const previewClientFileId = createClientFileId(uuidFactory);
 
       try {
@@ -542,9 +546,15 @@ export function createSiteEditorScreen(options) {
           method: "PUT"
         });
         succeededCount += 1;
+        succeededItems.push(imageUploadDetail("Главное изображение", imageSelection.previewFile));
       } catch (error) {
         failedCount += 1;
-        requestId ??= readRequestId(error);
+        const failureRequestId = readRequestId(error);
+        requestId ??= failureRequestId;
+        failedItems.push(imageUploadDetail("Главное изображение", imageSelection.previewFile, {
+          message: safeMessage(error),
+          requestId: failureRequestId
+        }));
         retryPlan.preview = {
           alt: imageSelection.previewAlt,
           clientFileId: previewClientFileId,
@@ -555,8 +565,8 @@ export function createSiteEditorScreen(options) {
 
     if (imageSelection.galleryFiles.length > 0) {
       setSaveState(form, "uploadingGallery");
-      statusRegion.textContent = "Загружаем gallery...";
-      onStatus("Загружаем gallery...");
+      statusRegion.textContent = "Загружаем изображения галереи...";
+      onStatus("Загружаем изображения галереи...");
       const clientFileIds = imageSelection.galleryFiles.map(() => createClientFileId(uuidFactory));
 
       try {
@@ -572,16 +582,30 @@ export function createSiteEditorScreen(options) {
           clientFileIds,
           files: imageSelection.galleryFiles
         });
+        const galleryRequestId = readResponseRequestId(response);
         succeededCount += normalized.counts.succeeded;
         failedCount += normalized.counts.failed;
+        if (normalized.counts.failed > 0) {
+          requestId ??= galleryRequestId;
+        }
+        succeededItems.push(...normalized.succeeded.map((item) => imageUploadDetail("Изображение галереи", item.file)));
+        failedItems.push(...normalized.failed.map((item) => imageUploadDetail("Изображение галереи", item.file, {
+          message: item.message,
+          requestId: item.requestId ?? galleryRequestId
+        })));
         retryPlan.gallery = normalized.failed.map((item) => ({
           clientFileId: item.clientFileId,
           file: item.file,
           index: item.index
         }));
       } catch (error) {
-        requestId ??= readRequestId(error);
+        const failureRequestId = readRequestId(error);
+        requestId ??= failureRequestId;
         failedCount += imageSelection.galleryFiles.length;
+        failedItems.push(...imageSelection.galleryFiles.map((file) => imageUploadDetail("Изображение галереи", file, {
+          message: safeMessage(error),
+          requestId: failureRequestId
+        })));
         retryPlan.gallery = imageSelection.galleryFiles.map((file, index) => ({
           clientFileId: clientFileIds[index],
           file,
@@ -592,9 +616,11 @@ export function createSiteEditorScreen(options) {
 
     return {
       failedCount,
+      failedItems,
       requestId,
       retryPlan,
-      succeededCount
+      succeededCount,
+      succeededItems
     };
   }
 
@@ -674,11 +700,12 @@ export function createSiteEditorScreen(options) {
         }),
         createElement("p", {
           documentRef,
-          text: `Изображения: ${result.succeededCount} успешно, ${result.failedCount} ошибка.`
+          text: `Изображения: ${result.succeededCount} успешно, ${result.failedCount} ${formatImageErrorCount(result.failedCount)}.`
         }),
         ...(typeof result.requestId === "string"
           ? [createRequestIdControl(result.requestId, { documentRef })]
           : []),
+        renderImageUploadDetails(result),
         createElement("div", {
           documentRef,
           className: "admin-save-next-actions",
@@ -724,6 +751,54 @@ export function createSiteEditorScreen(options) {
     onStatus("Карточка сохранена. Не все изображения загружены.");
   }
 
+  function renderImageUploadDetails(result) {
+    const children = [];
+    const succeededItems = Array.isArray(result?.succeededItems) ? result.succeededItems : [];
+    const failedItems = Array.isArray(result?.failedItems) ? result.failedItems : [];
+
+    if (succeededItems.length > 0) {
+      children.push(createImageUploadDetailGroup("Успешно загружено", succeededItems));
+    }
+    if (failedItems.length > 0) {
+      children.push(createImageUploadDetailGroup("Не загрузилось", failedItems));
+    }
+
+    return createElement("div", {
+      documentRef,
+      className: "admin-image-upload-result",
+      children
+    });
+  }
+
+  function createImageUploadDetailGroup(title, items) {
+    return createElement("section", {
+      documentRef,
+      className: "admin-image-upload-result-group",
+      children: [
+        createElement("strong", {
+          documentRef,
+          text: title
+        }),
+        createElement("ul", {
+          documentRef,
+          children: items.map((item) => createElement("li", {
+            documentRef,
+            text: imageUploadDetailText(item)
+          }))
+        })
+      ]
+    });
+  }
+
+  function imageUploadDetailText(item) {
+    const base = `${item.slot}: ${item.fileName}`;
+    const message = typeof item.message === "string" && item.message.length > 0 ? item.message : "";
+    const requestId = typeof item.requestId === "string" && item.requestId.length > 0 ? `requestId: ${item.requestId}` : "";
+    const detail = [message, requestId].filter(Boolean).join(" — ");
+
+    return detail.length > 0 ? `${base} — ${detail}` : base;
+  }
+
   async function retryFailedImageUploads() {
     if (busy || imageRetryPlan === null) {
       return;
@@ -734,7 +809,9 @@ export function createSiteEditorScreen(options) {
     imageRetryPlan = null;
     let failedCount = 0;
     let succeededCount = 0;
+    const failedItems = [];
     let requestId = null;
+    const succeededItems = [];
     const nextPlan = {
       gallery: [],
       galleryAlt: plan.galleryAlt,
@@ -743,8 +820,8 @@ export function createSiteEditorScreen(options) {
     };
 
     try {
-      statusRegion.textContent = "Загружаем preview...";
-      onStatus("Загружаем preview...");
+      statusRegion.textContent = "Загружаем главное изображение...";
+      onStatus("Загружаем главное изображение...");
       if (plan.preview !== null) {
         try {
           await apiClient.requestMultipart(buildImagePath(plan.siteId, "preview"), {
@@ -756,16 +833,22 @@ export function createSiteEditorScreen(options) {
             method: "PUT"
           });
           succeededCount += 1;
+          succeededItems.push(imageUploadDetail("Главное изображение", plan.preview.file));
         } catch (error) {
           failedCount += 1;
-          requestId ??= readRequestId(error);
+          const failureRequestId = readRequestId(error);
+          requestId ??= failureRequestId;
+          failedItems.push(imageUploadDetail("Главное изображение", plan.preview.file, {
+            message: safeMessage(error),
+            requestId: failureRequestId
+          }));
           nextPlan.preview = plan.preview;
         }
       }
 
       if (plan.gallery.length > 0) {
-        statusRegion.textContent = "Загружаем gallery...";
-        onStatus("Загружаем gallery...");
+        statusRegion.textContent = "Загружаем изображения галереи...";
+        onStatus("Загружаем изображения галереи...");
         const files = plan.gallery.map((item) => item.file);
         const clientFileIds = plan.gallery.map((item) => item.clientFileId);
 
@@ -782,16 +865,30 @@ export function createSiteEditorScreen(options) {
             clientFileIds,
             files
           });
+          const galleryRequestId = readResponseRequestId(response);
           succeededCount += normalized.counts.succeeded;
           failedCount += normalized.counts.failed;
+          if (normalized.counts.failed > 0) {
+            requestId ??= galleryRequestId;
+          }
+          succeededItems.push(...normalized.succeeded.map((item) => imageUploadDetail("Изображение галереи", item.file)));
+          failedItems.push(...normalized.failed.map((item) => imageUploadDetail("Изображение галереи", item.file, {
+            message: item.message,
+            requestId: item.requestId ?? galleryRequestId
+          })));
           nextPlan.gallery = normalized.failed.map((item) => ({
             clientFileId: item.clientFileId,
             file: item.file,
             index: item.index
           }));
         } catch (error) {
-          requestId ??= readRequestId(error);
+          const failureRequestId = readRequestId(error);
+          requestId ??= failureRequestId;
           failedCount += files.length;
+          failedItems.push(...files.map((file) => imageUploadDetail("Изображение галереи", file, {
+            message: safeMessage(error),
+            requestId: failureRequestId
+          })));
           nextPlan.gallery = plan.gallery;
         }
       }
@@ -800,9 +897,11 @@ export function createSiteEditorScreen(options) {
         imageRetryPlan = nextPlan;
         renderSavedWithImageErrors(currentSite, {
           failedCount,
+          failedItems,
           requestId,
           retryPlan: nextPlan,
-          succeededCount
+          succeededCount,
+          succeededItems
         });
         return;
       }
@@ -902,32 +1001,32 @@ export function createSiteEditorScreen(options) {
       createElement("p", {
         documentRef,
         className: "admin-field-help",
-        text: "JPG, PNG, WEBP, AVIF. 5 MB на файл. Gallery batch: до 10 файлов, до 30 MB. Gallery максимум 20 изображений."
+        text: "JPG, PNG, WEBP, AVIF. 5 MB на файл. За раз можно выбрать до 10 файлов, общий размер до 30 MB. В галерее максимум 20 изображений."
       }),
       createElement("label", {
         documentRef,
         className: "admin-field",
         children: [
-          createElement("span", { documentRef, text: "Preview файл" }),
+          createElement("span", { documentRef, text: "Главное изображение" }),
           previewInput,
           previewSelection,
           renderFieldErrors("previewImage", errors)
         ]
       }),
-      createField("previewAlt", "Alt для preview", "input", errors, readValue("previewAlt"), {
+      createField("previewAlt", "Описание главного изображения", "input", errors, readValue("previewAlt"), {
         maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt)
       }),
       createElement("label", {
         documentRef,
         className: "admin-field",
         children: [
-          createElement("span", { documentRef, text: "Gallery файлы" }),
+          createElement("span", { documentRef, text: "Изображения галереи" }),
           galleryInput,
           gallerySelection,
           renderFieldErrors("galleryBatchImages", errors)
         ]
       }),
-      createField("galleryBatchAlt", "Alt для gallery", "input", errors, readValue("galleryBatchAlt"), {
+      createField("galleryBatchAlt", "Общее описание изображений галереи", "input", errors, readValue("galleryBatchAlt"), {
         maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt)
       })
     ]);
@@ -949,7 +1048,7 @@ export function createSiteEditorScreen(options) {
           text: "Расширенные настройки"
         }),
         ...(mode === "create" || role === "admin" ? [createSlugField(errors)] : []),
-        createField("previewType", "previewType", "input", errors, readValue("previewType"), {
+        createField("previewType", "Тип отображения карточки", "input", errors, readValue("previewType"), {
           "data-advanced-field": "true"
         }),
         createField("sortOrder", "sortOrder", "input", errors, readValue("sortOrder"), {
@@ -1900,9 +1999,9 @@ function saveButtonText(state) {
     case "verifyingAfterNetworkFailure":
       return "Проверяем сервер...";
     case "uploadingPreview":
-      return "Загружаем preview...";
+      return "Загружаем главное изображение...";
     case "uploadingGallery":
-      return "Загружаем gallery...";
+      return "Загружаем изображения галереи...";
     default:
       return "Сохранить карточку";
   }
@@ -1943,6 +2042,33 @@ function safeMessage(error) {
   }
 
   return "Не удалось сохранить.";
+}
+
+function imageUploadDetail(slot, file, options = {}) {
+  return {
+    fileName: typeof file?.name === "string" && file.name.trim().length > 0 ? file.name : "файл без имени",
+    message: typeof options.message === "string" ? options.message : "",
+    requestId: readSafeRequestId(options.requestId),
+    slot
+  };
+}
+
+function formatImageErrorCount(count) {
+  const value = Math.abs(Number(count) || 0);
+  const lastTwoDigits = value % 100;
+  const lastDigit = value % 10;
+
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) {
+    return "ошибок";
+  }
+  if (lastDigit === 1) {
+    return "ошибка";
+  }
+  if (lastDigit >= 2 && lastDigit <= 4) {
+    return "ошибки";
+  }
+
+  return "ошибок";
 }
 
 function localizeEditorErrors(errors, formState) {
@@ -1995,7 +2121,7 @@ function saveStateForError(error) {
 }
 
 function readRequestId(error) {
-  return typeof error?.requestId === "string" && error.requestId.length > 0 ? error.requestId : null;
+  return readSafeRequestId(error?.requestId);
 }
 
 function wait(ms) {

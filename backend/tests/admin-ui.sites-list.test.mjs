@@ -241,7 +241,7 @@ describe("admin sites list screen", () => {
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "soft-delete")).toHaveLength(0);
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "publish")).toHaveLength(0);
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "unpublish")).toHaveLength(0);
-    expect(elementsWithAttribute(screen.element, "data-action", "manage-images")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-action", "manage-images")).toHaveLength(1);
   });
 });
 

@@ -59,6 +59,40 @@ describe("site image repository lifecycle recheck", () => {
     expect(db.tx.storageCleanupJob.create).not.toHaveBeenCalled();
     expect(db.tx.auditLog.create).not.toHaveBeenCalled();
   });
+
+  it("allows final transaction preview and gallery cleanup when the site is soft-deleted", async () => {
+    const db = createFakePrisma(siteRecord({
+      active: false,
+      deletedAt: new Date("2026-07-30T00:00:00.000Z"),
+      previewImageUrl: `https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/${siteId}/preview/${assetId}/1200.webp`,
+      status: "draft"
+    }));
+    const repository = createPrismaSiteImageRepository({ prisma: db.prisma });
+
+    await expect(
+      repository.deleteGalleryImage({
+        assetId,
+        cleanupPaths: [`sites/${siteId}/gallery/${assetId}/1200.webp`],
+        context: mutationContext("admin"),
+        siteId
+      })
+    ).resolves.toMatchObject({
+      galleryImages: []
+    });
+    await expect(
+      repository.deletePreview({
+        cleanupPaths: [`sites/${siteId}/preview/${assetId}/1200.webp`],
+        context: mutationContext("admin"),
+        siteId
+      })
+    ).resolves.toMatchObject({
+      previewImageUrl: null
+    });
+
+    expect(db.tx.site.update).toHaveBeenCalledTimes(2);
+    expect(db.tx.storageCleanupJob.create).toHaveBeenCalledTimes(2);
+    expect(db.tx.auditLog.create).toHaveBeenCalledTimes(2);
+  });
 });
 
 function createFakePrisma(site: ReturnType<typeof siteRecord>) {

@@ -684,10 +684,10 @@ function canManageSiteImages(site, role) {
   if (typeof site !== "object" || site === null) {
     return false;
   }
-  if ("active" in site && site.active !== true) {
-    return false;
-  }
   if ("deletedAt" in site && site.deletedAt !== null && site.deletedAt !== undefined) {
+    return role === "admin";
+  }
+  if ("active" in site && site.active !== true) {
     return false;
   }
   if (site.status === "archived") {

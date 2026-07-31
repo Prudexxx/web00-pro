@@ -256,6 +256,7 @@ input {
 .admin-editor-actions button,
 .admin-array-actions button,
 .admin-request-id button {
+  min-width: 128px;
   min-height: 38px;
   padding: 8px 12px;
 }
@@ -404,7 +405,39 @@ textarea {
 }
 
 .admin-save-next-actions button {
+  min-width: 180px;
   min-height: 44px;
+}
+
+.admin-image-upload-result {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d6dbe3;
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.admin-image-upload-result-group {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-image-upload-result-group strong {
+  margin: 0;
+  color: #2d3948;
+  font-size: 15px;
+}
+
+.admin-image-upload-result-group ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.admin-image-upload-result-group li {
+  overflow-wrap: anywhere;
 }
 
 .admin-editor-advanced {
@@ -568,6 +601,7 @@ textarea {
   border-radius: 8px;
   padding: 12px;
   background: #f9fafb;
+  min-width: 0;
 }
 
 .admin-preview-card {
@@ -577,14 +611,64 @@ textarea {
   align-items: start;
 }
 
+.admin-preview-card p,
+.admin-gallery-item p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-gallery-item {
+  grid-template-areas:
+    "image"
+    "legacy-marker"
+    "metadata"
+    "actions";
+  align-content: stretch;
+}
+
 .admin-preview-card img,
-.admin-gallery-item img {
+.admin-gallery-image-area img {
   width: 100%;
+  aspect-ratio: 16 / 10;
   max-height: 220px;
   border: 1px solid #d6dbe3;
   border-radius: 6px;
   object-fit: contain;
   background: #ffffff;
+}
+
+.admin-gallery-image-area {
+  grid-area: image;
+  display: grid;
+  align-items: start;
+  min-height: 140px;
+  min-width: 0;
+}
+
+.admin-gallery-legacy-marker {
+  grid-area: legacy-marker;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 22px;
+  min-width: 0;
+}
+
+.admin-gallery-metadata {
+  grid-area: metadata;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 42px;
+  min-width: 0;
+}
+
+.admin-gallery-item-actions {
+  grid-area: actions;
+  display: flex;
+  align-items: flex-end;
+  min-height: 38px;
+  margin-top: auto;
 }
 
 .admin-upload-form {
