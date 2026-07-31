@@ -5,6 +5,7 @@ import type { ManagedGalleryImage } from "../../images/image.types.js";
 import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
 import {
+  assertCanDeleteSiteImages,
   assertCanMutateSiteImages,
   type SiteImageRepository
 } from "./site-image.service.js";
@@ -65,7 +66,7 @@ export function createPrismaSiteImageRepository(options: {
     async deleteGalleryImage(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
-        assertCanMutateSiteImages(input.context.actor, before);
+        assertCanDeleteSiteImages(input.context.actor, before);
         const gallery = readGalleryArray(before.galleryImages);
         const next = normalizeGallery(
           gallery.filter(
@@ -101,7 +102,7 @@ export function createPrismaSiteImageRepository(options: {
     async deletePreview(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
-        assertCanMutateSiteImages(input.context.actor, before);
+        assertCanDeleteSiteImages(input.context.actor, before);
         const after = await tx.site.update({
           data: { previewImageUrl: null },
           select: siteImageSelect,

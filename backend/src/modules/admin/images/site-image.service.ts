@@ -156,6 +156,21 @@ export function assertCanMutateSiteImages(
   throw siteImageStateForbidden();
 }
 
+export function assertCanDeleteSiteImages(
+  principal: AdminMutationContext["actor"],
+  site: SiteImageMutationSite,
+  policy: PermissionPolicy = createPermissionPolicy()
+): void {
+  if (site.deletedAt !== null) {
+    if (!policy.has(principal.role, "site.permanentDelete")) {
+      throw forbidden();
+    }
+    return;
+  }
+
+  assertCanMutateSiteImages(principal, site, policy);
+}
+
 type GalleryBatchUploadCandidate =
   | {
       failure: GalleryBatchResponse["failed"][number];
@@ -634,9 +649,9 @@ async function deletePreview(
 ): Promise<PreviewImageResponse> {
   const site = await loadMutationSite(options.repository, input.siteId);
 
-  assertCanMutateSiteImages(input.context.actor, site);
+  assertCanDeleteSiteImages(input.context.actor, site);
 
-  if (site.status === "published") {
+  if (site.deletedAt === null && site.status === "published") {
     throw sitePreviewRequired();
   }
 
@@ -800,7 +815,7 @@ async function deleteGalleryImage(
 ): Promise<GalleryImageListResponse> {
   const site = await loadMutationSite(options.repository, input.siteId);
 
-  assertCanMutateSiteImages(input.context.actor, site);
+  assertCanDeleteSiteImages(input.context.actor, site);
 
   const gallery = parseManagedGallery(options.imageUrlPolicy, site.galleryImages, site.id);
   const existing = gallery.find((image) => image.assetId === input.assetId);

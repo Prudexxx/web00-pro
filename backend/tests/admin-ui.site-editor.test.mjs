@@ -858,6 +858,10 @@ describe("admin site editor screen", () => {
 
     await screen.load();
     expect(screen.element.textContent).toContain("Изображения — необязательно");
+    expect(screen.element.textContent).toContain("Описание preview изображения");
+    expect(screen.element.textContent).toContain("Описание gallery изображений");
+    expect(screen.element.textContent).not.toContain("Alt для preview");
+    expect(screen.element.textContent).not.toContain("Alt для gallery");
     setValue(screen.element, "title", "Image validation");
     setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
     setValue(screen.element, "shortDescription", "Short");
@@ -990,6 +994,7 @@ describe("admin site editor screen", () => {
     const documentRef = createFakeDocument();
     const requests = [];
     let previewAttempts = 0;
+    let galleryAttempts = 0;
     const apiClient = {
       requestJson: vi.fn((requestPath, options = {}) => {
         requests.push({ options, requestPath });
@@ -1025,6 +1030,23 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: { previewImage: { assetId: "preview-ok" } } });
         }
         if (requestPath.endsWith("/images/gallery/batch")) {
+          galleryAttempts += 1;
+          const metadata = JSON.parse(options.body.get("metadata"));
+
+          if (galleryAttempts > 1) {
+            return Promise.resolve({
+              data: {
+                failed: [],
+                succeeded: metadata.map((item, index) => ({
+                  clientFileId: item.clientFileId,
+                  image: { assetId: `gallery-retry-ok-${index}` },
+                  index,
+                  replayed: false
+                }))
+              }
+            });
+          }
+
           return Promise.resolve({
             data: {
               failed: [{
@@ -1077,6 +1099,13 @@ describe("admin site editor screen", () => {
     expect(screen.element.textContent).toContain("1 успешно");
     expect(screen.element.textContent).toContain("2 ошибка");
     expect(screen.element.textContent).toContain("req_preview_timeout");
+    expect(screen.element.textContent).toContain("Успешно загружено");
+    expect(screen.element.textContent).toContain("Gallery: ok.webp");
+    expect(screen.element.textContent).toContain("Не загрузилось");
+    expect(screen.element.textContent).toContain("Preview: preview.png");
+    expect(screen.element.textContent).toContain("Сервер не ответил вовремя.");
+    expect(screen.element.textContent).toContain("Gallery: retry.webp");
+    expect(screen.element.textContent).toContain("Too large.");
     expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
 
     screen.element.querySelector('[data-action="retry-image-upload"]').dispatchEvent(fakeEvent("click"));
@@ -1096,6 +1125,7 @@ describe("admin site editor screen", () => {
       }
     ]);
     expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(1);
+    await waitFor(() => screen.element.textContent.includes("Карточка и изображения сохранены."));
   });
 
   it("uses the readiness attempt timeout for save preflight without changing ordinary GET timeout", async () => {

@@ -524,7 +524,9 @@ export function createSiteEditorScreen(options) {
     };
     let failedCount = 0;
     let succeededCount = 0;
+    const failedItems = [];
     let requestId = null;
+    const succeededItems = [];
 
     if (imageSelection.previewFile !== null) {
       setSaveState(form, "uploadingPreview");
@@ -542,9 +544,15 @@ export function createSiteEditorScreen(options) {
           method: "PUT"
         });
         succeededCount += 1;
+        succeededItems.push(imageUploadDetail("Preview", imageSelection.previewFile));
       } catch (error) {
         failedCount += 1;
-        requestId ??= readRequestId(error);
+        const failureRequestId = readRequestId(error);
+        requestId ??= failureRequestId;
+        failedItems.push(imageUploadDetail("Preview", imageSelection.previewFile, {
+          message: safeMessage(error),
+          requestId: failureRequestId
+        }));
         retryPlan.preview = {
           alt: imageSelection.previewAlt,
           clientFileId: previewClientFileId,
@@ -574,14 +582,23 @@ export function createSiteEditorScreen(options) {
         });
         succeededCount += normalized.counts.succeeded;
         failedCount += normalized.counts.failed;
+        succeededItems.push(...normalized.succeeded.map((item) => imageUploadDetail("Gallery", item.file)));
+        failedItems.push(...normalized.failed.map((item) => imageUploadDetail("Gallery", item.file, {
+          message: item.message
+        })));
         retryPlan.gallery = normalized.failed.map((item) => ({
           clientFileId: item.clientFileId,
           file: item.file,
           index: item.index
         }));
       } catch (error) {
-        requestId ??= readRequestId(error);
+        const failureRequestId = readRequestId(error);
+        requestId ??= failureRequestId;
         failedCount += imageSelection.galleryFiles.length;
+        failedItems.push(...imageSelection.galleryFiles.map((file) => imageUploadDetail("Gallery", file, {
+          message: safeMessage(error),
+          requestId: failureRequestId
+        })));
         retryPlan.gallery = imageSelection.galleryFiles.map((file, index) => ({
           clientFileId: clientFileIds[index],
           file,
@@ -592,9 +609,11 @@ export function createSiteEditorScreen(options) {
 
     return {
       failedCount,
+      failedItems,
       requestId,
       retryPlan,
-      succeededCount
+      succeededCount,
+      succeededItems
     };
   }
 
@@ -679,6 +698,7 @@ export function createSiteEditorScreen(options) {
         ...(typeof result.requestId === "string"
           ? [createRequestIdControl(result.requestId, { documentRef })]
           : []),
+        renderImageUploadDetails(result),
         createElement("div", {
           documentRef,
           className: "admin-save-next-actions",
@@ -724,6 +744,52 @@ export function createSiteEditorScreen(options) {
     onStatus("Карточка сохранена. Не все изображения загружены.");
   }
 
+  function renderImageUploadDetails(result) {
+    const children = [];
+    const succeededItems = Array.isArray(result?.succeededItems) ? result.succeededItems : [];
+    const failedItems = Array.isArray(result?.failedItems) ? result.failedItems : [];
+
+    if (succeededItems.length > 0) {
+      children.push(createImageUploadDetailGroup("Успешно загружено", succeededItems));
+    }
+    if (failedItems.length > 0) {
+      children.push(createImageUploadDetailGroup("Не загрузилось", failedItems));
+    }
+
+    return createElement("div", {
+      documentRef,
+      className: "admin-image-upload-result",
+      children
+    });
+  }
+
+  function createImageUploadDetailGroup(title, items) {
+    return createElement("section", {
+      documentRef,
+      className: "admin-image-upload-result-group",
+      children: [
+        createElement("strong", {
+          documentRef,
+          text: title
+        }),
+        createElement("ul", {
+          documentRef,
+          children: items.map((item) => createElement("li", {
+            documentRef,
+            text: imageUploadDetailText(item)
+          }))
+        })
+      ]
+    });
+  }
+
+  function imageUploadDetailText(item) {
+    const base = `${item.slot}: ${item.fileName}`;
+    const message = typeof item.message === "string" && item.message.length > 0 ? item.message : "";
+
+    return message.length > 0 ? `${base} — ${message}` : base;
+  }
+
   async function retryFailedImageUploads() {
     if (busy || imageRetryPlan === null) {
       return;
@@ -734,7 +800,9 @@ export function createSiteEditorScreen(options) {
     imageRetryPlan = null;
     let failedCount = 0;
     let succeededCount = 0;
+    const failedItems = [];
     let requestId = null;
+    const succeededItems = [];
     const nextPlan = {
       gallery: [],
       galleryAlt: plan.galleryAlt,
@@ -756,9 +824,15 @@ export function createSiteEditorScreen(options) {
             method: "PUT"
           });
           succeededCount += 1;
+          succeededItems.push(imageUploadDetail("Preview", plan.preview.file));
         } catch (error) {
           failedCount += 1;
-          requestId ??= readRequestId(error);
+          const failureRequestId = readRequestId(error);
+          requestId ??= failureRequestId;
+          failedItems.push(imageUploadDetail("Preview", plan.preview.file, {
+            message: safeMessage(error),
+            requestId: failureRequestId
+          }));
           nextPlan.preview = plan.preview;
         }
       }
@@ -784,14 +858,23 @@ export function createSiteEditorScreen(options) {
           });
           succeededCount += normalized.counts.succeeded;
           failedCount += normalized.counts.failed;
+          succeededItems.push(...normalized.succeeded.map((item) => imageUploadDetail("Gallery", item.file)));
+          failedItems.push(...normalized.failed.map((item) => imageUploadDetail("Gallery", item.file, {
+            message: item.message
+          })));
           nextPlan.gallery = normalized.failed.map((item) => ({
             clientFileId: item.clientFileId,
             file: item.file,
             index: item.index
           }));
         } catch (error) {
-          requestId ??= readRequestId(error);
+          const failureRequestId = readRequestId(error);
+          requestId ??= failureRequestId;
           failedCount += files.length;
+          failedItems.push(...files.map((file) => imageUploadDetail("Gallery", file, {
+            message: safeMessage(error),
+            requestId: failureRequestId
+          })));
           nextPlan.gallery = plan.gallery;
         }
       }
@@ -800,9 +883,11 @@ export function createSiteEditorScreen(options) {
         imageRetryPlan = nextPlan;
         renderSavedWithImageErrors(currentSite, {
           failedCount,
+          failedItems,
           requestId,
           retryPlan: nextPlan,
-          succeededCount
+          succeededCount,
+          succeededItems
         });
         return;
       }
@@ -914,7 +999,7 @@ export function createSiteEditorScreen(options) {
           renderFieldErrors("previewImage", errors)
         ]
       }),
-      createField("previewAlt", "Alt для preview", "input", errors, readValue("previewAlt"), {
+      createField("previewAlt", "Описание preview изображения", "input", errors, readValue("previewAlt"), {
         maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt)
       }),
       createElement("label", {
@@ -927,7 +1012,7 @@ export function createSiteEditorScreen(options) {
           renderFieldErrors("galleryBatchImages", errors)
         ]
       }),
-      createField("galleryBatchAlt", "Alt для gallery", "input", errors, readValue("galleryBatchAlt"), {
+      createField("galleryBatchAlt", "Описание gallery изображений", "input", errors, readValue("galleryBatchAlt"), {
         maxlength: String(IMAGE_UPLOAD_LIMITS.imageAlt)
       })
     ]);
@@ -1943,6 +2028,15 @@ function safeMessage(error) {
   }
 
   return "Не удалось сохранить.";
+}
+
+function imageUploadDetail(slot, file, options = {}) {
+  return {
+    fileName: typeof file?.name === "string" && file.name.trim().length > 0 ? file.name : "файл без имени",
+    message: typeof options.message === "string" ? options.message : "",
+    requestId: typeof options.requestId === "string" ? options.requestId : null,
+    slot
+  };
 }
 
 function localizeEditorErrors(errors, formState) {

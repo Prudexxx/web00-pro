@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   IMAGE_UPLOAD_LIMITS,
+  canCleanupDeletedSiteImages,
   canManageImages,
   createImageManagerScreen
 } from "../src/admin/assets/screens/image-manager.js";
@@ -24,6 +25,10 @@ describe("admin image manager screen", () => {
     await screen.load();
 
     expect(screen.element.textContent).toContain("CRM Site");
+    expect(screen.element.textContent).toContain("Описание preview изображения");
+    expect(screen.element.textContent).toContain("Описание gallery изображения");
+    expect(screen.element.textContent).toContain("Описание batch изображений");
+    expect(screen.element.textContent).not.toContain("Alt для batch");
     expect(screen.element.querySelector("img")).toBeNull();
     expect(screen.element.querySelector('[data-action="replace-preview"]')).not.toBeNull();
     expect(canManageImages(siteFixture({ status: "draft" }), "editor")).toBe(true);
@@ -31,7 +36,80 @@ describe("admin image manager screen", () => {
     expect(canManageImages(siteFixture({ status: "published" }), "admin")).toBe(true);
     expect(canManageImages(siteFixture({ active: false, status: "draft" }), "admin")).toBe(false);
     expect(canManageImages(siteFixture({ deletedAt: "2026-07-28T00:00:00.000Z" }), "admin")).toBe(false);
+    expect(canCleanupDeletedSiteImages(siteFixture({
+      active: false,
+      deletedAt: "2026-07-28T00:00:00.000Z",
+      status: "draft"
+    }), "admin")).toBe(true);
+    expect(canCleanupDeletedSiteImages(siteFixture({
+      active: false,
+      deletedAt: "2026-07-28T00:00:00.000Z",
+      status: "draft"
+    }), "editor")).toBe(false);
     expect(canManageImages(siteFixture({ status: "archived" }), "admin")).toBe(false);
+  });
+
+  it("opens soft-deleted cards in cleanup-only mode so attached images can be removed before permanent delete", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
+          return Promise.resolve({
+            data: siteFixture({
+              active: false,
+              deletedAt: "2026-07-28T00:00:00.000Z",
+              galleryImages: [galleryFixture({
+                assetId: "00000000-0000-4000-8000-000000000201",
+                url: "https://storage.example.test/gallery.webp"
+              })],
+              previewImageUrl: "https://storage.example.test/preview.webp",
+              status: "draft"
+            })
+          });
+        }
+        if (requestPath.endsWith("/images/preview") && options.method === "DELETE") {
+          return Promise.resolve({ data: { previewImage: null, replaced: true, replayed: false } });
+        }
+        if (requestPath.includes("/images/gallery/") && options.method === "DELETE") {
+          return Promise.resolve({ data: { images: [] } });
+        }
+
+        throw new Error(`Unexpected JSON path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn()
+    };
+    const screen = createImageManagerScreen({
+      apiClient,
+      documentRef,
+      onBack: vi.fn(),
+      onSiteUpdated: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+
+    expect(screen.element.textContent).toContain("Доступна только очистка изображений");
+    expect(screen.element.querySelector('[data-action="replace-preview"]')).toBeNull();
+    expect(screen.element.querySelector('[data-action="add-gallery-single"]')).toBeNull();
+    expect(screen.element.querySelector('[data-action="add-gallery-batch"]')).toBeNull();
+    expect(screen.element.querySelector('[data-action="reorder-gallery"]')).toBeNull();
+    expect(screen.element.querySelector('[data-action="delete-preview"]')).not.toBeNull();
+    expect(screen.element.querySelector('[data-action="delete-gallery-image"]')).not.toBeNull();
+
+    screen.element.querySelector('[data-action="delete-preview"]').dispatchEvent(fakeEvent("click"));
+    screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => requests.some((request) => request.requestPath.endsWith("/images/preview") && request.options.method === "DELETE"));
+
+    screen.element.querySelector('[data-action="delete-gallery-image"]').dispatchEvent(fakeEvent("click"));
+    screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => requests.some((request) => request.requestPath.includes("/images/gallery/") && request.options.method === "DELETE"));
+
+    expect(apiClient.requestMultipart).not.toHaveBeenCalled();
   });
 
   it("renders canonical legacy preview and gallery URLs through the public frontend base without changing mutation payloads", async () => {

@@ -138,6 +138,7 @@ export function normalizeGalleryBatchResult(result, context = {}) {
   const files = Array.isArray(context.files) ? context.files : [];
   const normalizedSucceeded = succeeded.map((item) => ({
     clientFileId: typeof item?.clientFileId === "string" ? item.clientFileId : clientFileIds[item?.index],
+    file: files[Number.isInteger(item?.index) ? item.index : clientFileIds.indexOf(item?.clientFileId)],
     image: item?.image ?? null,
     index: Number.isInteger(item?.index) ? item.index : clientFileIds.indexOf(item?.clientFileId),
     replayed: item?.replayed === true

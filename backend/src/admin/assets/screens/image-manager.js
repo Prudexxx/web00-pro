@@ -158,15 +158,23 @@ export function createImageManagerScreen(options) {
     }
 
     const canMutate = canManageImages(currentSite, role);
+    const canCleanupDeleted = canCleanupDeletedSiteImages(currentSite, role);
     replaceContent(content,
       createElement("p", {
         documentRef,
         className: "admin-image-title",
         text: `${currentSite.title ?? currentSite.slug ?? currentSite.id}`
       }),
-      createPreviewSection(canMutate),
-      createGallerySection(canMutate),
-      ...(canMutate ? [] : [
+      ...(canCleanupDeleted ? [
+        createElement("p", {
+          documentRef,
+          className: "admin-state admin-image-cleanup-state",
+          text: "Карточка удалена. Доступна только очистка изображений перед окончательным удалением."
+        })
+      ] : []),
+      createPreviewSection(canMutate, canMutate || canCleanupDeleted),
+      createGallerySection(canMutate, canMutate || canCleanupDeleted),
+      ...(canMutate || canCleanupDeleted ? [] : [
         createElement("p", {
           documentRef,
           className: "admin-state",
@@ -176,7 +184,7 @@ export function createImageManagerScreen(options) {
     );
   }
 
-  function createPreviewSection(canMutate) {
+  function createPreviewSection(canMutate, canDelete) {
     const previewResolution = resolveImageUrl(currentSite?.previewImage?.url ?? currentSite?.previewImageUrl);
     const previewUrl = previewResolution?.url ?? null;
 
@@ -214,7 +222,8 @@ export function createImageManagerScreen(options) {
             }),
         ...(canMutate ? [
           createPreviewForm(),
-          ...(previewUrl === null ? [] : [createElement("button", {
+        ] : []),
+        ...(canDelete && previewUrl !== null ? [createElement("button", {
             documentRef,
             text: "Удалить preview",
             attributes: {
@@ -224,8 +233,7 @@ export function createImageManagerScreen(options) {
             on: {
               click: (event) => openDeletePreviewDialog(event.currentTarget ?? event.target)
             }
-          })])
-        ] : [])
+        })] : [])
       ]
     });
   }
@@ -260,7 +268,7 @@ export function createImageManagerScreen(options) {
       },
       children: [
         labeled("Preview файл", fileInput),
-        labeled("Alt", altInput),
+        labeled("Описание preview изображения", altInput),
         selection,
         createElement("button", {
           documentRef,
@@ -282,7 +290,7 @@ export function createImageManagerScreen(options) {
     return form;
   }
 
-  function createGallerySection(canMutate) {
+  function createGallerySection(canMutate, canDelete) {
     const gallery = readGallery(currentSite);
 
     return createElement("section", {
@@ -299,7 +307,7 @@ export function createImageManagerScreen(options) {
               className: "admin-state",
               text: "Gallery пустая."
             })
-          : createGalleryList(gallery, canMutate),
+          : createGalleryList(gallery, canMutate, canDelete),
         ...(canMutate ? [
           createGallerySingleForm(),
           createGalleryBatchForm()
@@ -308,8 +316,8 @@ export function createImageManagerScreen(options) {
     });
   }
 
-  function createGalleryList(gallery, canMutate) {
-    const rows = gallery.map((image) => createGalleryItem(image, canMutate));
+  function createGalleryList(gallery, canMutate, canDelete) {
+    const rows = gallery.map((image) => createGalleryItem(image, canDelete));
 
     return createElement("div", {
       documentRef,
@@ -321,7 +329,7 @@ export function createImageManagerScreen(options) {
     });
   }
 
-  function createGalleryItem(image, canMutate) {
+  function createGalleryItem(image, canDelete) {
     const imageResolution = resolveImageUrl(image.url);
     const imageUrl = imageResolution?.url ?? null;
 
@@ -354,18 +362,24 @@ export function createImageManagerScreen(options) {
           documentRef,
           text: `Порядок: ${image.sortOrder ?? 0}`
         }),
-        ...(canMutate ? [createElement("button", {
+        createElement("div", {
           documentRef,
-          text: "Удалить изображение",
-          attributes: {
-            "data-action": "delete-gallery-image",
-            "data-asset-id": image.assetId,
-            type: "button"
-          },
-          on: {
-            click: (event) => openDeleteGalleryDialog(image, event.currentTarget ?? event.target)
-          }
-        })] : [])
+          className: "admin-gallery-item-actions",
+          children: canDelete ? [
+            createElement("button", {
+              documentRef,
+              text: "Удалить изображение",
+              attributes: {
+                "data-action": "delete-gallery-image",
+                "data-asset-id": image.assetId,
+                type: "button"
+              },
+              on: {
+                click: (event) => openDeleteGalleryDialog(image, event.currentTarget ?? event.target)
+              }
+            })
+          ] : []
+        })
       ]
     });
   }
@@ -391,7 +405,7 @@ export function createImageManagerScreen(options) {
             value: String(image.sortOrder ?? 0)
           }
         })),
-        labeled("Alt", createElement("input", {
+        labeled("Описание изображения", createElement("input", {
           documentRef,
           attributes: {
             "data-asset-id": image.assetId,
@@ -459,7 +473,7 @@ export function createImageManagerScreen(options) {
       },
       children: [
         labeled("Gallery файл", fileInput),
-        labeled("Alt", altInput),
+        labeled("Описание gallery изображения", altInput),
         selection,
         createElement("button", {
           documentRef,
@@ -512,7 +526,7 @@ export function createImageManagerScreen(options) {
       },
       children: [
         labeled("Batch файлы", fileInput),
-        labeled("Alt для batch", altInput),
+        labeled("Описание batch изображений", altInput),
         selection,
         createElement("button", {
           documentRef,
@@ -885,6 +899,14 @@ export function canManageImages(site, role) {
   }
 
   return role === "admin" && (site.status === "draft" || site.status === "published");
+}
+
+export function canCleanupDeletedSiteImages(site, role) {
+  if (role !== "admin" || typeof site !== "object" || site === null) {
+    return false;
+  }
+
+  return "deletedAt" in site && site.deletedAt !== null && site.deletedAt !== undefined;
 }
 
 export function buildGalleryReorderPayload(images) {
