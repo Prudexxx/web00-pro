@@ -188,6 +188,165 @@ describe("admin maintenance canonical assets screen", () => {
     expect(screen.element.textContent).not.toMatch(/DATABASE_URL|Prisma|postgres:\/\/|token|cookie|password/i);
   });
 
+  it("shows blocked apply failure copy without ever showing a generic completed message", async () => {
+    const documentRef = createFakeDocument();
+    const responses = [
+      () => Promise.resolve({ data: readyReport() }),
+      () => Promise.reject({
+        code: "RECONCILIATION_PRECONDITION_FAILED",
+        message: "Восстановление не выполнено. Повторите проверку состояния.",
+        requestId: "req_apply_blocked"
+      })
+    ];
+    const apiClient = {
+      requestJson: vi.fn(() => responses.shift()())
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled === false);
+    click(screen.element, '[data-action="apply-canonical-assets"]');
+    setValue(screen.element, "typedConfirmation", "WEB00-CANONICAL-ASSETS-15-7");
+    click(screen.element, '[data-action="confirm-dialog"]');
+    await waitFor(() => screen.element.textContent.includes("req_apply_blocked"));
+
+    expect(screen.element.textContent).toContain("Восстановление не выполнено. Повторите проверку состояния.");
+    expect(screen.element.textContent).not.toContain("Восстановление canonical assets завершено.");
+  });
+
+  it("rejects malformed dry-run reports and keeps apply disabled", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn(() => Promise.resolve({
+        data: {
+          ...readyReport(),
+          totals: {
+            ...readyReport().totals,
+            targetSites: 2
+          }
+        }
+      }))
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+
+    expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(true);
+  });
+
+  it("rejects dry-run reports with wrong target slugs", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn(() => Promise.resolve({
+        data: {
+          ...readyReport(),
+          targets: [
+            targetReport("mebel"),
+            targetReport("massage"),
+            targetReport("not-canonical")
+          ]
+        }
+      }))
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+
+    expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(true);
+  });
+
+  it("rejects malformed apply success responses and disables apply until a new dry-run", async () => {
+    const documentRef = createFakeDocument();
+    const responses = [
+      () => Promise.resolve({ data: readyReport() }),
+      () => Promise.resolve({
+        data: {
+          ...readyReport(),
+          mode: "apply",
+          status: "applied",
+          totals: {
+            ...readyReport().totals,
+            appliedSiteUpdates: 0
+          }
+        }
+      })
+    ];
+    const apiClient = {
+      requestJson: vi.fn(() => responses.shift()())
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled === false);
+    click(screen.element, '[data-action="apply-canonical-assets"]');
+    setValue(screen.element, "typedConfirmation", "WEB00-CANONICAL-ASSETS-15-7");
+    click(screen.element, '[data-action="confirm-dialog"]');
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+
+    expect(screen.element.textContent).not.toContain("Канонические изображения восстановлены.");
+    expect(screen.element.textContent).not.toContain("Восстановление canonical assets завершено.");
+    expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(true);
+  });
+
+  it("shows safe unexpected failure copy with requestId control", async () => {
+    const documentRef = createFakeDocument();
+    const responses = [
+      () => Promise.resolve({ data: readyReport() }),
+      () => Promise.reject({
+        code: "INTERNAL_ERROR",
+        message: "Internal server error.",
+        requestId: "req_apply_500"
+      })
+    ];
+    const apiClient = {
+      requestJson: vi.fn(() => responses.shift()())
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled === false);
+    click(screen.element, '[data-action="apply-canonical-assets"]');
+    setValue(screen.element, "typedConfirmation", "WEB00-CANONICAL-ASSETS-15-7");
+    click(screen.element, '[data-action="confirm-dialog"]');
+    await waitFor(() => screen.element.textContent.includes("req_apply_500"));
+
+    expect(screen.element.textContent).toContain("Не удалось восстановить изображения.");
+    expect(screen.element.textContent).toContain("Скопировать requestId");
+    expect(screen.element.textContent).not.toMatch(/Prisma|DATABASE_URL|postgres:\/\/|token|cookie|password/i);
+  });
+
   it("bootstrapped admin shell can open maintenance but editor shell cannot", async () => {
     const documentRef = createFakeDocument();
     const root = documentRef.createElement("main");

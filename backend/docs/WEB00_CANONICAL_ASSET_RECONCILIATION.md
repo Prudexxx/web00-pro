@@ -96,7 +96,17 @@ Apply confirmation:
 
 `WEB00-CANONICAL-ASSETS-15-7`
 
-The admin UI keeps apply disabled until the latest dry-run report is `ready` and has zero blockers. The confirmation dialog requires the exact confirmation string. A successful apply shows that the cards remain drafts and are not published.
+HTTP result contract:
+
+- dry-run returns HTTP `200` with a read-only report, including controlled blocked reports;
+- apply returns HTTP `200` only when the operation actually reports `applied` or `already-reconciled`;
+- apply precondition blockers return HTTP `409` with code `RECONCILIATION_PRECONDITION_FAILED`;
+- dry-run/apply race changes return HTTP `409` with code `RECONCILIATION_STATE_CHANGED`;
+- unexpected transaction/database failures are not converted into successful or blocked reconciliation reports; the standard safe error envelope returns HTTP `500`, `INTERNAL_ERROR`, and `requestId` without raw Prisma, SQL, database URL, token, cookie, or password material.
+
+Apply precondition blocker message:
+
+`Восстановление не выполнено. Повторите проверку состояния.`
 
 If card state changes between dry-run planning and transactional apply, the backend returns the controlled state-change failure:
 
@@ -106,7 +116,9 @@ Message:
 
 `Данные карточек изменились. Повторите проверку состояния.`
 
-The UI shows safe failure copy and requestId only; it must not display database URLs, Prisma internals, tokens, cookies, or passwords.
+The admin UI keeps apply disabled until the latest dry-run report is structurally valid, has mode `dry-run`, status `ready`, exactly the expected targets in order (`mebel`, `massage`, `drova`), `targetSites=3`, and zero blockers. The confirmation dialog requires the exact confirmation string. A successful apply is shown only for a structurally valid apply report with status `applied` or `already-reconciled`; malformed success responses, wrong target lists, impossible totals, and blocker reports do not show success copy. A successful apply shows that the cards remain drafts and are not published.
+
+The UI shows safe failure copy and requestId only; it must not display database URLs, Prisma internals, raw SQL, tokens, cookies, or passwords.
 
 ## CLI local/test helper
 
@@ -204,9 +216,10 @@ If one site fails:
 
 In one controlled transaction:
 
-- all three target rows are locked in deterministic slug order: `drova`, `massage`, `mebel`;
+- all three target site rows and their current category rows are locked in deterministic slug order: `drova`, `massage`, `mebel`;
+- the repository lock query joins `sites` to `categories` and uses `FOR UPDATE OF s, c`;
 - the locked rows are re-read after the locks are acquired;
-- the full expected state from planning is compared against the locked current state before any write;
+- the full expected state from planning is compared against the locked current state before any write, including both `categoryId` and `categorySlug`;
 - lifecycle, identity, category/title, preview, gallery URL, gallery alt, gallery sort order, and storage metadata changes during the race window block the operation;
 - if the full recheck fails, zero site updates and zero audit rows are retained.
 
@@ -226,6 +239,7 @@ The transaction preserves:
 - title;
 - descriptions;
 - category;
+- categoryId;
 - status;
 - active;
 - deletedAt;
@@ -274,6 +288,7 @@ If any update or audit insert fails:
 - the transaction rolls back;
 - first/second site changes are not retained;
 - no partial audit rows are retained.
+- unexpected transaction/database failures are surfaced through the safe application error path instead of being converted into a successful or blocked reconciliation report.
 
 If any target row changes after the initial plan but before transactional apply:
 
@@ -295,7 +310,8 @@ Implemented deterministic tests cover:
 - encoded traversal, encoded separator, query/hash, and final-path escape rejection;
 - backend/browser resolver parity;
 - admin maintenance route RBAC and exact confirmation;
-- admin maintenance UI dry-run/apply/blocked/failure behavior;
+- admin maintenance route HTTP apply contract: `200` only for `applied`/`already-reconciled`, `409 RECONCILIATION_PRECONDITION_FAILED` for precondition blockers, `409 RECONCILIATION_STATE_CHANGED` for race changes, and safe `500 INTERNAL_ERROR` for unexpected failures;
+- admin maintenance UI strict report parsing, dry-run/apply/blocked/failure behavior, invalid response handling, and no false-success fallback copy;
 - admin legacy display;
 - public API normalization;
 - dry-run zero writes;
@@ -306,7 +322,7 @@ Implemented deterministic tests cover:
 - unexpected preview blocker;
 - preview restoration for three sites;
 - gallery URL normalization for twelve entries;
-- deterministic lock order and expected-site handoff;
+- deterministic site/category lock order and expected-site handoff;
 - in-transaction full state recheck blockers;
 - preservation of assetId/storage metadata/alt/order/lifecycle fields;
 - one audit row per changed site;

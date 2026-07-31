@@ -12,6 +12,7 @@ import {
 
 const reconciliationSiteSelect = {
   active: true,
+  categoryId: true,
   category: {
     select: {
       slug: true
@@ -60,12 +61,13 @@ export function createPrismaCanonicalAssetReconciliationRepository(
 }
 
 async function lockCanonicalAssetSites(tx: Prisma.TransactionClient): Promise<void> {
-  await tx.$queryRaw<{ id: string }[]>`
-    SELECT id
-    FROM sites
-    WHERE slug IN (${Prisma.join([...CANONICAL_LEGACY_ASSET_LOCK_ORDER])})
-    ORDER BY slug
-    FOR UPDATE
+  await tx.$queryRaw<{ category_id: string; site_id: string }[]>`
+    SELECT s.id AS site_id, c.id AS category_id
+    FROM sites s
+    JOIN categories c ON c.id = s.category_id
+    WHERE s.slug IN (${Prisma.join([...CANONICAL_LEGACY_ASSET_LOCK_ORDER])})
+    ORDER BY s.slug
+    FOR UPDATE OF s, c
   `;
 }
 
@@ -130,6 +132,7 @@ function mapReconciliationSiteRow(row: Prisma.SiteGetPayload<{
 }>): CanonicalAssetReconciliationSite {
   return {
     active: row.active,
+    categoryId: row.categoryId,
     categorySlug: row.category.slug,
     deletedAt: row.deletedAt,
     galleryImages: readGalleryImages(row.galleryImages),

@@ -12,6 +12,10 @@ const CANONICAL_ASSETS_DRY_RUN_PATH = "/api/admin/maintenance/canonical-assets";
 const CANONICAL_ASSETS_APPLY_PATH =
   "/api/admin/maintenance/canonical-assets/reconcile";
 const CANONICAL_ASSETS_CONFIRMATION = "WEB00-CANONICAL-ASSETS-15-7";
+const EXPECTED_TARGET_SLUGS = Object.freeze(["mebel", "massage", "drova"]);
+const INVALID_RESPONSE_MESSAGE = "Сервер вернул некорректный ответ.";
+const APPLY_BLOCKED_MESSAGE = "Восстановление не выполнено. Повторите проверку состояния.";
+const UNEXPECTED_APPLY_FAILURE_MESSAGE = "Не удалось восстановить изображения.";
 const SAFE_TECHNICAL_ERROR_PATTERN =
   /DATABASE_URL|Prisma|postgres:\/\/|postgresql:\/\/|token|cookie|password|secret/i;
 
@@ -24,6 +28,7 @@ export function createMaintenanceScreen(options) {
   let currentDialog = null;
   let destroyed = false;
   let latestReport = null;
+  let applyReady = false;
   let mutationBusy = false;
   let checking = false;
 
@@ -143,6 +148,7 @@ export function createMaintenanceScreen(options) {
     const controller = new AbortController();
     activeController = controller;
     checking = true;
+    applyReady = false;
     latestReport = null;
     updateApplyState();
     setBusy(checkButton, true);
@@ -160,7 +166,8 @@ export function createMaintenanceScreen(options) {
         return;
       }
 
-      latestReport = normalizeReport(response?.data);
+      latestReport = parseMaintenanceReport(response?.data, { expectedMode: "dry-run" });
+      applyReady = latestReport.status === "ready" && latestReport.blockers.length === 0;
       renderReport(latestReport);
       const message = latestReport.status === "ready"
         ? "Проверка готова. Apply доступен после подтверждения."
@@ -172,6 +179,7 @@ export function createMaintenanceScreen(options) {
         return;
       }
 
+      applyReady = false;
       latestReport = null;
       renderError(results, documentRef, error);
       statusRegion.textContent = "Не удалось проверить canonical assets.";
@@ -207,6 +215,7 @@ export function createMaintenanceScreen(options) {
 
   async function submitApply() {
     mutationBusy = true;
+    applyReady = false;
     updateApplyState();
 
     try {
@@ -222,7 +231,15 @@ export function createMaintenanceScreen(options) {
         return;
       }
 
-      latestReport = normalizeReport(response?.data);
+      const report = parseMaintenanceReport(response?.data, { expectedMode: "apply" });
+      if (report.status === "blocked") {
+        throw maintenanceError("RECONCILIATION_PRECONDITION_FAILED", applyStatusMessage(report));
+      }
+      if (report.status !== "applied" && report.status !== "already-reconciled") {
+        throw invalidResponseError();
+      }
+
+      latestReport = report;
       renderReport(latestReport);
       const message = applyStatusMessage(latestReport);
       statusRegion.textContent = message;
@@ -369,6 +386,7 @@ export function createMaintenanceScreen(options) {
     return role === "admin" &&
       !checking &&
       !mutationBusy &&
+      applyReady &&
       latestReport !== null &&
       latestReport.status === "ready" &&
       Array.isArray(latestReport.blockers) &&
@@ -390,19 +408,53 @@ export function createMaintenanceScreen(options) {
   };
 }
 
-function normalizeReport(report) {
+function parseMaintenanceReport(report, options = {}) {
+  if (!isRecord(report)) {
+    throw invalidResponseError();
+  }
+
+  const mode = report.mode;
+  if (mode !== "dry-run" && mode !== "apply") {
+    throw invalidResponseError();
+  }
+  if (options.expectedMode !== undefined && mode !== options.expectedMode) {
+    throw invalidResponseError();
+  }
+
+  const status = report.status;
+  if (
+    status !== "ready" &&
+    status !== "applied" &&
+    status !== "already-reconciled" &&
+    status !== "blocked"
+  ) {
+    throw invalidResponseError();
+  }
+  if (mode === "apply" && status === "ready") {
+    throw invalidResponseError();
+  }
+
+  const blockers = readStringArray(report.blockers);
+  const targets = readTargets(report.targets);
+  const totals = readTotals(report.totals);
+
+  if (blockers === null || targets === null || totals === null) {
+    throw invalidResponseError();
+  }
+  if (status === "applied" && totals.appliedSiteUpdates <= 0) {
+    throw invalidResponseError();
+  }
+  if (status === "already-reconciled" && totals.appliedSiteUpdates !== 0) {
+    throw invalidResponseError();
+  }
+
   return {
-    blockers: Array.isArray(report?.blockers) ? report.blockers : [],
-    message: typeof report?.message === "string" ? report.message : "",
-    mode: report?.mode === "apply" ? "apply" : "dry-run",
-    status: typeof report?.status === "string" ? report.status : "blocked",
-    targets: Array.isArray(report?.targets) ? report.targets : [],
-    totals: {
-      appliedSiteUpdates: readNumber(report?.totals?.appliedSiteUpdates),
-      plannedGalleryUrlUpdates: readNumber(report?.totals?.plannedGalleryUrlUpdates),
-      plannedPreviewUpdates: readNumber(report?.totals?.plannedPreviewUpdates),
-      targetSites: readNumber(report?.totals?.targetSites)
-    }
+    blockers,
+    message: typeof report.message === "string" ? report.message : "",
+    mode,
+    status,
+    targets,
+    totals
   };
 }
 
@@ -413,11 +465,11 @@ function applyStatusMessage(report) {
   if (report.status === "already-reconciled") {
     return "Канонические изображения уже восстановлены.";
   }
-  if (report.status === "blocked" && typeof report.message === "string" && report.message.length > 0) {
-    return report.message;
+  if (report.status === "blocked") {
+    return APPLY_BLOCKED_MESSAGE;
   }
 
-  return "Восстановление canonical assets завершено.";
+  return UNEXPECTED_APPLY_FAILURE_MESSAGE;
 }
 
 function renderError(container, documentRef, error) {
@@ -445,6 +497,10 @@ function toSafeDialogError(error) {
 }
 
 function safeErrorMessage(error) {
+  if (error?.code === "INTERNAL_ERROR" || error?.status >= 500) {
+    return UNEXPECTED_APPLY_FAILURE_MESSAGE;
+  }
+
   const message = typeof error?.message === "string" && error.message.length > 0
     ? error.message
     : "";
@@ -453,7 +509,7 @@ function safeErrorMessage(error) {
     return message;
   }
 
-  return "Не удалось выполнить обслуживание canonical assets.";
+  return UNEXPECTED_APPLY_FAILURE_MESSAGE;
 }
 
 function safeRequestId(error) {
@@ -482,6 +538,71 @@ function tableCell(documentRef, label, text) {
   });
 }
 
-function readNumber(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+function readStringArray(value) {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    return null;
+  }
+
+  return [...value];
+}
+
+function readTargets(value) {
+  if (!Array.isArray(value) || value.length !== EXPECTED_TARGET_SLUGS.length) {
+    return null;
+  }
+
+  const targets = [];
+  for (let index = 0; index < EXPECTED_TARGET_SLUGS.length; index += 1) {
+    const target = value[index];
+    if (!isRecord(target) || target.slug !== EXPECTED_TARGET_SLUGS[index]) {
+      return null;
+    }
+    if (readStringArray(target.blockers) === null) {
+      return null;
+    }
+    targets.push(target);
+  }
+
+  return targets;
+}
+
+function readTotals(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const totals = {
+    appliedSiteUpdates: readNonNegativeInteger(value.appliedSiteUpdates),
+    plannedGalleryUrlUpdates: readNonNegativeInteger(value.plannedGalleryUrlUpdates),
+    plannedPreviewUpdates: readNonNegativeInteger(value.plannedPreviewUpdates),
+    targetSites: readNonNegativeInteger(value.targetSites)
+  };
+
+  if (Object.values(totals).some((item) => item === null)) {
+    return null;
+  }
+  if (totals.targetSites !== EXPECTED_TARGET_SLUGS.length) {
+    return null;
+  }
+
+  return totals;
+}
+
+function readNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function invalidResponseError() {
+  return maintenanceError("INVALID_RESPONSE", INVALID_RESPONSE_MESSAGE);
+}
+
+function maintenanceError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+
+  return error;
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

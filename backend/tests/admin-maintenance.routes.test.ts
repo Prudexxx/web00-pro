@@ -41,6 +41,23 @@ describe("admin canonical asset maintenance routes", () => {
     expect(service.apply).not.toHaveBeenCalled();
   });
 
+  it("keeps dry-run precondition blockers as HTTP 200 read-only reports", async () => {
+    const service = createMaintenanceService({
+      dryRunReport: blockedReport("PREVIEW_URL_CONFLICT:mebel")
+    });
+
+    const response = await request(createApp(service, adminPrincipal()))
+      .get("/api/admin/maintenance/canonical-assets")
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({
+      blockers: ["PREVIEW_URL_CONFLICT:mebel"],
+      mode: "dry-run",
+      status: "blocked"
+    });
+    expect(service.apply).not.toHaveBeenCalled();
+  });
+
   it("requires admin RBAC and exact confirmation for apply", async () => {
     const service = createMaintenanceService();
 
@@ -109,6 +126,69 @@ describe("admin canonical asset maintenance routes", () => {
     expect(response.body.data.status).toBe("already-reconciled");
     expect(JSON.stringify(response.body)).not.toMatch(/DATABASE_URL|token|cookie|password/i);
   });
+
+  it("returns HTTP 409 for known apply precondition blockers instead of HTTP 200", async () => {
+    const service = createMaintenanceService({
+      applyReport: {
+        ...blockedReport("CATEGORY_MISMATCH:mebel"),
+        mode: "apply"
+      }
+    });
+
+    const response = await request(createApp(service, adminPrincipal()))
+      .post("/api/admin/maintenance/canonical-assets/reconcile")
+      .set("X-Request-Id", "req_apply_precondition")
+      .send({ confirmation: "WEB00-CANONICAL-ASSETS-15-7" })
+      .expect(409);
+
+    expect(response.body.error).toMatchObject({
+      code: "RECONCILIATION_PRECONDITION_FAILED",
+      message: "Восстановление не выполнено. Повторите проверку состояния.",
+      requestId: "req_apply_precondition"
+    });
+    expect(JSON.stringify(response.body.error.details)).toContain("CATEGORY_MISMATCH:mebel");
+  });
+
+  it("returns HTTP 409 for transaction state changes with the state-changed code", async () => {
+    const service = createMaintenanceService({
+      applyReport: {
+        ...blockedReport("RECONCILIATION_STATE_CHANGED"),
+        message: "Данные карточек изменились. Повторите проверку состояния.",
+        mode: "apply"
+      }
+    });
+
+    const response = await request(createApp(service, adminPrincipal()))
+      .post("/api/admin/maintenance/canonical-assets/reconcile")
+      .set("X-Request-Id", "req_state_changed")
+      .send({ confirmation: "WEB00-CANONICAL-ASSETS-15-7" })
+      .expect(409);
+
+    expect(response.body.error).toMatchObject({
+      code: "RECONCILIATION_STATE_CHANGED",
+      message: "Данные карточек изменились. Повторите проверку состояния.",
+      requestId: "req_state_changed"
+    });
+  });
+
+  it("returns safe HTTP 500 for unexpected apply errors without raw database output", async () => {
+    const service = createMaintenanceService({
+      applyError: new Error("Prisma transaction failed near postgresql://secret@localhost/db")
+    });
+
+    const response = await request(createApp(service, adminPrincipal()))
+      .post("/api/admin/maintenance/canonical-assets/reconcile")
+      .set("X-Request-Id", "req_unexpected_apply")
+      .send({ confirmation: "WEB00-CANONICAL-ASSETS-15-7" })
+      .expect(500);
+
+    expect(response.body.error).toMatchObject({
+      code: "INTERNAL_ERROR",
+      message: "Internal server error.",
+      requestId: "req_unexpected_apply"
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/Prisma|postgresql:\/\/|secret|DATABASE_URL|token|cookie|password/i);
+  });
 });
 
 function createApp(service: AdminMaintenanceService, principal?: AuthenticatedPrincipal) {
@@ -131,10 +211,20 @@ function createApp(service: AdminMaintenanceService, principal?: AuthenticatedPr
   return app;
 }
 
-function createMaintenanceService(options: { applyReport?: CanonicalAssetReconciliationReport } = {}): AdminMaintenanceService {
+function createMaintenanceService(options: {
+  applyError?: Error;
+  applyReport?: CanonicalAssetReconciliationReport;
+  dryRunReport?: CanonicalAssetReconciliationReport;
+} = {}): AdminMaintenanceService {
   return {
-    apply: vi.fn(async () => options.applyReport ?? readyReport()),
-    dryRun: vi.fn(async () => readyReport())
+    apply: vi.fn(async () => {
+      if (options.applyError !== undefined) {
+        throw options.applyError;
+      }
+
+      return options.applyReport ?? readyReport();
+    }),
+    dryRun: vi.fn(async () => options.dryRunReport ?? readyReport())
   };
 }
 
@@ -172,6 +262,30 @@ function targetReport(slug: "mebel" | "massage" | "drova") {
     slug,
     status: "draft",
     titleMatch: true
+  };
+}
+
+function blockedReport(blocker: string): CanonicalAssetReconciliationReport {
+  return {
+    ...readyReport(),
+    blockers: [blocker],
+    status: "blocked",
+    targets: [
+      {
+        ...targetReport("mebel"),
+        blockers: blocker.endsWith(":mebel") || blocker === "RECONCILIATION_STATE_CHANGED"
+          ? [blocker]
+          : []
+      },
+      targetReport("massage"),
+      targetReport("drova")
+    ],
+    totals: {
+      appliedSiteUpdates: 0,
+      plannedGalleryUrlUpdates: 0,
+      plannedPreviewUpdates: 0,
+      targetSites: 3
+    }
   };
 }
 

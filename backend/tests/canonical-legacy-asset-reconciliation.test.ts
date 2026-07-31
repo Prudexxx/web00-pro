@@ -186,6 +186,7 @@ describe("canonical legacy asset reconciliation", () => {
     ["gallery URL changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.galleryImages[0]!.url = "https://storage.example.test/race-gallery.webp"; }],
     ["gallery alt changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.galleryImages[0]!.alt = "Changed alt"; }],
     ["gallery order changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.galleryImages[0]!.sortOrder = 99; }],
+    ["category relation changes after dry-run", (site: CanonicalAssetReconciliationSite) => { site.categoryId = "00000000-0000-4000-8000-000000000777"; }],
     ["site is published after dry-run", (site: CanonicalAssetReconciliationSite) => { site.status = "published"; site.publishedAt = "2026-07-31T12:00:00.000Z"; }],
     ["site is deleted after dry-run", (site: CanonicalAssetReconciliationSite) => { site.deletedAt = "2026-07-31T12:00:00.000Z"; }],
     ["site is disabled after dry-run", (site: CanonicalAssetReconciliationSite) => { site.active = false; }]
@@ -230,6 +231,7 @@ describe("canonical legacy asset reconciliation", () => {
       expect(original).toBeDefined();
       expect(after).toMatchObject({
         active: original?.active,
+        categoryId: original?.categoryId,
         categorySlug: original?.categorySlug,
         deletedAt: original?.deletedAt,
         id: original?.id,
@@ -282,17 +284,31 @@ describe("canonical legacy asset reconciliation", () => {
     const repo = createFakeRepository({ failOnChangeIndex: 2 });
     const before = snapshotSites(repo.sites);
 
-    const report = await reconcileCanonicalLegacyAssets({
+    await expect(reconcileCanonicalLegacyAssets({
       apply: true,
       catalog,
       confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
       context: operationContext,
       repository: repo
+    })).rejects.toThrow("simulated write failure");
+
+    expect(snapshotSites(repo.sites)).toEqual(before);
+    expect(repo.auditRows).toHaveLength(0);
+  });
+
+  it("propagates unexpected apply failures instead of returning a blocked HTTP-success-shaped report", async () => {
+    const repo = createFakeRepository({
+      unexpectedApplyError: new Error("simulated unexpected transaction failure")
     });
 
-    expect(report.status).toBe("blocked");
-    expect(report.blockers).toContain("APPLY_TRANSACTION_FAILED");
-    expect(snapshotSites(repo.sites)).toEqual(before);
+    await expect(reconcileCanonicalLegacyAssets({
+      apply: true,
+      catalog,
+      confirm: CANONICAL_LEGACY_ASSET_APPLY_CONFIRMATION,
+      context: operationContext,
+      repository: repo
+    })).rejects.toThrow("simulated unexpected transaction failure");
+
     expect(repo.auditRows).toHaveLength(0);
   });
 
@@ -357,6 +373,7 @@ function createFakeRepository(options: {
   failOnChangeIndex?: number;
   mutateBeforeApply?: (sites: CanonicalAssetReconciliationSite[]) => void;
   sites?: CanonicalAssetReconciliationSite[];
+  unexpectedApplyError?: Error;
 } = {}): CanonicalAssetReconciliationRepository & {
   auditRows: FakeAuditRow[];
   events: string[];
@@ -384,6 +401,10 @@ function createFakeRepository(options: {
     },
     async applyCanonicalAssetChanges(input) {
       repo.writeAttempts += 1;
+      if (options.unexpectedApplyError !== undefined) {
+        throw options.unexpectedApplyError;
+      }
+
       const beforeSites = cloneSites(state);
       const beforeAudit = [...auditRows];
       try {
@@ -483,6 +504,7 @@ function siteFixture(
 
   return {
     active: true,
+    categoryId: categoryIdFor(source.categorySlug),
     categorySlug: source.categorySlug,
     deletedAt: null,
     galleryImages: galleryFor(slug),
@@ -494,6 +516,20 @@ function siteFixture(
     title: source.title,
     ...rest
   };
+}
+
+function categoryIdFor(categorySlug: string): string {
+  const index = [
+    "automation",
+    "business",
+    "commerce",
+    "content",
+    "services",
+    "support",
+    "analytics"
+  ].findIndex((slug) => slug === categorySlug);
+
+  return `00000000-0000-4000-8001-${String(index + 1).padStart(12, "0")}`;
 }
 
 function galleryFor(slug: CanonicalLegacyAssetTargetSlug): CanonicalAssetReconciliationSite["galleryImages"] {

@@ -38,9 +38,12 @@ The production baseline incident is documented in `backend/docs/incidents/2026-0
 15. Public catalog mapper returns consumer-independent absolute image URLs and omits unsafe gallery URLs from public output.
 16. Guarded canonical asset reconciliation logic targets only `mebel`, `massage`, and `drova`, with dry-run default, apply confirmation, transaction/rollback, audit, and idempotency tests.
 17. Render Free operational gap is closed by an authenticated admin-only maintenance workflow in `/admin`; the CLI remains local/test helper only.
-18. Canonical reconciliation apply now locks all three rows with `FOR UPDATE ORDER BY slug`, re-reads the locked rows, and performs a full in-transaction state comparison before any write.
-19. State changes after dry-run planning return controlled `RECONCILIATION_STATE_CHANGED` with zero reconciliation writes and zero audit rows.
+18. Canonical reconciliation apply now locks all three target site rows and their current category rows with `FOR UPDATE OF s, c` in slug order, re-reads the locked rows, and performs a full in-transaction state comparison before any write, including `categoryId` and `categorySlug`.
+19. Apply precondition blockers now return controlled HTTP `409 RECONCILIATION_PRECONDITION_FAILED` instead of an ambiguous HTTP `200` blocked report.
 20. Legacy asset URL resolution now blocks encoded traversal, encoded separator escapes, query/hash suffixes on legacy paths, and final URL escapes outside `/web00-pro/assets/`.
+21. State changes after dry-run planning return controlled HTTP `409 RECONCILIATION_STATE_CHANGED` with zero reconciliation writes and zero audit rows.
+22. Unexpected reconciliation transaction/database failures surface through the safe HTTP `500 INTERNAL_ERROR` path with `requestId`; they are not converted into successful or blocked reconciliation reports.
+23. Admin maintenance UI report parsing is strict: malformed success responses, wrong target lists, impossible totals, blocked apply reports, and apply responses without real apply/no-op semantics do not show success copy and keep apply locked.
 
 ## Production baseline drift
 
@@ -80,9 +83,11 @@ Implemented in this PR:
 - apply guard: `--apply --confirm=WEB00-CANONICAL-ASSETS-15-7`;
 - HTTP/admin apply confirmation: `WEB00-CANONICAL-ASSETS-15-7`;
 - all-or-nothing repository contract with audit entries only for changed sites;
-- row locks plus full in-transaction state recheck before writes;
-- controlled `RECONCILIATION_STATE_CHANGED` failure for dry-run/apply race windows;
-- deterministic tests for dry-run, apply guards, RBAC, UI flow, blockers, rollback, idempotency, preservation, and safe output.
+- site/category row locks plus full in-transaction state recheck before writes;
+- controlled HTTP `409 RECONCILIATION_PRECONDITION_FAILED` for apply precondition blockers;
+- controlled HTTP `409 RECONCILIATION_STATE_CHANGED` failure for dry-run/apply race windows;
+- safe HTTP `500 INTERNAL_ERROR` with `requestId` for unexpected transaction/database failures;
+- deterministic tests for dry-run, apply HTTP contract, strict UI parsing, apply guards, RBAC, UI flow, blockers, rollback, idempotency, preservation, and safe output.
 
 Not performed in this PR:
 

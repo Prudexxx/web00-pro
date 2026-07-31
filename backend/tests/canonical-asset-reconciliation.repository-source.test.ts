@@ -10,8 +10,11 @@ describe("Prisma canonical asset reconciliation repository source contract", () 
     );
 
     expect(source).toMatch(/\$queryRaw/);
+    expect(source).toMatch(/JOIN\s+categories\s+c\s+ON\s+c\.id\s*=\s*s\.category_id/i);
     expect(source).toContain("FOR UPDATE");
-    expect(source).toMatch(/ORDER BY\s+slug/i);
+    expect(source).toMatch(/FOR UPDATE OF s,\s*c/i);
+    expect(source).toMatch(/ORDER BY\s+s\.slug/i);
+    expect(source).toMatch(/categoryId:\s*row\.categoryId/);
     expect(source).not.toMatch(/\$queryRawUnsafe|\$executeRawUnsafe/);
     expect(source).not.toMatch(/SELECT FOR UPDATE.*\$\{/s);
   });

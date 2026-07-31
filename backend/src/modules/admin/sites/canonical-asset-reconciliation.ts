@@ -52,6 +52,7 @@ export interface CanonicalAssetGalleryImage {
 
 export interface CanonicalAssetReconciliationSite {
   active: boolean;
+  categoryId: string;
   categorySlug: string;
   deletedAt: Date | string | null;
   galleryImages: CanonicalAssetGalleryImage[];
@@ -250,13 +251,7 @@ export async function reconcileCanonicalLegacyAssets(
       };
     }
 
-    return {
-      blockers: ["APPLY_TRANSACTION_FAILED"],
-      mode,
-      status: "blocked",
-      targets: plans.map((plan) => plan.report),
-      totals
-    };
+    throw error;
   }
 
   return {
