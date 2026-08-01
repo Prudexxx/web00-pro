@@ -321,6 +321,7 @@ async function inspectObjectsWithFetch(
     });
 
     if (!result.ok) {
+      await disposeResponseBody(result);
       throw storageOperationFailed(
         "STORAGE_UNAVAILABLE",
         "Storage is unavailable.",

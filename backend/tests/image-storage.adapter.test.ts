@@ -414,6 +414,15 @@ describe("createSupabaseImageStorage", () => {
 
   it.each([
     [
+      "inspect",
+      "STORAGE_UNAVAILABLE",
+      (storage: ReturnType<typeof createSupabaseImageStorage>) =>
+        storage.inspectObjects([variantPath(480, "webp")], {
+          requestId: "req_storage_non_2xx_disposal",
+          timeoutMs: 1_000
+        })
+    ],
+    [
       "upload",
       "STORAGE_WRITE_FAILED",
       (storage: ReturnType<typeof createSupabaseImageStorage>) =>
