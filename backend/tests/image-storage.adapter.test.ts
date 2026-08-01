@@ -39,6 +39,34 @@ function minimalPublicUrlClient() {
   };
 }
 
+function observableBodyResponse(
+  status: number,
+  bodyText = "provider raw body service-role-secret storage/v1/object/sites/bad"
+): { cancelled: () => boolean; response: Response } {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(bodyText));
+      controller.close();
+    }
+  });
+
+  return {
+    cancelled: () => cancelled,
+    response: new Response(stream, {
+      headers: { "content-type": "application/json" },
+      status
+    })
+  };
+}
+
+function expectBodyDisposed(response: Response, cancelled: () => boolean): void {
+  expect(response.bodyUsed || cancelled()).toBe(true);
+}
+
 describe("createSupabaseImageStorage", () => {
   it("preserves Supabase storage client receivers for bucket inspection and creation", async () => {
     const calls: string[] = [];
@@ -292,6 +320,147 @@ describe("createSupabaseImageStorage", () => {
     });
   });
 
+  it("uses the exact Supabase object list REST contract with prefix only in the JSON body", async () => {
+    const calls: Array<{ body: unknown; init: RequestInit | undefined; url: string }> = [];
+    const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+      fetchImpl: async (url, init) => {
+        calls.push({
+          body:
+            typeof init?.body === "string"
+              ? JSON.parse(init.body) as unknown
+              : init?.body,
+          init,
+          url: String(url)
+        });
+
+        return new Response(JSON.stringify([{ name: "480.webp" }]), {
+          headers: { "content-type": "application/json" },
+          status: 200
+        });
+      }
+    });
+    const existingPath = variantPath(480, "webp");
+    const missingPath = variantPath(960, "avif");
+
+    await expect(
+      storage.inspectObjects([existingPath, missingPath], {
+        requestId: "req_storage_list_contract",
+        timeoutMs: 1_000
+      })
+    ).resolves.toEqual({
+      existingPaths: [existingPath],
+      missingPaths: [missingPath]
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(
+      "https://project.supabase.co/storage/v1/object/list/web00-catalog-images"
+    );
+    expect(calls[0]?.url).not.toContain(`/list/${config.bucket}/sites/`);
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.body).toEqual({
+      limit: 100,
+      offset: 0,
+      prefix: `sites/${siteId}/preview/${assetId}`,
+      sortBy: {
+        column: "name",
+        order: "asc"
+      }
+    });
+  });
+
+  it("disposes the response body after successful abortable upload", async () => {
+    const uploadResponse = observableBodyResponse(200, "{}");
+    const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+      fetchImpl: async () => uploadResponse.response
+    });
+
+    await expect(
+      storage.uploadObject({
+        body: Buffer.from("webp"),
+        cacheControl: "31536000",
+        contentType: "image/webp",
+        context: {
+          requestId: "req_storage_upload_disposal",
+          timeoutMs: 1_000
+        },
+        path: variantPath(480, "webp"),
+        upsert: false
+      })
+    ).resolves.toMatchObject({
+      path: variantPath(480, "webp")
+    });
+
+    expectBodyDisposed(uploadResponse.response, uploadResponse.cancelled);
+  });
+
+  it("disposes the response body after successful abortable remove", async () => {
+    const removeResponse = observableBodyResponse(200, "{}");
+    const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+      fetchImpl: async () => removeResponse.response
+    });
+
+    await expect(
+      storage.removeObjects([variantPath(480, "webp")], {
+        requestId: "req_storage_remove_disposal",
+        timeoutMs: 1_000
+      })
+    ).resolves.toEqual({
+      removedPaths: [variantPath(480, "webp")]
+    });
+
+    expectBodyDisposed(removeResponse.response, removeResponse.cancelled);
+  });
+
+  it.each([
+    [
+      "upload",
+      "STORAGE_WRITE_FAILED",
+      (storage: ReturnType<typeof createSupabaseImageStorage>) =>
+        storage.uploadObject({
+          body: Buffer.from("webp"),
+          cacheControl: "31536000",
+          contentType: "image/webp",
+          context: {
+            requestId: "req_storage_non_2xx_disposal",
+            timeoutMs: 1_000
+          },
+          path: variantPath(480, "webp"),
+          upsert: false
+        })
+    ],
+    [
+      "remove",
+      "STORAGE_UNAVAILABLE",
+      (storage: ReturnType<typeof createSupabaseImageStorage>) =>
+        storage.removeObjects([variantPath(480, "webp")], {
+          requestId: "req_storage_non_2xx_disposal",
+          timeoutMs: 1_000
+        })
+    ]
+  ] as const)(
+    "disposes the response body after non-2xx abortable %s without exposing provider content",
+    async (_label, expectedCode, run) => {
+      const providerResponse = observableBodyResponse(
+        503,
+        "provider raw body service-role-secret storage/v1/object/sites/bad"
+      );
+      const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+        fetchImpl: async () => providerResponse.response
+      });
+
+      const error = await run(storage).catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        code: expectedCode
+      });
+      expect(JSON.stringify(error)).not.toMatch(
+        /service-role-secret|storage\/v1\/object|provider raw body/i
+      );
+      expectBodyDisposed(providerResponse.response, providerResponse.cancelled);
+    }
+  );
+
   it.each([
     [
       "inspect",
@@ -445,6 +614,58 @@ describe("createSupabaseImageStorage", () => {
         await expect(result).resolves.toMatchObject({
           code: expectedCode,
           statusCode: 499
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.each([
+    ["own timeout", null, "IMAGE_STORAGE_TIMEOUT", 503],
+    ["client abort", undefined, "CLIENT_ABORTED", 499],
+    [
+      "request cancellation",
+      Object.assign(new Error("request cancelled"), { code: "REQUEST_CANCELLED" }),
+      "REQUEST_CANCELLED",
+      499
+    ]
+  ] as const)(
+    "preserves %s taxonomy and sticky first abort reason",
+    async (_label, abortReason, expectedCode, expectedStatusCode) => {
+      vi.useFakeTimers();
+
+      try {
+        const caller = abortReason === null ? undefined : new AbortController();
+        const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+          fetchImpl: async (_url, init) =>
+            new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                "abort",
+                () => reject(new DOMException("Aborted", "AbortError")),
+                { once: true }
+              );
+            })
+        });
+        const result = storage
+          .inspectObjects([variantPath(480, "webp")], {
+            requestId: "req_storage_abort_taxonomy",
+            signal: caller?.signal,
+            timeoutMs: 10
+          })
+          .catch((error: unknown) => error);
+
+        await Promise.resolve();
+
+        if (abortReason !== null) {
+          caller?.abort(abortReason);
+        }
+
+        await vi.advanceTimersByTimeAsync(10);
+
+        await expect(result).resolves.toMatchObject({
+          code: expectedCode,
+          statusCode: expectedStatusCode
         });
       } finally {
         vi.useRealTimers();

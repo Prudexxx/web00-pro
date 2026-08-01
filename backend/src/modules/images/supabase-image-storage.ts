@@ -263,6 +263,7 @@ async function uploadObjectWithFetch(
     });
 
     if (!result.ok) {
+      await disposeResponseBody(result);
       throw storageOperationFailed(
         "STORAGE_WRITE_FAILED",
         "Storage write failed.",
@@ -270,6 +271,8 @@ async function uploadObjectWithFetch(
         "STORAGE_UPLOAD"
       );
     }
+
+    await disposeResponseBody(result);
 
     return {
       path: input.path,
@@ -302,10 +305,11 @@ async function inspectObjectsWithFetch(
   const timed = createTimedOperationSignal(context);
 
   try {
-    const result = await fetchImpl(buildObjectListUrl(config, prefix), {
+    const result = await fetchImpl(buildObjectListUrl(config), {
       body: JSON.stringify({
         limit: Math.max(paths.length, 100),
         offset: 0,
+        prefix,
         sortBy: {
           column: "name",
           order: "asc"
@@ -396,6 +400,7 @@ async function removeObjectsWithFetch(
     });
 
     if (!result.ok) {
+      await disposeResponseBody(result);
       throw storageOperationFailed(
         "STORAGE_UNAVAILABLE",
         "Storage is unavailable.",
@@ -404,6 +409,8 @@ async function removeObjectsWithFetch(
         result
       );
     }
+
+    await disposeResponseBody(result);
 
     return { removedPaths: [...paths] };
   } catch (error) {
@@ -485,14 +492,27 @@ function buildObjectUploadUrl(config: StorageConfig, path: string): string {
   return base.toString();
 }
 
-function buildObjectListUrl(config: StorageConfig, prefix: string): string {
+function buildObjectListUrl(config: StorageConfig): string {
   const base = new URL(config.credentials.supabaseUrl);
 
-  base.pathname = `/storage/v1/object/list/${config.bucket}/${prefix}`;
+  base.pathname = `/storage/v1/object/list/${config.bucket}`;
   base.search = "";
   base.hash = "";
 
   return base.toString();
+}
+
+async function disposeResponseBody(response: Response): Promise<void> {
+  try {
+    if (response.bodyUsed) {
+      return;
+    }
+    if (response.body !== null) {
+      await response.body.cancel();
+    }
+  } catch {
+    // Best-effort cleanup only; disposal errors must not replace the main outcome.
+  }
 }
 
 function buildObjectDeleteUrl(config: StorageConfig): string {
