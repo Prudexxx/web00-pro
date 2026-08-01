@@ -390,4 +390,69 @@ describe("createBusboyMultipartImageParser", () => {
       )
     ).rejects.toMatchObject({ code: "IMAGE_TOTAL_SIZE_EXCEEDED" });
   });
+
+  it("enforces exact single-file size boundaries around the 5 MiB limit", async () => {
+    const parser = createBusboyMultipartImageParser();
+    const fiveMiB = 5 * 1024 * 1024;
+
+    await expect(
+      parser.parseSingle(
+        multipartRequest([
+          { field: "clientFileId", value: firstId },
+          {
+            contentType: "image/png",
+            field: "image",
+            filename: "empty.png",
+            value: Buffer.alloc(0)
+          }
+        ])
+      )
+    ).rejects.toMatchObject({ code: "IMAGE_REQUIRED" });
+
+    await expect(
+      parser.parseSingle(
+        multipartRequest([
+          { field: "clientFileId", value: firstId },
+          {
+            contentType: "image/png",
+            field: "image",
+            filename: "minus-one.png",
+            value: Buffer.alloc(fiveMiB - 1)
+          }
+        ])
+      )
+    ).resolves.toMatchObject({
+      source: expect.any(Buffer)
+    });
+
+    await expect(
+      parser.parseSingle(
+        multipartRequest([
+          { field: "clientFileId", value: firstId },
+          {
+            contentType: "image/png",
+            field: "image",
+            filename: "exact.png",
+            value: Buffer.alloc(fiveMiB)
+          }
+        ])
+      )
+    ).resolves.toMatchObject({
+      source: expect.any(Buffer)
+    });
+
+    await expect(
+      parser.parseSingle(
+        multipartRequest([
+          { field: "clientFileId", value: firstId },
+          {
+            contentType: "image/png",
+            field: "image",
+            filename: "plus-one.png",
+            value: Buffer.alloc(fiveMiB + 1)
+          }
+        ])
+      )
+    ).rejects.toMatchObject({ code: "IMAGE_TOO_LARGE" });
+  });
 });

@@ -1,7 +1,6 @@
-import type { PrismaClient } from "../../generated/prisma/client.js";
+import { Prisma, type PrismaClient } from "../../generated/prisma/client.js";
+import { AppError } from "../../lib/errors.js";
 import type {
-  CreateStorageCleanupJobInput,
-  CreateUploadReservationInput,
   MarkStorageCleanupJobCompletedInput,
   MarkStorageCleanupJobFailedInput,
   MarkUploadReservationsCompletedInput,
@@ -48,37 +47,41 @@ export function createPrismaStorageCleanupRepository(options: {
 
       return claimed;
     },
-    async createJobs(input) {
-      for (const job of input) {
-        await prisma.storageCleanupJob.create({
-          data: {
-            entityId: job.entityId,
-            entityType: job.entityType,
-            reason: job.reason,
-            runAfter: job.runAfter,
-            status: "pending",
-            storagePath: job.storagePath
-          }
-        });
-      }
+    async createJobs(input, deadlineOptions) {
+      await runWithOptionalDeadline(prisma, deadlineOptions, async (client) => {
+        for (const job of input) {
+          await client.storageCleanupJob.create({
+            data: {
+              entityId: job.entityId,
+              entityType: job.entityType,
+              reason: job.reason,
+              runAfter: job.runAfter,
+              status: "pending",
+              storagePath: job.storagePath
+            }
+          });
+        }
+      });
     },
-    async createUploadReservations(input) {
+    async createUploadReservations(input, deadlineOptions) {
       const created: StorageCleanupJobRecord[] = [];
 
-      for (const path of input.paths) {
-        const job = await prisma.storageCleanupJob.create({
-          data: {
-            entityId: input.entityId,
-            entityType: "site_image",
-            reason: "upload_reservation",
-            runAfter: input.runAfter,
-            status: "pending",
-            storagePath: path
-          }
-        });
+      await runWithOptionalDeadline(prisma, deadlineOptions, async (client) => {
+        for (const path of input.paths) {
+          const job = await client.storageCleanupJob.create({
+            data: {
+              entityId: input.entityId,
+              entityType: "site_image",
+              reason: "upload_reservation",
+              runAfter: input.runAfter,
+              status: "pending",
+              storagePath: path
+            }
+          });
 
-        created.push(toRecord(job));
-      }
+          created.push(toRecord(job));
+        }
+      });
 
       return created;
     },
@@ -129,6 +132,68 @@ export function createPrismaStorageCleanupRepository(options: {
       return result.count;
     }
   };
+}
+
+async function runWithOptionalDeadline<T>(
+  prisma: PrismaClient,
+  options: { timeoutMs: number } | undefined,
+  operation: (client: PrismaClient | Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  if (options === undefined) {
+    return operation(prisma);
+  }
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await setLocalStatementTimeout(tx, options.timeoutMs);
+
+      return operation(tx);
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      maxWait: Math.min(options.timeoutMs, 10_000),
+      timeout: options.timeoutMs
+    });
+  } catch (error) {
+    if (isDatabaseTimeoutError(error)) {
+      throw databaseTemporary();
+    }
+
+    throw error;
+  }
+}
+
+async function setLocalStatementTimeout(
+  tx: Prisma.TransactionClient,
+  timeoutMs: number
+): Promise<void> {
+  await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`;
+}
+
+function isDatabaseTimeoutError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  const message = error instanceof Error ? error.message : "";
+  const meta = "meta" in error ? (error as { meta?: unknown }).meta : undefined;
+
+  return (
+    code === "P2028" ||
+    code === "57014" ||
+    /statement timeout|transaction.*timed out|timed out|timeout/i.test(message) ||
+    (typeof meta === "object" &&
+      meta !== null &&
+      JSON.stringify(meta).includes("57014"))
+  );
+}
+
+function databaseTemporary(): AppError {
+  return new AppError({
+    code: "DATABASE_TEMPORARY",
+    message: "Database operation timed out.",
+    statusCode: 503
+  });
 }
 
 function toRecord(

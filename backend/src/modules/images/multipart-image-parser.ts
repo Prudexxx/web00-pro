@@ -125,7 +125,7 @@ async function parseMultipart(
         limits: {
           fieldNameSize: IMAGE_MULTIPART_LIMITS.fieldNameSize,
           fields: IMAGE_MULTIPART_LIMITS.fields,
-          fileSize: options.perFileBytes,
+          fileSize: options.perFileBytes + 1,
           files: options.maxFiles,
           headerPairs: IMAGE_MULTIPART_LIMITS.headerPairs,
           fieldSize: options.textFieldSize
@@ -151,6 +151,7 @@ async function parseMultipart(
     parser.on("file", (name, file, info) => {
       const chunks: Buffer[] = [];
       const index = files.length;
+      let fileBytes = 0;
 
       if (name !== options.allowedFileField) {
         fail(validationError("Unknown multipart file field."));
@@ -160,8 +161,13 @@ async function parseMultipart(
         fail(createImageAppError("IMAGE_TOO_LARGE", "Image is too large.", 413));
       });
       file.on("data", (chunk: Buffer) => {
+        fileBytes += chunk.length;
         totalBytes += chunk.length;
 
+        if (fileBytes > options.perFileBytes) {
+          fail(createImageAppError("IMAGE_TOO_LARGE", "Image is too large.", 413));
+          return;
+        }
         if (totalBytes > options.totalBytes) {
           fail(
             createImageAppError(
@@ -307,7 +313,7 @@ function createBatchFileStream(
       limits: {
         fieldNameSize: IMAGE_MULTIPART_LIMITS.fieldNameSize,
         fields: IMAGE_MULTIPART_LIMITS.fields,
-        fileSize: options.perFileBytes,
+        fileSize: options.perFileBytes + 1,
         files: options.maxFiles,
         headerPairs: IMAGE_MULTIPART_LIMITS.headerPairs,
         fieldSize: options.textFieldSize
@@ -344,6 +350,7 @@ function createBatchFileStream(
   parser.on("file", (name, file, info) => {
     const chunks: Buffer[] = [];
     const index = filesSeen;
+    let fileBytes = 0;
 
     filesSeen += 1;
     activeChunks.add(chunks);
@@ -375,8 +382,13 @@ function createBatchFileStream(
         return;
       }
 
+      fileBytes += chunk.length;
       totalBytes += chunk.length;
 
+      if (fileBytes > options.perFileBytes) {
+        fail(createImageAppError("IMAGE_TOO_LARGE", "Image is too large.", 413));
+        return;
+      }
       if (totalBytes > options.totalBytes) {
         fail(
           createImageAppError(
@@ -554,6 +566,9 @@ function toSingleFile(result: RawMultipartResult): ParsedImageFile {
   if (result.files.length !== 1 || file.fieldName !== "image") {
     throw validationError("Expected exactly one image file.");
   }
+  if (file.source.length === 0) {
+    throw createImageAppError("IMAGE_REQUIRED", "Image is required.", 400);
+  }
 
   const assetId = parseUuidField(result.fields.get("clientFileId"), "clientFileId");
   const alt = parseAlt(result.fields.get("alt"));
@@ -589,6 +604,9 @@ function toBatchFiles(result: RawMultipartResult): ParsedImageFile[] {
   return result.files.map((file, index) => {
     if (file.fieldName !== "images") {
       throw validationError("Expected only images files.");
+    }
+    if (file.source.length === 0) {
+      throw createImageAppError("IMAGE_REQUIRED", "Image is required.", 400);
     }
 
     const item = metadata[index];

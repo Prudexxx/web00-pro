@@ -168,7 +168,8 @@ export function normalizeGalleryBatchResult(result, context = {}) {
       file: files[index],
       index,
       message: safeUploadFailureMessage(item?.message),
-      requestId: readSafeRequestId(item?.requestId)
+      requestId: readSafeRequestId(item?.requestId),
+      retryable: item?.retryable === true
     };
   }).filter((item) => typeof item.clientFileId === "string" && item.index >= 0);
 
@@ -185,7 +186,7 @@ export function normalizeGalleryBatchResult(result, context = {}) {
 
 export function selectFailedGalleryFiles(result) {
   return (Array.isArray(result?.failed) ? result.failed : [])
-    .filter((item) => item?.file !== undefined)
+    .filter((item) => item?.file !== undefined && item?.retryable === true)
     .map((item) => ({
       clientFileId: item.clientFileId,
       file: item.file,

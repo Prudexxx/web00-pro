@@ -15,6 +15,10 @@ export function errorHandler(
   const appError = toAppError(error);
   const requestId = getRequestIdFromLocals(response);
 
+  if (appError.code === "IMAGE_PROCESSOR_BUSY") {
+    response.setHeader("Retry-After", "5");
+  }
+
   response.status(appError.statusCode).json(createErrorResponse(appError, requestId));
 }
 

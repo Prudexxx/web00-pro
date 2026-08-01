@@ -9,6 +9,12 @@ import type { RuntimeDatabaseEnv } from "./config/database-env.js";
 import { parseRuntimeDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
 import { parseEnv } from "./config/env.js";
+import type { ImageProcessingConfig } from "./config/image-processing-env.js";
+import {
+  defaultImageProcessingConfig,
+  parseImageProcessingEnv,
+  toImageProcessingConfig
+} from "./config/image-processing-env.js";
 import type { PublicCorsConfig } from "./config/public-cors-env.js";
 import { parsePublicCorsEnv, toPublicCorsConfig } from "./config/public-cors-env.js";
 import type { StorageConfig } from "./config/storage-env.js";
@@ -74,6 +80,7 @@ export interface StartServerOptions {
   createPrisma?: typeof createPrismaClient;
   databaseEnv: RuntimeDatabaseEnv;
   env: AppEnv;
+  imageProcessingConfig?: ImageProcessingConfig;
   logger?: AppLogger;
   now?: () => Date;
   publicCorsConfig: PublicCorsConfig;
@@ -88,6 +95,8 @@ export interface StartedServer {
 
 export function startServer(options: StartServerOptions): StartedServer {
   const logger = options.logger ?? createLogger({ env: options.env });
+  const imageProcessingConfig =
+    options.imageProcessingConfig ?? defaultImageProcessingConfig;
   const createPrisma = options.createPrisma ?? createPrismaClient;
   const prisma = createPrisma({
     databaseUrl: options.databaseEnv.DATABASE_URL
@@ -172,7 +181,13 @@ export function startServer(options: StartServerOptions): StartedServer {
         service: options.env.SERVICE_NAME
       },
       imageUrlPolicy,
-      processor: createSharpImageProcessor(),
+      processor: createSharpImageProcessor({
+        maxConcurrency: imageProcessingConfig.maxConcurrency,
+        maxPixels: imageProcessingConfig.maxPixels,
+        maxQueued: imageProcessingConfig.maxQueued,
+        queueWaitTimeoutMs: imageProcessingConfig.queueWaitTimeoutMs,
+        timeoutMs: imageProcessingConfig.timeoutMs
+      }),
       repository: createPrismaSiteImageRepository({ prisma }),
       storage: imageStorage
     }),
@@ -345,8 +360,18 @@ export function main(): StartedServer {
     parsePublicCorsEnv(process.env, { nodeEnv: env.NODE_ENV })
   );
   const storageConfig = toStorageConfig(parseStorageEnv(process.env));
+  const imageProcessingConfig = toImageProcessingConfig(
+    parseImageProcessingEnv(process.env)
+  );
 
-  return startServer({ authEnv, databaseEnv, env, publicCorsConfig, storageConfig });
+  return startServer({
+    authEnv,
+    databaseEnv,
+    env,
+    imageProcessingConfig,
+    publicCorsConfig,
+    storageConfig
+  });
 }
 
 if (isDirectRun()) {

@@ -26,13 +26,10 @@ import {
 } from "../site-form-drafts.js";
 import {
   IMAGE_UPLOAD_LIMITS,
-  buildGalleryBatchFormData,
   buildImagePath,
   buildPreviewFormData,
   createClientFileId,
   normalizeAlt,
-  normalizeGalleryBatchResult,
-  readResponseRequestId,
   readSafeRequestId,
   selectedNames,
   supportedImageTypes,
@@ -109,6 +106,7 @@ export function createSiteEditorScreen(options) {
   let pendingDraft = null;
   let imageRecoveryNotice = false;
   let imageRetryPlan = null;
+  const imageProcessingTimeoutCounts = new Map();
   let clientRequestId = null;
   let clientRequestIdError = null;
   let draftSaveTimer = null;
@@ -500,21 +498,22 @@ export function createSiteEditorScreen(options) {
 
     currentSite = saved;
     const uploadResult = await uploadSelectedImages(saved.id, imageSelection, form);
+    const savedAfterUploads = uploadResult.site ?? saved;
 
     if (uploadResult.failedCount > 0) {
       dirty = false;
       clearDraft();
       unregisterDirtyGuard();
       imageRetryPlan = uploadResult.retryPlan;
-      renderSavedWithImageErrors(saved, uploadResult);
-      onSaved(saved);
+      renderSavedWithImageErrors(savedAfterUploads, uploadResult);
+      onSaved(savedAfterUploads);
       return;
     }
 
     const message = imageSelection.hasAny
       ? "Карточка и изображения сохранены."
       : "Карточка сохранена.";
-    finishSuccessfulSave(saved, form, message);
+    finishSuccessfulSave(savedAfterUploads, form, message);
   }
 
   async function uploadSelectedImages(siteIdForUpload, imageSelection, form) {
@@ -549,17 +548,21 @@ export function createSiteEditorScreen(options) {
         succeededItems.push(imageUploadDetail("Главное изображение", imageSelection.previewFile));
       } catch (error) {
         failedCount += 1;
-        const failureRequestId = readRequestId(error);
-        requestId ??= failureRequestId;
+        const failure = classifyImageUploadFailure(error, previewClientFileId);
+
+        requestId ??= failure.requestId;
         failedItems.push(imageUploadDetail("Главное изображение", imageSelection.previewFile, {
-          message: safeMessage(error),
-          requestId: failureRequestId
+          message: failure.message,
+          requestId: failure.requestId,
+          retryable: failure.retryable
         }));
-        retryPlan.preview = {
-          alt: imageSelection.previewAlt,
-          clientFileId: previewClientFileId,
-          file: imageSelection.previewFile
-        };
+        if (failure.retryable) {
+          retryPlan.preview = {
+            alt: imageSelection.previewAlt,
+            clientFileId: previewClientFileId,
+            file: imageSelection.previewFile
+          };
+        }
       }
     }
 
@@ -569,47 +572,59 @@ export function createSiteEditorScreen(options) {
       onStatus("Загружаем изображения галереи...");
       const clientFileIds = imageSelection.galleryFiles.map(() => createClientFileId(uuidFactory));
 
-      try {
-        const response = await apiClient.requestMultipart(buildImagePath(siteIdForUpload, "gallery-batch"), {
-          body: buildGalleryBatchFormData({
+      for (let index = 0; index < imageSelection.galleryFiles.length; index += 1) {
+        const file = imageSelection.galleryFiles[index];
+        const clientFileId = clientFileIds[index];
+
+        statusRegion.textContent = `Загружаем изображение галереи ${index + 1} из ${imageSelection.galleryFiles.length}...`;
+        onStatus(statusRegion.textContent);
+
+        try {
+          await uploadSingleGalleryImage(siteIdForUpload, {
             alt: imageSelection.galleryAlt,
-            clientFileIds,
-            files: imageSelection.galleryFiles
-          }),
-          method: "POST"
-        });
-        const normalized = normalizeGalleryBatchResult(response?.data, {
-          clientFileIds,
-          files: imageSelection.galleryFiles
-        });
-        const galleryRequestId = readResponseRequestId(response);
-        succeededCount += normalized.counts.succeeded;
-        failedCount += normalized.counts.failed;
-        if (normalized.counts.failed > 0) {
-          requestId ??= galleryRequestId;
+            clientFileId,
+            file
+          });
+          imageProcessingTimeoutCounts.delete(clientFileId);
+          succeededCount += 1;
+          succeededItems.push(imageUploadDetail("Изображение галереи", file));
+        } catch (error) {
+          const failure = classifyImageUploadFailure(error, clientFileId);
+
+          requestId ??= failure.requestId;
+          failedCount += 1;
+          failedItems.push(imageUploadDetail("Изображение галереи", file, {
+            message: failure.message,
+            requestId: failure.requestId,
+            retryable: failure.retryable
+          }));
+          if (failure.retryable) {
+            retryPlan.gallery.push({
+              clientFileId,
+              file,
+              index
+            });
+          }
         }
-        succeededItems.push(...normalized.succeeded.map((item) => imageUploadDetail("Изображение галереи", item.file)));
-        failedItems.push(...normalized.failed.map((item) => imageUploadDetail("Изображение галереи", item.file, {
-          message: item.message,
-          requestId: item.requestId ?? galleryRequestId
-        })));
-        retryPlan.gallery = normalized.failed.map((item) => ({
-          clientFileId: item.clientFileId,
-          file: item.file,
-          index: item.index
-        }));
+      }
+    }
+
+    let verifiedSite = null;
+    if (imageSelection.hasAny && failedCount === 0) {
+      statusRegion.textContent = "Проверяем сохранённые изображения...";
+      onStatus("Проверяем сохранённые изображения...");
+      try {
+        verifiedSite = await verifySavedSiteById(siteIdForUpload);
+        currentSite = verifiedSite;
       } catch (error) {
         const failureRequestId = readRequestId(error);
+
         requestId ??= failureRequestId;
-        failedCount += imageSelection.galleryFiles.length;
-        failedItems.push(...imageSelection.galleryFiles.map((file) => imageUploadDetail("Изображение галереи", file, {
+        failedCount += 1;
+        failedItems.push(imageUploadDetail("Проверка сохранения", { name: "карточка" }, {
           message: safeMessage(error),
-          requestId: failureRequestId
-        })));
-        retryPlan.gallery = imageSelection.galleryFiles.map((file, index) => ({
-          clientFileId: clientFileIds[index],
-          file,
-          index
+          requestId: failureRequestId,
+          retryable: false
         }));
       }
     }
@@ -619,8 +634,48 @@ export function createSiteEditorScreen(options) {
       failedItems,
       requestId,
       retryPlan,
+      site: verifiedSite,
       succeededCount,
       succeededItems
+    };
+  }
+
+  async function uploadSingleGalleryImage(siteIdForUpload, input) {
+    const response = await apiClient.requestMultipart(buildImagePath(siteIdForUpload, "gallery"), {
+      body: buildPreviewFormData({
+        alt: input.alt,
+        clientFileId: input.clientFileId,
+        file: input.file
+      }),
+      method: "POST"
+    });
+
+    if (typeof response?.data?.image?.assetId !== "string") {
+      throw invalidSaveResponse();
+    }
+
+    return response.data.image;
+  }
+
+  function classifyImageUploadFailure(error, clientFileId) {
+    const requestId = readRequestId(error);
+    let message = safeMessage(error);
+    let retryable = isRetryableImageUploadError(error);
+
+    if (error?.code === "IMAGE_PROCESSING_TIMEOUT" && typeof clientFileId === "string") {
+      const nextCount = (imageProcessingTimeoutCounts.get(clientFileId) ?? 0) + 1;
+
+      imageProcessingTimeoutCounts.set(clientFileId, nextCount);
+      if (nextCount >= 2) {
+        retryable = false;
+        message = "Изображение повторно не обработалось. Сожмите или перекодируйте файл и загрузите заново.";
+      }
+    }
+
+    return {
+      message,
+      requestId,
+      retryable
     };
   }
 
@@ -682,6 +737,8 @@ export function createSiteEditorScreen(options) {
   }
 
   function renderSavedWithImageErrors(saved, result) {
+    const retryable = hasRetryableImageUploads(result.retryPlan);
+
     replaceContent(formHost, createElement("section", {
       documentRef,
       className: "admin-save-next-step admin-save-partial",
@@ -710,17 +767,21 @@ export function createSiteEditorScreen(options) {
           documentRef,
           className: "admin-save-next-actions",
           children: [
-            createElement("button", {
-              documentRef,
-              text: "Повторить загрузку изображений",
-              attributes: {
-                "data-action": "retry-image-upload",
-                type: "button"
-              },
-              on: {
-                click: retryFailedImageUploads
-              }
-            }),
+            ...(retryable
+              ? [
+                  createElement("button", {
+                    documentRef,
+                    text: "Повторить загрузку изображений",
+                    attributes: {
+                      "data-action": "retry-image-upload",
+                      type: "button"
+                    },
+                    on: {
+                      click: retryFailedImageUploads
+                    }
+                  })
+                ]
+              : []),
             createElement("button", {
               documentRef,
               text: "Открыть изображения",
@@ -832,70 +893,84 @@ export function createSiteEditorScreen(options) {
             }),
             method: "PUT"
           });
+          imageProcessingTimeoutCounts.delete(plan.preview.clientFileId);
           succeededCount += 1;
           succeededItems.push(imageUploadDetail("Главное изображение", plan.preview.file));
         } catch (error) {
           failedCount += 1;
-          const failureRequestId = readRequestId(error);
-          requestId ??= failureRequestId;
+          const failure = classifyImageUploadFailure(error, plan.preview.clientFileId);
+
+          requestId ??= failure.requestId;
           failedItems.push(imageUploadDetail("Главное изображение", plan.preview.file, {
-            message: safeMessage(error),
-            requestId: failureRequestId
+            message: failure.message,
+            requestId: failure.requestId,
+            retryable: failure.retryable
           }));
-          nextPlan.preview = plan.preview;
+          if (failure.retryable) {
+            nextPlan.preview = plan.preview;
+          }
         }
       }
 
       if (plan.gallery.length > 0) {
         statusRegion.textContent = "Загружаем изображения галереи...";
         onStatus("Загружаем изображения галереи...");
-        const files = plan.gallery.map((item) => item.file);
-        const clientFileIds = plan.gallery.map((item) => item.clientFileId);
 
-        try {
-          const response = await apiClient.requestMultipart(buildImagePath(plan.siteId, "gallery-batch"), {
-            body: buildGalleryBatchFormData({
+        for (let retryIndex = 0; retryIndex < plan.gallery.length; retryIndex += 1) {
+          const item = plan.gallery[retryIndex];
+
+          statusRegion.textContent = `Повторно загружаем изображение галереи ${retryIndex + 1} из ${plan.gallery.length}...`;
+          onStatus(statusRegion.textContent);
+
+          try {
+            await uploadSingleGalleryImage(plan.siteId, {
               alt: plan.galleryAlt,
-              clientFileIds,
-              files
-            }),
-            method: "POST"
-          });
-          const normalized = normalizeGalleryBatchResult(response?.data, {
-            clientFileIds,
-            files
-          });
-          const galleryRequestId = readResponseRequestId(response);
-          succeededCount += normalized.counts.succeeded;
-          failedCount += normalized.counts.failed;
-          if (normalized.counts.failed > 0) {
-            requestId ??= galleryRequestId;
+              clientFileId: item.clientFileId,
+              file: item.file
+            });
+            imageProcessingTimeoutCounts.delete(item.clientFileId);
+            succeededCount += 1;
+            succeededItems.push(imageUploadDetail("Изображение галереи", item.file));
+          } catch (error) {
+            const failure = classifyImageUploadFailure(error, item.clientFileId);
+
+            requestId ??= failure.requestId;
+            failedCount += 1;
+            failedItems.push(imageUploadDetail("Изображение галереи", item.file, {
+              message: failure.message,
+              requestId: failure.requestId,
+              retryable: failure.retryable
+            }));
+            if (failure.retryable) {
+              nextPlan.gallery.push(item);
+            }
           }
-          succeededItems.push(...normalized.succeeded.map((item) => imageUploadDetail("Изображение галереи", item.file)));
-          failedItems.push(...normalized.failed.map((item) => imageUploadDetail("Изображение галереи", item.file, {
-            message: item.message,
-            requestId: item.requestId ?? galleryRequestId
-          })));
-          nextPlan.gallery = normalized.failed.map((item) => ({
-            clientFileId: item.clientFileId,
-            file: item.file,
-            index: item.index
-          }));
+        }
+      }
+
+      let verifiedSite = currentSite;
+      if (failedCount === 0 && hasAnyImagesInRetryPlan(plan)) {
+        statusRegion.textContent = "Проверяем сохранённые изображения...";
+        onStatus("Проверяем сохранённые изображения...");
+        try {
+          verifiedSite = await verifySavedSiteById(plan.siteId);
+          currentSite = verifiedSite;
         } catch (error) {
           const failureRequestId = readRequestId(error);
+
           requestId ??= failureRequestId;
-          failedCount += files.length;
-          failedItems.push(...files.map((file) => imageUploadDetail("Изображение галереи", file, {
+          failedCount += 1;
+          failedItems.push(imageUploadDetail("Проверка сохранения", { name: "карточка" }, {
             message: safeMessage(error),
-            requestId: failureRequestId
-          })));
-          nextPlan.gallery = plan.gallery;
+            requestId: failureRequestId,
+            retryable: false
+          }));
         }
       }
 
       if (failedCount > 0) {
         imageRetryPlan = nextPlan;
-        renderSavedWithImageErrors(currentSite, {
+        renderSavedWithImageErrors(verifiedSite, {
           failedCount,
           failedItems,
           requestId,
@@ -906,7 +981,7 @@ export function createSiteEditorScreen(options) {
         return;
       }
 
-      renderCreateSavedNextStep(currentSite, {
+      renderCreateSavedNextStep(verifiedSite, {
         message: "Карточка и изображения сохранены.",
         title: "Карточка сохранена"
       });
@@ -1806,6 +1881,14 @@ export function createSiteEditorScreen(options) {
     return (Array.isArray(response?.data) ? response.data : [])
       .find((site) => site?.slug === slug) ?? null;
   }
+
+  async function verifySavedSiteById(savedSiteId) {
+    const response = await apiClient.requestJson(sitePath(savedSiteId), {
+      method: "GET"
+    });
+
+    return readSiteResponseEntity(response);
+  }
 }
 
 function buildFieldAttributes(name, kind, attributes) {
@@ -2049,8 +2132,35 @@ function imageUploadDetail(slot, file, options = {}) {
     fileName: typeof file?.name === "string" && file.name.trim().length > 0 ? file.name : "файл без имени",
     message: typeof options.message === "string" ? options.message : "",
     requestId: readSafeRequestId(options.requestId),
+    retryable: options.retryable === true,
     slot
   };
+}
+
+function hasRetryableImageUploads(plan) {
+  return plan?.preview !== null ||
+    (Array.isArray(plan?.gallery) && plan.gallery.length > 0);
+}
+
+function hasAnyImagesInRetryPlan(plan) {
+  return plan?.preview !== null ||
+    (Array.isArray(plan?.gallery) && plan.gallery.length > 0);
+}
+
+const RETRYABLE_IMAGE_UPLOAD_ERROR_CODES = new Set([
+  "CONCURRENT_MODIFICATION",
+  "DATABASE_TEMPORARY",
+  "IMAGE_PROCESSING_TIMEOUT",
+  "IMAGE_PROCESSOR_BUSY",
+  "IMAGE_STORAGE_TIMEOUT",
+  "NETWORK_ERROR",
+  "REQUEST_TIMEOUT",
+  "STORAGE_UNAVAILABLE",
+  "STORAGE_WRITE_FAILED"
+]);
+
+function isRetryableImageUploadError(error) {
+  return RETRYABLE_IMAGE_UPLOAD_ERROR_CODES.has(String(error?.code ?? ""));
 }
 
 function formatImageErrorCount(count) {

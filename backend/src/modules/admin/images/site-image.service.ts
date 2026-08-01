@@ -16,13 +16,17 @@ import {
 import type {
   AssetUploadCoordinator,
   ImageProcessor,
+  ImageProcessingDiagnosticEvent,
   ManagedGalleryImage,
   ManagedImageUrlPolicy,
   ParsedImageFile,
   PublicManagedGalleryImage,
   PublicPreviewImage
 } from "../../images/image.types.js";
-import type { ImageStorage } from "../../images/image-storage.js";
+import type {
+  ImageStorage,
+  ImageStorageOperationContext
+} from "../../images/image-storage.js";
 import type {
   GalleryBatchResponse,
   GalleryDeleteInput,
@@ -109,8 +113,16 @@ export interface CreateSiteImageServiceOptions {
   storage: ImageStorage;
 }
 
-const GALLERY_BATCH_CONCURRENCY = 2;
-const GALLERY_BATCH_TIMEOUT_MS = 180_000;
+const GALLERY_BATCH_CONCURRENCY = 1;
+const MAX_GALLERY_BATCH_FILES = 10;
+const MAX_VARIANTS_PER_IMAGE = 6;
+const STORAGE_INSPECT_TIMEOUT_MS = 10_000;
+const STORAGE_REMOVE_TIMEOUT_MS = 15_000;
+const STORAGE_UPLOAD_TIMEOUT_MS = 15_000;
+const STORAGE_CLEANUP_JOB_TIMEOUT_MS = 10_000;
+const UPLOAD_RESERVATION_TIMEOUT_MS = 10_000;
+const DATABASE_ATTACH_TIMEOUT_MS = 10_000;
+const GALLERY_BATCH_CANCELLATION_GRACE_MS = 5_000;
 
 export function createSiteImageService(
   options: CreateSiteImageServiceOptions
@@ -189,15 +201,17 @@ type GalleryBatchUploadCandidate =
     };
 
 interface GalleryBatchTimeoutState {
+  controller: AbortController;
   cancelledError?: AppError;
   timedOut: boolean;
+  timeoutMs: number;
 }
 
 async function addGalleryBatch(
   options: CreateSiteImageServiceOptions,
   input: { context: AdminMutationContext; files: ParsedImageFile[]; siteId: string }
 ): Promise<GalleryBatchResponse> {
-  return withGalleryBatchTimeout((timeoutState) =>
+  return withGalleryBatchTimeout(options.processor, input.files.length, (timeoutState) =>
     runGalleryBatch(options, input, timeoutState)
   );
 }
@@ -211,7 +225,7 @@ async function addGalleryBatchStream(
     siteId: string;
   }
 ): Promise<GalleryBatchResponse> {
-  return withGalleryBatchTimeout((timeoutState) =>
+  return withGalleryBatchTimeout(options.processor, MAX_GALLERY_BATCH_FILES, (timeoutState) =>
     runGalleryBatchStream(options, input, timeoutState)
   );
 }
@@ -362,7 +376,7 @@ async function attachGalleryBatchCandidates(
         replayed: false
       });
     } catch (error) {
-      failed.push(toGalleryBatchFailure(candidate.file, error));
+      failed.push(toGalleryBatchFailure(candidate.file, error, input.context.requestId));
     }
   }
 
@@ -377,6 +391,9 @@ async function prepareGalleryBatchCandidate(
   options: CreateSiteImageServiceOptions,
   input: SiteImageUploadInput & { timeoutState: GalleryBatchTimeoutState }
 ): Promise<GalleryBatchUploadCandidate> {
+  const fileStartedAt = Date.now();
+  let latestMetadata: ImageProcessingDiagnosticEvent | undefined;
+
   try {
     return await options.coordinator.runExclusive(
       `${input.siteId}:gallery:${input.file.assetId}`,
@@ -414,12 +431,66 @@ async function prepareGalleryBatchCandidate(
 
         assertGalleryBatchCanContinue(input.timeoutState);
 
-        const processed = await options.processor.process({
-          assetId: input.file.assetId,
-          declaredMimeType: input.file.declaredMimeType,
-          siteId: input.siteId,
-          slot: "gallery",
-          source: input.file.source
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          requestId: input.context.requestId,
+          stage: "PROCESSING_STARTED",
+          timeoutMs: readProcessorTimeoutMs(options.processor)
+        });
+
+        let processed: Awaited<ReturnType<ImageProcessor["process"]>>;
+
+        try {
+          processed = await options.processor.process({
+            assetId: input.file.assetId,
+            declaredMimeType: input.file.declaredMimeType,
+            onDiagnostic: (event) => {
+              if (event.stage !== "METADATA_READ") {
+                return;
+              }
+
+              latestMetadata = event;
+              logGalleryImageFileStage(options, {
+                ...toGalleryImageMetadataLogFields(event),
+                clientFileId: input.file.assetId,
+                requestId: input.context.requestId,
+                stage: "METADATA_READ",
+                timeoutMs: readProcessorTimeoutMs(options.processor)
+              });
+            },
+            siteId: input.siteId,
+            slot: "gallery",
+            signal: input.timeoutState.controller.signal,
+            source: input.file.source
+          });
+        } catch (error) {
+          if (isImageProcessingTimeoutError(error)) {
+            logGalleryImageFileStage(options, {
+              ...toGalleryImageMetadataLogFields(latestMetadata),
+              clientFileId: input.file.assetId,
+              durationMs: Date.now() - fileStartedAt,
+              errorCategory: readGalleryImageErrorCategory(error),
+              requestId: input.context.requestId,
+              stage: "PROCESSING_TIMEOUT",
+              timeoutMs: readProcessorTimeoutMs(options.processor)
+            });
+          }
+
+          throw error;
+        }
+
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          durationMs: Date.now() - fileStartedAt,
+          format: processed.originalFormat,
+          height: processed.originalHeight,
+          orientation: processed.originalOrientation ?? null,
+          pixels: processed.originalPixels,
+          requestId: input.context.requestId,
+          stage: "PROCESSING_COMPLETED",
+          timeoutMs: readProcessorTimeoutMs(options.processor),
+          variantCount: processed.variants.length,
+          width: processed.originalWidth
         });
 
         assertGalleryBatchCanContinue(input.timeoutState);
@@ -437,6 +508,15 @@ async function prepareGalleryBatchCandidate(
           entityId: input.siteId,
           paths: processed.variants.map((variant) => variant.path),
           runAfter: addMinutes(input.context.now, 15)
+        }, createDatabaseDeadlineOptions(UPLOAD_RESERVATION_TIMEOUT_MS));
+
+        const uploadStartedAt = Date.now();
+
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          requestId: input.context.requestId,
+          stage: "STORAGE_UPLOAD_STARTED",
+          variantCount: processed.variants.length
         });
 
         for (const variant of processed.variants) {
@@ -446,6 +526,11 @@ async function prepareGalleryBatchCandidate(
             body: variant.body,
             cacheControl: "31536000",
             contentType: variant.contentType,
+            context: createStorageOperationContext(
+              input.context,
+              input.timeoutState.controller.signal,
+              STORAGE_UPLOAD_TIMEOUT_MS
+            ),
             path: variant.path,
             upsert: false
           });
@@ -453,7 +538,23 @@ async function prepareGalleryBatchCandidate(
           assertGalleryBatchCanContinue(input.timeoutState);
         }
 
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          durationMs: Date.now() - uploadStartedAt,
+          requestId: input.context.requestId,
+          stage: "STORAGE_UPLOAD_COMPLETED",
+          variantCount: processed.variants.length
+        });
+
         assertGalleryBatchCanContinue(input.timeoutState);
+
+        logGalleryImageFileStage(options, {
+          clientFileId: input.file.assetId,
+          durationMs: Date.now() - fileStartedAt,
+          requestId: input.context.requestId,
+          stage: "FILE_COMPLETED",
+          variantCount: processed.variants.length
+        });
 
         return {
           file: input.file,
@@ -470,7 +571,7 @@ async function prepareGalleryBatchCandidate(
     );
   } catch (error) {
     return {
-      failure: toGalleryBatchFailure(input.file, error),
+      failure: toGalleryBatchFailure(input.file, error, input.context.requestId),
       kind: "failed"
     };
   }
@@ -526,6 +627,7 @@ async function replacePreview(
           onStage: setStage,
           siteId: input.siteId,
           slot: "preview",
+          signal: input.signal,
           source: input.file.source
         });
         processedWidthCount = processed.widths.length;
@@ -544,7 +646,7 @@ async function replacePreview(
           entityId: input.siteId,
           paths: processed.variants.map((variant) => variant.path),
           runAfter: reservationRunAfter
-        });
+        }, createDatabaseDeadlineOptions(UPLOAD_RESERVATION_TIMEOUT_MS));
         cleanupScheduled = reservations.length > 0;
         setStage("RESERVATIONS_CREATED");
 
@@ -552,15 +654,22 @@ async function replacePreview(
 
         setStage("STORAGE_UPLOAD_STARTED");
         for (const variant of processed.variants) {
+          assertRequestSignalCanContinue(input.signal);
           uploaded.push(
             await options.storage.uploadObject({
               body: variant.body,
               cacheControl: "31536000",
               contentType: variant.contentType,
+              context: createStorageOperationContext(
+                input.context,
+                input.signal,
+                STORAGE_UPLOAD_TIMEOUT_MS
+              ),
               path: variant.path,
               upsert: false
             })
           );
+          assertRequestSignalCanContinue(input.signal);
           uploadedVariantCount = uploaded.length;
           setStage(
             variant.format === "webp"
@@ -597,6 +706,8 @@ async function replacePreview(
           );
         }
         setStage("PREVIEW_URL_SELECTED");
+
+        assertRequestSignalCanContinue(input.signal);
 
         const updated = await options.repository.replacePreview({
           assetId: input.file.assetId,
@@ -709,6 +820,7 @@ async function addSingleGallery(
         declaredMimeType: input.file.declaredMimeType,
         siteId: input.siteId,
         slot: "gallery",
+        signal: input.signal,
         source: input.file.source
       });
       await cleanUnattachedObjectsBeforeUpload(options, {
@@ -720,16 +832,23 @@ async function addSingleGallery(
         entityId: input.siteId,
         paths: processed.variants.map((variant) => variant.path),
         runAfter: addMinutes(input.context.now, 15)
-      });
+      }, createDatabaseDeadlineOptions(UPLOAD_RESERVATION_TIMEOUT_MS));
 
       for (const variant of processed.variants) {
+        assertRequestSignalCanContinue(input.signal);
         await options.storage.uploadObject({
           body: variant.body,
           cacheControl: "31536000",
           contentType: variant.contentType,
+          context: createStorageOperationContext(
+            input.context,
+            input.signal,
+            STORAGE_UPLOAD_TIMEOUT_MS
+          ),
           path: variant.path,
           upsert: false
         });
+        assertRequestSignalCanContinue(input.signal);
       }
 
       const image = buildManagedGalleryImage(options, {
@@ -738,6 +857,7 @@ async function addSingleGallery(
         processed,
         siteId: input.siteId
       });
+      assertRequestSignalCanContinue(input.signal);
       const updated = await options.repository.addGalleryImage({
         context: input.context,
         image,
@@ -841,19 +961,39 @@ async function deleteGalleryImage(
 }
 
 async function withGalleryBatchTimeout<T>(
+  processor: ImageProcessor,
+  fileCount: number,
   operation: (timeoutState: GalleryBatchTimeoutState) => Promise<T>
 ): Promise<T> {
-  const timeoutState = { timedOut: false };
+  const timeoutMs = calculateGalleryBatchTimeoutMs(processor, fileCount);
+  const timeoutState: GalleryBatchTimeoutState = {
+    controller: new AbortController(),
+    timedOut: false,
+    timeoutMs
+  };
   let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      timeoutState.timedOut = true;
-      reject(imageProcessingTimeout());
-    }, GALLERY_BATCH_TIMEOUT_MS);
-  });
+  timeout = setTimeout(() => {
+    const error = imageProcessingTimeout();
+
+    timeoutState.timedOut = true;
+    timeoutState.cancelledError = error;
+    timeoutState.controller.abort(requestCancelled());
+  }, timeoutMs);
 
   try {
-    return await Promise.race([operation(timeoutState), timeoutPromise]);
+    const result = await operation(timeoutState);
+
+    if (timeoutState.timedOut) {
+      throw timeoutState.cancelledError ?? imageProcessingTimeout();
+    }
+
+    return result;
+  } catch (error) {
+    if (timeoutState.timedOut) {
+      throw timeoutState.cancelledError ?? imageProcessingTimeout();
+    }
+
+    throw error;
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
@@ -949,7 +1089,15 @@ async function cleanUnattachedObjectsBeforeUpload(
   }
 ): Promise<void> {
   assertGalleryBatchCanContinue(input.state);
-  const firstInspection = await options.storage.inspectObjects(input.paths);
+  const storageSignal = input.state?.controller.signal;
+  const firstInspection = await options.storage.inspectObjects(
+    input.paths,
+    createStorageOperationContext(
+      input.context,
+      storageSignal,
+      STORAGE_INSPECT_TIMEOUT_MS
+    )
+  );
 
   assertGalleryBatchCanContinue(input.state);
 
@@ -964,13 +1112,28 @@ async function cleanUnattachedObjectsBeforeUpload(
       reason: "partial_upload_retry",
       runAfter: input.context.now,
       storagePath: path
-    }))
+    })),
+    createDatabaseDeadlineOptions(STORAGE_CLEANUP_JOB_TIMEOUT_MS)
   );
   assertGalleryBatchCanContinue(input.state);
-  await options.storage.removeObjects(firstInspection.existingPaths);
+  await options.storage.removeObjects(
+    firstInspection.existingPaths,
+    createStorageOperationContext(
+      input.context,
+      storageSignal,
+      STORAGE_REMOVE_TIMEOUT_MS
+    )
+  );
 
   assertGalleryBatchCanContinue(input.state);
-  const secondInspection = await options.storage.inspectObjects(input.paths);
+  const secondInspection = await options.storage.inspectObjects(
+    input.paths,
+    createStorageOperationContext(
+      input.context,
+      storageSignal,
+      STORAGE_INSPECT_TIMEOUT_MS
+    )
+  );
 
   assertGalleryBatchCanContinue(input.state);
 
@@ -988,9 +1151,16 @@ function assertGalleryBatchCanContinue(timeoutState?: GalleryBatchTimeoutState):
   }
 }
 
+function assertRequestSignalCanContinue(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw clientAborted();
+  }
+}
+
 function cancelGalleryBatch(timeoutState: GalleryBatchTimeoutState, error: unknown): void {
   if (timeoutState.cancelledError === undefined) {
     timeoutState.cancelledError = toGalleryBatchCancellationError(error);
+    timeoutState.controller.abort(timeoutState.cancelledError);
   }
 }
 
@@ -1008,14 +1178,193 @@ function toGalleryBatchCancellationError(error: unknown): AppError {
 
 function toGalleryBatchFailure(
   file: ParsedImageFile,
-  error: unknown
+  error: unknown,
+  requestId?: string
 ): GalleryBatchResponse["failed"][number] {
+  const safeRequestId = readSafeLogIdentifier(requestId);
+
   return {
     clientFileId: file.assetId,
     code: error instanceof AppError ? error.code : "INTERNAL_ERROR",
     index: file.index,
-    message: error instanceof AppError ? error.message : "Internal server error."
+    message: error instanceof AppError ? error.message : "Internal server error.",
+    ...(safeRequestId === undefined ? {} : { requestId: safeRequestId }),
+    retryable: isRetryableImageUploadError(error)
   };
+}
+
+function isRetryableImageUploadError(error: unknown): boolean {
+  if (!(error instanceof AppError)) {
+    return false;
+  }
+
+  return retryableImageUploadErrorCodes.has(error.code);
+}
+
+const retryableImageUploadErrorCodes = new Set([
+  "CONCURRENT_MODIFICATION",
+  "DATABASE_TEMPORARY",
+  "IMAGE_PROCESSING_TIMEOUT",
+  "IMAGE_PROCESSOR_BUSY",
+  "IMAGE_STORAGE_TIMEOUT",
+  "STORAGE_UNAVAILABLE",
+  "STORAGE_WRITE_FAILED"
+]);
+
+function logGalleryImageFileStage(
+  options: CreateSiteImageServiceOptions,
+  input: {
+    clientFileId: string;
+    durationMs?: number | undefined;
+    errorCategory?: string | undefined;
+    format?: ImageProcessingDiagnosticEvent["format"] | undefined;
+    height?: number | undefined;
+    orientation?: number | null | undefined;
+    pixels?: number | undefined;
+    requestId: string;
+    stage:
+      | "FILE_COMPLETED"
+      | "METADATA_READ"
+      | "PROCESSING_COMPLETED"
+      | "PROCESSING_STARTED"
+      | "PROCESSING_TIMEOUT"
+      | "STORAGE_UPLOAD_COMPLETED"
+      | "STORAGE_UPLOAD_STARTED";
+    timeoutMs?: number | undefined;
+    variantCount?: number | undefined;
+    width?: number | undefined;
+  }
+): void {
+  if (options.diagnostics === undefined) {
+    return;
+  }
+
+  const clientFileId = readSafeLogIdentifier(input.clientFileId);
+  const requestId = readSafeLogIdentifier(input.requestId);
+
+  if (clientFileId === undefined || requestId === undefined) {
+    return;
+  }
+
+  try {
+    options.diagnostics.logger.log({
+      clientFileId,
+      durationMs: normalizeNonNegativeLogInteger(input.durationMs),
+      environment: options.diagnostics.environment,
+      errorCategory: readSafeLogIdentifier(input.errorCategory),
+      event: "site.gallery_image.file",
+      format: input.format,
+      height: normalizePositiveLogInteger(input.height),
+      level: input.stage === "PROCESSING_TIMEOUT" ? "error" : "info",
+      orientation:
+        input.orientation === null ? null : normalizePositiveLogInteger(input.orientation),
+      pixels: normalizePositiveLogInteger(input.pixels),
+      requestId,
+      service: options.diagnostics.service,
+      stage: input.stage,
+      time: options.diagnostics.now().toISOString(),
+      timeoutMs: normalizePositiveLogInteger(input.timeoutMs),
+      variantCount: normalizeNonNegativeLogInteger(input.variantCount),
+      width: normalizePositiveLogInteger(input.width)
+    });
+  } catch {
+    return;
+  }
+}
+
+function calculateGalleryBatchTimeoutMs(
+  processor: ImageProcessor,
+  fileCount: number
+): number {
+  const safeFileCount = Math.max(
+    1,
+    Math.min(MAX_GALLERY_BATCH_FILES, Math.trunc(Number(fileCount) || 1))
+  );
+  const processorTimeoutMs = readProcessorTimeoutMs(processor) ?? 90_000;
+  const perFileBudgetMs =
+    processorTimeoutMs +
+    STORAGE_INSPECT_TIMEOUT_MS +
+    STORAGE_CLEANUP_JOB_TIMEOUT_MS +
+    STORAGE_REMOVE_TIMEOUT_MS +
+    STORAGE_INSPECT_TIMEOUT_MS +
+    UPLOAD_RESERVATION_TIMEOUT_MS +
+    MAX_VARIANTS_PER_IMAGE * STORAGE_UPLOAD_TIMEOUT_MS +
+    DATABASE_ATTACH_TIMEOUT_MS +
+    GALLERY_BATCH_CANCELLATION_GRACE_MS;
+
+  return safeFileCount * perFileBudgetMs;
+}
+
+function toGalleryImageMetadataLogFields(
+  event: ImageProcessingDiagnosticEvent | undefined
+): {
+  durationMs?: number | undefined;
+  format?: ImageProcessingDiagnosticEvent["format"] | undefined;
+  height?: number | undefined;
+  orientation?: number | null | undefined;
+  pixels?: number | undefined;
+  width?: number | undefined;
+} {
+  return {
+    durationMs: event?.durationMs,
+    format: event?.format,
+    height: event?.height,
+    orientation: event?.orientation,
+    pixels: event?.pixels,
+    width: event?.width
+  };
+}
+
+function readProcessorTimeoutMs(processor: ImageProcessor): number | undefined {
+  return normalizePositiveLogInteger(processor.timeoutMs);
+}
+
+function createStorageOperationContext(
+  context: AdminMutationContext,
+  signal: AbortSignal | undefined,
+  timeoutMs: number
+): ImageStorageOperationContext {
+  return {
+    requestId: context.requestId,
+    signal,
+    timeoutMs
+  };
+}
+
+function createDatabaseDeadlineOptions(timeoutMs: number): { timeoutMs: number } {
+  return { timeoutMs };
+}
+
+function isImageProcessingTimeoutError(error: unknown): boolean {
+  return error instanceof AppError && error.code === "IMAGE_PROCESSING_TIMEOUT";
+}
+
+function readGalleryImageErrorCategory(error: unknown): string {
+  return error instanceof AppError ? error.code : "INTERNAL_ERROR";
+}
+
+function readSafeLogIdentifier(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,120}$/.test(value)) {
+    return undefined;
+  }
+
+  return value;
+}
+
+function normalizePositiveLogInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return Math.trunc(value);
+}
+
+function normalizeNonNegativeLogInteger(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+
+  return Math.trunc(value);
 }
 
 function logPreviewUploadFailed(
@@ -1275,6 +1624,22 @@ function imageProcessingTimeout(): AppError {
     code: "IMAGE_PROCESSING_TIMEOUT",
     message: "Image processing timed out.",
     statusCode: 504
+  });
+}
+
+function requestCancelled(): AppError {
+  return new AppError({
+    code: "REQUEST_CANCELLED",
+    message: "Image operation was cancelled.",
+    statusCode: 499
+  });
+}
+
+function clientAborted(): AppError {
+  return new AppError({
+    code: "CLIENT_ABORTED",
+    message: "Image upload request was aborted.",
+    statusCode: 499
   });
 }
 

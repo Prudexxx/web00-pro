@@ -32,6 +32,10 @@ export interface CreateUploadReservationInput {
   runAfter: Date;
 }
 
+export interface StorageCleanupDeadlineOptions {
+  timeoutMs: number;
+}
+
 export interface MarkUploadReservationsCompletedInput {
   completedAt: Date;
   reservationIds: string[];
@@ -59,9 +63,13 @@ export interface RecoverStaleProcessingInput {
 
 export interface StorageCleanupRepository {
   claimDueJobs(input: ClaimStorageCleanupJobsInput): Promise<StorageCleanupJobRecord[]>;
-  createJobs(input: CreateStorageCleanupJobInput[]): Promise<void>;
+  createJobs(
+    input: CreateStorageCleanupJobInput[],
+    options?: StorageCleanupDeadlineOptions
+  ): Promise<void>;
   createUploadReservations(
-    input: CreateUploadReservationInput
+    input: CreateUploadReservationInput,
+    options?: StorageCleanupDeadlineOptions
   ): Promise<StorageCleanupJobRecord[]>;
   markCompleted(input: MarkStorageCleanupJobCompletedInput): Promise<void>;
   markFailed(input: MarkStorageCleanupJobFailedInput): Promise<void>;
