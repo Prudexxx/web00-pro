@@ -123,12 +123,17 @@ export function createSupabaseImageStorage(
         exists: true
       };
     },
-    async inspectObjects(paths) {
+    async inspectObjects(paths, context) {
       if (paths.length === 0) {
         return { existingPaths: [], missingPaths: [] };
       }
 
       const prefix = commonCanonicalPrefix(paths);
+
+      if (context !== undefined) {
+        return inspectObjectsWithFetch(config, paths, prefix, context, fetchImpl);
+      }
+
       const bucketClient = storageClient.from(config.bucket);
 
       if (bucketClient.list === undefined) {
@@ -163,9 +168,13 @@ export function createSupabaseImageStorage(
 
       return { existingPaths, missingPaths };
     },
-    async removeObjects(paths) {
+    async removeObjects(paths, context) {
       for (const path of paths) {
         assertVariantPath(path);
+      }
+
+      if (context !== undefined) {
+        return removeObjectsWithFetch(config, paths, context, fetchImpl);
       }
 
       const bucketClient = storageClient.from(config.bucket);
@@ -267,19 +276,203 @@ async function uploadObjectWithFetch(
       publicUrl: getPublicUrl()
     };
   } catch (error) {
-    if (timed.didTimeout() || isAbortError(error)) {
-      throw storageOperationFailed(
-        "IMAGE_STORAGE_TIMEOUT",
-        "Storage upload timed out.",
-        503,
-        "STORAGE_UPLOAD"
-      );
-    }
-
-    throw error;
+    throw mapTimedStorageError(error, timed, {
+      fallback: () => error,
+      operation: "STORAGE_UPLOAD",
+      temporaryCode: "STORAGE_WRITE_FAILED",
+      temporaryMessage: "Storage write failed.",
+      timeoutMessage: "Storage upload timed out."
+    });
   } finally {
     timed.cleanup();
   }
+}
+
+async function inspectObjectsWithFetch(
+  config: StorageConfig,
+  paths: readonly string[],
+  prefix: string,
+  context: ImageStorageOperationContext,
+  fetchImpl: SupabaseImageStorageOptions["fetchImpl"]
+): Promise<StorageObjectInspection> {
+  if (fetchImpl === undefined) {
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
+  }
+
+  const timed = createTimedOperationSignal(context);
+
+  try {
+    const result = await fetchImpl(buildObjectListUrl(config, prefix), {
+      body: JSON.stringify({
+        limit: Math.max(paths.length, 100),
+        offset: 0,
+        sortBy: {
+          column: "name",
+          order: "asc"
+        }
+      }),
+      headers: serviceRoleJsonHeaders(config),
+      method: "POST",
+      signal: timed.signal
+    });
+
+    if (!result.ok) {
+      throw storageOperationFailed(
+        "STORAGE_UNAVAILABLE",
+        "Storage is unavailable.",
+        503,
+        "STORAGE_INSPECT",
+        result
+      );
+    }
+
+    const payload = await result.json();
+
+    if (!Array.isArray(payload)) {
+      throw storageOperationFailed(
+        "STORAGE_UNAVAILABLE",
+        "Storage is unavailable.",
+        503,
+        "STORAGE_INSPECT"
+      );
+    }
+
+    const names = new Set(
+      payload
+        .map((item: unknown) =>
+          typeof item === "object" &&
+          item !== null &&
+          typeof (item as { name?: unknown }).name === "string"
+            ? (item as { name: string }).name
+            : null
+        )
+        .filter((name: string | null): name is string => name !== null)
+    );
+    const existingPaths: string[] = [];
+    const missingPaths: string[] = [];
+
+    for (const path of paths) {
+      const name = path.slice(prefix.length + 1);
+
+      if (names.has(name)) {
+        existingPaths.push(path);
+      } else {
+        missingPaths.push(path);
+      }
+    }
+
+    return { existingPaths, missingPaths };
+  } catch (error) {
+    throw mapTimedStorageError(error, timed, {
+      fallback: () => error,
+      operation: "STORAGE_INSPECT",
+      temporaryCode: "STORAGE_UNAVAILABLE",
+      temporaryMessage: "Storage is unavailable.",
+      timeoutMessage: "Storage inspect timed out."
+    });
+  } finally {
+    timed.cleanup();
+  }
+}
+
+async function removeObjectsWithFetch(
+  config: StorageConfig,
+  paths: readonly string[],
+  context: ImageStorageOperationContext,
+  fetchImpl: SupabaseImageStorageOptions["fetchImpl"]
+): Promise<StorageRemoveResult> {
+  if (fetchImpl === undefined) {
+    throw storageConfigurationInvalid("STORAGE_CONFIGURATION");
+  }
+
+  const timed = createTimedOperationSignal(context);
+
+  try {
+    const result = await fetchImpl(buildObjectDeleteUrl(config), {
+      body: JSON.stringify({ prefixes: [...paths] }),
+      headers: serviceRoleJsonHeaders(config),
+      method: "DELETE",
+      signal: timed.signal
+    });
+
+    if (!result.ok) {
+      throw storageOperationFailed(
+        "STORAGE_UNAVAILABLE",
+        "Storage is unavailable.",
+        503,
+        "STORAGE_REMOVE",
+        result
+      );
+    }
+
+    return { removedPaths: [...paths] };
+  } catch (error) {
+    throw mapTimedStorageError(error, timed, {
+      fallback: () => error,
+      operation: "STORAGE_REMOVE",
+      temporaryCode: "STORAGE_UNAVAILABLE",
+      temporaryMessage: "Storage is unavailable.",
+      timeoutMessage: "Storage remove timed out."
+    });
+  } finally {
+    timed.cleanup();
+  }
+}
+
+function mapTimedStorageError(
+  error: unknown,
+  timed: ReturnType<typeof createTimedOperationSignal>,
+  input: {
+    fallback: () => unknown;
+    operation: PreviewStorageDiagnosticCode;
+    temporaryCode: "STORAGE_UNAVAILABLE" | "STORAGE_WRITE_FAILED";
+    temporaryMessage: string;
+    timeoutMessage: string;
+  }
+): unknown {
+  const abortKind = timed.abortKind();
+
+  if (abortKind === "timeout") {
+    return storageOperationFailed(
+      "IMAGE_STORAGE_TIMEOUT",
+      input.timeoutMessage,
+      503,
+      input.operation
+    );
+  }
+  if (abortKind === "request") {
+    return requestCancelled();
+  }
+  if (abortKind === "client" || isAbortError(error)) {
+    return clientAborted();
+  }
+  if (error instanceof Response) {
+    return storageOperationFailed(
+      input.temporaryCode,
+      input.temporaryMessage,
+      503,
+      input.operation,
+      error
+    );
+  }
+  if (error instanceof Error && error.name === "SyntaxError") {
+    return storageOperationFailed(
+      input.temporaryCode,
+      input.temporaryMessage,
+      503,
+      input.operation
+    );
+  }
+  if (error instanceof Error && error.name === "TypeError") {
+    return storageOperationFailed(
+      "STORAGE_UNAVAILABLE",
+      "Storage is unavailable.",
+      503,
+      input.operation
+    );
+  }
+
+  return input.fallback();
 }
 
 function buildObjectUploadUrl(config: StorageConfig, path: string): string {
@@ -292,35 +485,73 @@ function buildObjectUploadUrl(config: StorageConfig, path: string): string {
   return base.toString();
 }
 
+function buildObjectListUrl(config: StorageConfig, prefix: string): string {
+  const base = new URL(config.credentials.supabaseUrl);
+
+  base.pathname = `/storage/v1/object/list/${config.bucket}/${prefix}`;
+  base.search = "";
+  base.hash = "";
+
+  return base.toString();
+}
+
+function buildObjectDeleteUrl(config: StorageConfig): string {
+  const base = new URL(config.credentials.supabaseUrl);
+
+  base.pathname = `/storage/v1/object/${config.bucket}`;
+  base.search = "";
+  base.hash = "";
+
+  return base.toString();
+}
+
+function serviceRoleJsonHeaders(config: StorageConfig): Record<string, string> {
+  return {
+    apikey: config.credentials.serviceRoleKey,
+    authorization: `Bearer ${config.credentials.serviceRoleKey}`,
+    "content-type": "application/json"
+  };
+}
+
 function createTimedOperationSignal(
   context: ImageStorageOperationContext | undefined
 ): {
+  abortKind: () => "client" | "request" | "timeout" | undefined;
   cleanup: () => void;
   didTimeout: () => boolean;
   signal: AbortSignal;
 } {
   const controller = new AbortController();
+  let abortKind: "client" | "request" | "timeout" | undefined;
   let timedOut = false;
   let timer: NodeJS.Timeout | undefined;
   let abortListener: (() => void) | undefined;
 
   if (context?.signal?.aborted === true) {
+    abortKind = classifyExternalAbort(context.signal.reason);
     controller.abort(context.signal.reason);
   } else if (context?.signal !== undefined) {
     abortListener = () => {
-      controller.abort(context.signal?.reason);
+      if (abortKind === undefined) {
+        abortKind = classifyExternalAbort(context.signal?.reason);
+        controller.abort(context.signal?.reason);
+      }
     };
     context.signal.addEventListener("abort", abortListener, { once: true });
   }
 
   if (context?.timeoutMs !== undefined) {
     timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort(new Error("IMAGE_STORAGE_TIMEOUT"));
+      if (abortKind === undefined) {
+        timedOut = true;
+        abortKind = "timeout";
+        controller.abort(new Error("IMAGE_STORAGE_TIMEOUT"));
+      }
     }, context.timeoutMs);
   }
 
   return {
+    abortKind: () => abortKind,
     cleanup() {
       if (timer !== undefined) {
         clearTimeout(timer);
@@ -332,6 +563,14 @@ function createTimedOperationSignal(
     didTimeout: () => timedOut,
     signal: controller.signal
   };
+}
+
+function classifyExternalAbort(reason: unknown): "client" | "request" {
+  return reason instanceof Error &&
+    "code" in reason &&
+    (reason as { code?: unknown }).code === "REQUEST_CANCELLED"
+    ? "request"
+    : "client";
 }
 
 function isAbortError(error: unknown): boolean {
@@ -453,6 +692,22 @@ function storageOperationFailed(
   return attachPreviewUploadDiagnostic(
     createImageAppError(code, message, statusCode),
     createPreviewStorageDiagnostic(operation, providerError)
+  );
+}
+
+function clientAborted(): ReturnType<typeof createImageAppError> {
+  return createImageAppError(
+    "CLIENT_ABORTED",
+    "Image storage request was aborted.",
+    499
+  );
+}
+
+function requestCancelled(): ReturnType<typeof createImageAppError> {
+  return createImageAppError(
+    "REQUEST_CANCELLED",
+    "Image storage request was cancelled.",
+    499
   );
 }
 

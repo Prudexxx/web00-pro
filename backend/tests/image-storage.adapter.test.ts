@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { StorageConfig } from "../src/config/storage-env.js";
 import type { UploadImageObjectInput } from "../src/modules/images/image-storage.js";
 import { createSupabaseImageStorage } from "../src/modules/images/supabase-image-storage.js";
@@ -19,6 +19,24 @@ const assetId = "33333333-3333-4333-8333-333333333333";
 
 function variantPath(width: number, format: "avif" | "webp"): string {
   return `sites/${siteId}/preview/${assetId}/${width}.${format}`;
+}
+
+function minimalPublicUrlClient() {
+  return {
+    storage: {
+      from() {
+        return {
+          getPublicUrl(path: string) {
+            return {
+              data: {
+                publicUrl: `${config.publicBaseUrl}/storage/v1/object/public/${config.bucket}/${path}`
+              }
+            };
+          }
+        };
+      }
+    }
+  };
 }
 
 describe("createSupabaseImageStorage", () => {
@@ -272,6 +290,196 @@ describe("createSupabaseImageStorage", () => {
       "content-type": "image/webp",
       "x-upsert": "false"
     });
+  });
+
+  it.each([
+    [
+      "inspect",
+      (storage: ReturnType<typeof createSupabaseImageStorage>) =>
+        storage.inspectObjects([variantPath(480, "webp")], {
+          requestId: "req_storage_deadline",
+          timeoutMs: 5
+        })
+    ],
+    [
+      "remove",
+      (storage: ReturnType<typeof createSupabaseImageStorage>) =>
+        storage.removeObjects([variantPath(480, "webp")], {
+          requestId: "req_storage_deadline",
+          timeoutMs: 5
+        })
+    ],
+    [
+      "upload",
+      (storage: ReturnType<typeof createSupabaseImageStorage>) =>
+        storage.uploadObject({
+          body: Buffer.from("webp"),
+          cacheControl: "31536000",
+          contentType: "image/webp",
+          context: {
+            requestId: "req_storage_deadline",
+            timeoutMs: 5
+          },
+          path: variantPath(480, "webp"),
+          upsert: false
+        })
+    ]
+  ] as const)("aborts %s fetch on its own finite storage deadline", async (_name, run) => {
+    vi.useFakeTimers();
+
+    try {
+      let aborted = false;
+      const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+        fetchImpl: async (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new DOMException("Aborted", "AbortError"));
+              },
+              { once: true }
+            );
+          })
+      });
+      const result = run(storage).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(result).resolves.toMatchObject({
+        code: "IMAGE_STORAGE_TIMEOUT",
+        statusCode: 503
+      });
+      expect(aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps caller abort separately from storage's own timeout and removes abort listeners", async () => {
+    const caller = new AbortController();
+    let fetchSignal: AbortSignal | undefined;
+    const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+      fetchImpl: async (_url, init) => {
+        fetchSignal = init?.signal ?? undefined;
+
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true }
+          );
+        });
+      }
+    });
+    const result = storage
+      .uploadObject({
+        body: Buffer.from("webp"),
+        cacheControl: "31536000",
+        contentType: "image/webp",
+        context: {
+          requestId: "req_storage_abort",
+          signal: caller.signal,
+          timeoutMs: 60_000
+        },
+        path: variantPath(480, "webp"),
+        upsert: false
+      })
+      .catch((error: unknown) => error);
+
+    await Promise.resolve();
+    caller.abort();
+
+    await expect(result).resolves.toMatchObject({
+      code: "CLIENT_ABORTED",
+      statusCode: 499
+    });
+    expect(fetchSignal?.aborted).toBe(true);
+
+    caller.abort();
+    await Promise.resolve();
+
+    expect(fetchSignal?.aborted).toBe(true);
+  });
+
+  it.each([
+    ["caller abort", undefined, "CLIENT_ABORTED"],
+    [
+      "parent request cancellation",
+      Object.assign(new Error("request cancelled"), { code: "REQUEST_CANCELLED" }),
+      "REQUEST_CANCELLED"
+    ]
+  ] as const)(
+    "keeps %s sticky when the storage timeout fires before fetch settles",
+    async (_label, abortReason, expectedCode) => {
+      vi.useFakeTimers();
+
+      try {
+        const caller = new AbortController();
+        let rejectFetch: ((error: unknown) => void) | undefined;
+        const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+          fetchImpl: async () =>
+            new Promise<Response>((_resolve, reject) => {
+              rejectFetch = reject;
+            })
+        });
+        const result = storage
+          .inspectObjects([variantPath(480, "webp")], {
+            requestId: "req_storage_abort_sticky",
+            signal: caller.signal,
+            timeoutMs: 10
+          })
+          .catch((error: unknown) => error);
+
+        await Promise.resolve();
+
+        if (abortReason === undefined) {
+          caller.abort();
+        } else {
+          caller.abort(abortReason);
+        }
+
+        await vi.advanceTimersByTimeAsync(10);
+        rejectFetch?.(new DOMException("Aborted", "AbortError"));
+
+        await expect(result).resolves.toMatchObject({
+          code: expectedCode,
+          statusCode: 499
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it("does not expose storage credentials, provider bodies, object URLs, or raw errors", async () => {
+    const storage = createSupabaseImageStorage(config, minimalPublicUrlClient(), {
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            error: "provider raw body service-role-secret storage/v1/object/sites/bad"
+          }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 503
+          }
+        )
+    });
+
+    const error = await storage
+      .removeObjects([variantPath(480, "webp")], {
+        requestId: "req_storage_safe_error",
+        timeoutMs: 1_000
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "STORAGE_UNAVAILABLE",
+      message: "Storage is unavailable."
+    });
+    expect(JSON.stringify(error)).not.toMatch(
+      /service-role-secret|storage\/v1\/object|provider raw body/i
+    );
   });
 
   it("rejects unsafe caller upload options and raw provider errors", async () => {

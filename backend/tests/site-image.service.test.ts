@@ -324,12 +324,22 @@ describe("PreviewImageService", () => {
         reason: "partial_upload_retry",
         storagePath: variantPath(480, "webp")
       })
-    ]);
+    ], {
+      timeoutMs: 10000
+    });
     expect(fakes.events.indexOf("cleanup:jobs")).toBeLessThan(
       fakes.events.indexOf(`remove:${variantPath(480, "webp")}`)
     );
     expect(fakes.events.indexOf(`remove:${variantPath(480, "webp")}`)).toBeLessThan(
       fakes.events.indexOf("cleanup:reservations")
+    );
+    expect(fakes.cleanup.createUploadReservations).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: siteId
+      }),
+      {
+        timeoutMs: 10000
+      }
     );
   });
 
@@ -570,6 +580,48 @@ describe("GalleryImageService", () => {
     ).rejects.toMatchObject({ code: "UPLOAD_ID_CONFLICT" });
   });
 
+  it("stops a single gallery upload at the DB boundary when the client aborts after storage returns", async () => {
+    const fakes = createFakes();
+    const abortController = new AbortController();
+
+    fakes.storage.uploadObject = vi.fn(async (input) => {
+      abortController.abort();
+
+      return {
+        path: input.path,
+        publicUrl:
+          `https://storage.example.test/storage/v1/object/public/web00-catalog-images/${input.path}`
+      };
+    });
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+
+    await expect(
+      service.gallery.addSingle({
+        context,
+        file: {
+          alt: "Gallery",
+          assetId,
+          declaredMimeType: "image/png",
+          index: 0,
+          source: Buffer.from("source")
+        },
+        signal: abortController.signal,
+        siteId
+      })
+    ).rejects.toMatchObject({
+      code: "CLIENT_ABORTED",
+      statusCode: 499
+    });
+    expect(fakes.repository.addGalleryImage).not.toHaveBeenCalled();
+  });
+
   it("cleans stale unattached gallery objects before single upload", async () => {
     const fakes = createFakes();
 
@@ -620,7 +672,9 @@ describe("GalleryImageService", () => {
         reason: "partial_upload_retry",
         storagePath: variantPath(480, "webp", "gallery")
       })
-    ]);
+    ], {
+      timeoutMs: 10000
+    });
   });
 
   it("canonicalizes reorder input and creates cleanup jobs for managed delete", async () => {
@@ -1031,6 +1085,84 @@ describe("GalleryImageService", () => {
     );
   });
 
+  it("does not mark client or parent cancellation retryable while keeping database temporary failures retryable", async () => {
+    const clientAbortId = "00000000-0000-4000-8000-000000000441";
+    const parentCancelId = "00000000-0000-4000-8000-000000000442";
+    const dbTemporaryId = "00000000-0000-4000-8000-000000000443";
+    const fakes = createFakes();
+
+    fakes.processor.process = vi.fn(async (input) => {
+      if (input.assetId === clientAbortId) {
+        throw new AppError({
+          code: "CLIENT_ABORTED",
+          message: "Image processing request was aborted.",
+          statusCode: 499
+        });
+      }
+      if (input.assetId === parentCancelId) {
+        throw new AppError({
+          code: "REQUEST_CANCELLED",
+          message: "Image operation was cancelled.",
+          statusCode: 499
+        });
+      }
+
+      return processedImageFor(input.assetId, input.slot);
+    });
+    fakes.repository.addGalleryImage = vi.fn(async (input) => {
+      if (input.image.assetId === dbTemporaryId) {
+        throw new AppError({
+          code: "DATABASE_TEMPORARY",
+          message: "Database operation timed out.",
+          statusCode: 503
+        });
+      }
+
+      return {
+        ...fakes.site,
+        galleryImages: [...(fakes.site.galleryImages as unknown[]), input.image]
+      };
+    });
+
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+    const result = await service.gallery.addBatch({
+      context,
+      files: [clientAbortId, parentCancelId, dbTemporaryId].map((id, index) => ({
+        alt: `Gallery ${index + 1}`,
+        assetId: id,
+        declaredMimeType: "image/png",
+        index,
+        source: Buffer.from(`source-${index}`)
+      })),
+      siteId
+    });
+
+    expect(result.failed).toEqual([
+      expect.objectContaining({
+        clientFileId: clientAbortId,
+        code: "CLIENT_ABORTED",
+        retryable: false
+      }),
+      expect.objectContaining({
+        clientFileId: parentCancelId,
+        code: "REQUEST_CANCELLED",
+        retryable: false
+      }),
+      expect.objectContaining({
+        clientFileId: dbTemporaryId,
+        code: "DATABASE_TEMPORARY",
+        retryable: true
+      })
+    ]);
+  });
+
   it("treats retry/replay of an already attached batch clientFileId as idempotent without duplicate assets", async () => {
     const existingAssetId = "00000000-0000-4000-8000-000000000501";
     const fakes = createFakes({
@@ -1245,9 +1377,15 @@ describe("GalleryImageService", () => {
       const fakes = createFakes();
 
       fakes.processor.process = vi.fn(
-        () =>
+        (input) =>
           new Promise<Awaited<ReturnType<ImageProcessor["process"]>>>(
-            () => undefined
+            (_resolve, reject) => {
+              input.signal?.addEventListener(
+                "abort",
+                () => reject(input.signal?.reason),
+                { once: true }
+              );
+            }
           )
       );
 
@@ -1273,7 +1411,7 @@ describe("GalleryImageService", () => {
         siteId
       }).catch((error: unknown) => error);
 
-      await vi.advanceTimersByTimeAsync(220_000);
+      await vi.advanceTimersByTimeAsync(250_000);
 
       await expect(batchError).resolves.toMatchObject({
         code: "IMAGE_PROCESSING_TIMEOUT"

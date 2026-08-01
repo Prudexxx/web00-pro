@@ -1287,6 +1287,79 @@ describe("admin site editor screen", () => {
     await waitFor(() => requests.some((request) => request.requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000999"));
   });
 
+  it("stops standard retry after the same gallery file receives a second processing timeout", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    let galleryAttempts = 0;
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000998",
+              slug: options.body.slug,
+              title: options.body.title
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      }),
+      requestMultipart: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.endsWith("/images/gallery")) {
+          galleryAttempts += 1;
+
+          return Promise.reject({
+            code: "IMAGE_PROCESSING_TIMEOUT",
+            message: "Image processing timed out.",
+            requestId: `req_gallery_timeout_${galleryAttempts}`,
+            status: 503
+          });
+        }
+        throw new Error(`Unexpected multipart path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onImages: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "editor",
+      uuidFactory: createUuidSequence([
+        "00000000-0000-4000-8000-000000000401"
+      ])
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Timeout retry stop");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    setFiles(screen.element, "galleryBatchImages", [
+      imageFile("heavy.png", "image/png", 12)
+    ]);
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+
+    await waitFor(() => screen.element.textContent.includes("req_gallery_timeout_1"));
+    expect(screen.element.querySelector('[data-action="retry-image-upload"]')).not.toBeNull();
+
+    screen.element.querySelector('[data-action="retry-image-upload"]').dispatchEvent(fakeEvent("click"));
+
+    await waitFor(() => screen.element.textContent.includes("req_gallery_timeout_2"));
+    expect(screen.element.textContent).toContain("Сожмите или перекодируйте файл");
+    expect(screen.element.querySelector('[data-action="retry-image-upload"]')).toBeNull();
+    expect(requests.filter((request) => request.requestPath.endsWith("/images/gallery"))).toHaveLength(2);
+  });
+
   it("uses the readiness attempt timeout for save preflight without changing ordinary GET timeout", async () => {
     const documentRef = createFakeDocument();
     const requests = [];

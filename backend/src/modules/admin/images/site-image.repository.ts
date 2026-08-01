@@ -1,6 +1,10 @@
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import { AppError } from "../../../lib/errors.js";
-import { runSerializableWithRetry } from "../../../cli/cli-user.repository.js";
+import {
+  MAX_SERIALIZABLE_ATTEMPTS,
+  SERIALIZABLE_MAX_WAIT_MS,
+  runSerializableWithRetry
+} from "../../../cli/cli-user.repository.js";
 import type { ManagedGalleryImage } from "../../images/image.types.js";
 import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
@@ -20,6 +24,8 @@ const siteImageSelect = {
   title: true
 } satisfies Prisma.SiteSelect;
 
+export const SITE_IMAGE_DATABASE_ATTACH_TIMEOUT_MS = 10_000;
+
 export function createPrismaSiteImageRepository(options: {
   prisma: PrismaClient;
 }): SiteImageRepository {
@@ -27,7 +33,7 @@ export function createPrismaSiteImageRepository(options: {
 
   return {
     async addGalleryImage(input) {
-      return runSerializableWithRetry(prisma, async (tx) => {
+      return runSiteImageSerializableWithDeadline(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanMutateSiteImages(input.context.actor, before);
         const gallery = readGalleryArray(before.galleryImages);
@@ -137,7 +143,7 @@ export function createPrismaSiteImageRepository(options: {
       const onStage = input.onStage ?? noopPreviewStage;
 
       onStage("DB_ATTACH_STARTED");
-      const after = await runSerializableWithRetry(prisma, async (tx) => {
+      const after = await runSiteImageSerializableWithDeadline(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanMutateSiteImages(input.context.actor, before);
         onStage("DB_SITE_UPDATED");
@@ -201,6 +207,106 @@ export function createPrismaSiteImageRepository(options: {
       });
     }
   };
+}
+
+async function runSiteImageSerializableWithDeadline<T>(
+  prisma: PrismaClient,
+  operation: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  for (let attempt = 1; attempt <= MAX_SERIALIZABLE_ATTEMPTS; attempt += 1) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        await setLocalStatementTimeout(tx, SITE_IMAGE_DATABASE_ATTACH_TIMEOUT_MS);
+
+        return operation(tx);
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: Math.min(
+          SERIALIZABLE_MAX_WAIT_MS,
+          SITE_IMAGE_DATABASE_ATTACH_TIMEOUT_MS
+        ),
+        timeout: SITE_IMAGE_DATABASE_ATTACH_TIMEOUT_MS
+      });
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      if (isDatabaseTimeoutError(error)) {
+        throw databaseTemporary();
+      }
+      if (!isRetryableSerializableConflict(error)) {
+        throw error;
+      }
+      if (attempt === MAX_SERIALIZABLE_ATTEMPTS) {
+        throw concurrentModification();
+      }
+    }
+  }
+
+  throw concurrentModification();
+}
+
+async function setLocalStatementTimeout(
+  tx: Prisma.TransactionClient,
+  timeoutMs: number
+): Promise<void> {
+  await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`;
+}
+
+function isDatabaseTimeoutError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+  const message = error instanceof Error ? error.message : "";
+  const meta = "meta" in error ? (error as { meta?: unknown }).meta : undefined;
+
+  return (
+    code === "P2028" ||
+    code === "57014" ||
+    /statement timeout|transaction.*timed out|timed out|timeout/i.test(message) ||
+    (typeof meta === "object" &&
+      meta !== null &&
+      JSON.stringify(meta).includes("57014"))
+  );
+}
+
+function isRetryableSerializableConflict(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  if ("code" in error && (error as { code?: unknown }).code === "P2034") {
+    return true;
+  }
+
+  const cause = "cause" in error ? (error as { cause?: unknown }).cause : undefined;
+
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "kind" in cause &&
+    "originalCode" in cause &&
+    (cause as { kind?: unknown }).kind === "TransactionWriteConflict" &&
+    (cause as { originalCode?: unknown }).originalCode === "40001"
+  );
+}
+
+function databaseTemporary(): AppError {
+  return new AppError({
+    code: "DATABASE_TEMPORARY",
+    message: "Database operation timed out.",
+    statusCode: 503
+  });
+}
+
+function concurrentModification(): AppError {
+  return new AppError({
+    code: "CONCURRENT_MODIFICATION",
+    message: "The operation conflicted with another update. Try again.",
+    statusCode: 409
+  });
 }
 
 async function getSiteOrThrow(

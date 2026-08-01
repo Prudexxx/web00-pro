@@ -39,6 +39,12 @@ async function fixture(
 }
 
 describe("createSharpImageProcessor", () => {
+  it("uses the benchmark-selected 16 MiB Sharp memory cache profile", () => {
+    createSharpImageProcessor();
+
+    expect(sharp.cache().memory.max).toBe(16);
+  });
+
   it.each([
     ["jpeg", "image/jpeg"],
     ["png", "image/png"],
@@ -100,6 +106,42 @@ describe("createSharpImageProcessor", () => {
 
       expect(metadata.width).toBe(320);
       expect(metadata.hasAlpha).toBe(true);
+    }
+  });
+
+  it("normalizes CMYK JPEG input into safe public variants", async () => {
+    const processor = createSharpImageProcessor();
+    const source = await sharp({
+      create: {
+        background: {
+          b: 32,
+          g: 160,
+          r: 240
+        },
+        channels: 3,
+        height: 64,
+        width: 96
+      }
+    }).toColorspace("cmyk").jpeg().toBuffer();
+
+    const processed = await processor.process({
+      assetId,
+      declaredMimeType: "image/jpeg",
+      siteId,
+      slot: "preview",
+      source
+    });
+
+    expect(processed.originalFormat).toBe("jpeg");
+    expect(processed.variants.map((variant) => variant.format).sort()).toEqual([
+      "avif",
+      "webp"
+    ]);
+    for (const variant of processed.variants) {
+      const metadata = await sharp(variant.body).metadata();
+
+      expect(metadata.space).not.toBe("cmyk");
+      expect(metadata.width).toBe(96);
     }
   });
 
@@ -299,6 +341,103 @@ describe("createSharpImageProcessor", () => {
     }
   });
 
+  it("terminates an active AVIF Sharp pipeline when the configured processing timeout elapses", async () => {
+    vi.useFakeTimers();
+
+    try {
+      let rejectAvif: ((error: Error) => void) | undefined;
+      const metadataPipeline = {
+        metadata: vi.fn(async () => ({
+          format: "png",
+          height: 600,
+          pages: 1,
+          width: 1200
+        })),
+        destroy: vi.fn()
+      };
+      const outputPipeline = {
+        destroy: vi.fn(),
+        metadata: vi.fn(async () => ({
+          height: 240,
+          mediaType: "image/webp",
+          width: 480
+        })),
+        timeout: vi.fn(() => outputPipeline)
+      };
+      const webpPipeline = {
+        avif: vi.fn(() => webpPipeline),
+        destroy: vi.fn(),
+        resize: vi.fn(() => webpPipeline),
+        toBuffer: vi.fn(async () => Buffer.from("webp")),
+        webp: vi.fn(() => webpPipeline)
+      };
+      const avifPipeline = {
+        avif: vi.fn(() => avifPipeline),
+        destroy: vi.fn((error?: Error) => {
+          rejectAvif?.(error ?? new Error("destroyed"));
+          return avifPipeline;
+        }),
+        resize: vi.fn(() => avifPipeline),
+        toBuffer: vi.fn(
+          () =>
+            new Promise<Buffer>((_resolve, reject) => {
+              rejectAvif = reject;
+            })
+        ),
+        webp: vi.fn(() => avifPipeline)
+      };
+      const basePipeline = {
+        clone: vi.fn()
+          .mockReturnValueOnce(webpPipeline)
+          .mockReturnValueOnce(avifPipeline),
+        destroy: vi.fn(),
+        rotate: vi.fn(() => basePipeline),
+        toColorspace: vi.fn(() => basePipeline)
+      };
+      let callCount = 0;
+      const sharpFactory = vi.fn(() => {
+        callCount += 1;
+
+        if (callCount === 1) {
+          return metadataPipeline;
+        }
+        if (callCount === 2) {
+          return basePipeline;
+        }
+
+        return outputPipeline;
+      });
+      const processor = createSharpImageProcessor({
+        sharpFactory,
+        timeoutMs: 60_000
+      } as never);
+      const result = processor
+        .process({
+          assetId,
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source: Buffer.from("fake-png")
+        })
+        .catch((error: unknown) => error);
+
+      for (let index = 0; index < 10 && avifPipeline.toBuffer.mock.calls.length === 0; index += 1) {
+        await Promise.resolve();
+      }
+      expect(webpPipeline.toBuffer).toHaveBeenCalledTimes(1);
+      expect(avifPipeline.toBuffer).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await expect(result).resolves.toMatchObject({
+        code: "IMAGE_PROCESSING_TIMEOUT"
+      });
+      expect(avifPipeline.destroy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("applies native Sharp timeouts to metadata, encode, and output verification pipelines", async () => {
     const metadataPipeline = {
       destroy: vi.fn(),
@@ -423,7 +562,18 @@ describe("createSharpImageProcessor", () => {
     }
   });
 
-  it("times out a genuinely hung source pipeline with a safe error", async () => {
+  it("times out a genuinely hung source pipeline with a safe error after native destroy settles", async () => {
+    let rejectNative!: (error: Error) => void;
+    const hungPipeline = {
+      destroy: vi.fn((error?: Error) => {
+        rejectNative(error ?? new Error("destroyed"));
+      }),
+      metadata: () =>
+        new Promise((_resolve, reject) => {
+          rejectNative = reject;
+        }),
+      timeout: vi.fn(() => hungPipeline)
+    };
     const semaphore = {
       async run<T>(operation: () => Promise<T>): Promise<T> {
         return operation();
@@ -431,10 +581,7 @@ describe("createSharpImageProcessor", () => {
     };
     const processor = createSharpImageProcessor({
       semaphore,
-      sharpFactory: (() => ({
-        destroy: vi.fn(),
-        metadata: () => new Promise(() => undefined)
-      })) as never,
+      sharpFactory: (() => hungPipeline) as never,
       timeoutMs: 1
     } as never);
 
@@ -477,6 +624,239 @@ describe("createSharpImageProcessor", () => {
         source: Buffer.from("fake-png")
       })
     ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
+  });
+
+  it("keeps the processor slot busy until timed-out native work settles after destroy", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const semaphore = createImagePipelineSemaphore({
+        maxActive: 1,
+        maxQueued: 1,
+        queueWaitTimeoutMs: 5_000
+      });
+      const events: string[] = [];
+      let rejectNative!: (error: Error) => void;
+      const firstPipeline = {
+        destroy: vi.fn(() => {
+          events.push("first:destroy");
+        }),
+        metadata: vi.fn(
+          () =>
+            new Promise((_resolve, reject) => {
+              rejectNative = reject;
+            })
+        ),
+        timeout: vi.fn(() => firstPipeline)
+      };
+      const secondPipeline = {
+        destroy: vi.fn(),
+        metadata: vi.fn(async () => {
+          events.push("second:metadata");
+          throw new Error("second operation started");
+        }),
+        timeout: vi.fn(() => secondPipeline)
+      };
+      const sharpFactory = vi
+        .fn()
+        .mockImplementationOnce(() => firstPipeline)
+        .mockImplementation(() => secondPipeline);
+      const processor = createSharpImageProcessor({
+        drainFailureGraceMs: 5_000,
+        semaphore,
+        sharpFactory,
+        timeoutMs: 5
+      } as never);
+      let firstSettled = false;
+      const first = processor
+        .process({
+          assetId,
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source: Buffer.from("first")
+        })
+        .catch((error: unknown) => {
+          firstSettled = true;
+          events.push(`first:${error instanceof AppError ? error.code : "unknown"}`);
+          return error;
+        });
+
+      await vi.advanceTimersByTimeAsync(5);
+      await Promise.resolve();
+
+      expect(firstPipeline.destroy).toHaveBeenCalledTimes(1);
+      expect(firstSettled).toBe(false);
+      expect(semaphore.stats?.()).toEqual({ active: 1, queued: 0 });
+
+      const second = processor
+        .process({
+          assetId: "33333333-3333-4333-8333-333333333334",
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source: Buffer.from("second")
+        })
+        .catch((error: unknown) => error);
+
+      await Promise.resolve();
+
+      expect(events).not.toContain("second:metadata");
+      expect(semaphore.stats?.()).toEqual({ active: 1, queued: 1 });
+
+      rejectNative(new Error("Operation timed out"));
+
+      await expect(first).resolves.toMatchObject({
+        code: "IMAGE_PROCESSING_TIMEOUT"
+      });
+      await expect(second).resolves.toMatchObject({
+        code: "IMAGE_INVALID"
+      });
+      expect(events[0]).toBe("first:destroy");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          "first:IMAGE_PROCESSING_TIMEOUT",
+          "second:metadata"
+        ])
+      );
+      expect(semaphore.stats?.()).toEqual({ active: 0, queued: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the processor slot busy until aborted native work settles after destroy", async () => {
+    const controller = new AbortController();
+    const semaphore = createImagePipelineSemaphore({
+      maxActive: 1,
+      maxQueued: 1,
+      queueWaitTimeoutMs: 5_000
+    });
+    const events: string[] = [];
+    let rejectNative!: (error: Error) => void;
+    const firstPipeline = {
+      destroy: vi.fn(() => {
+        events.push("first:destroy");
+      }),
+      metadata: vi.fn(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectNative = reject;
+          })
+      ),
+      timeout: vi.fn(() => firstPipeline)
+    };
+    const secondPipeline = {
+      destroy: vi.fn(),
+      metadata: vi.fn(async () => {
+        events.push("second:metadata");
+        throw new Error("second operation started");
+      }),
+      timeout: vi.fn(() => secondPipeline)
+    };
+    const sharpFactory = vi
+      .fn()
+      .mockImplementationOnce(() => firstPipeline)
+      .mockImplementation(() => secondPipeline);
+    const processor = createSharpImageProcessor({
+      drainFailureGraceMs: 5_000,
+      semaphore,
+      sharpFactory,
+      timeoutMs: 90_000
+    } as never);
+    let firstSettled = false;
+    const first = processor
+      .process({
+        assetId,
+        declaredMimeType: "image/png",
+        signal: controller.signal,
+        siteId,
+        slot: "preview",
+        source: Buffer.from("first")
+      })
+      .catch((error: unknown) => {
+        firstSettled = true;
+        events.push(`first:${error instanceof AppError ? error.code : "unknown"}`);
+        return error;
+      });
+
+    await Promise.resolve();
+    controller.abort();
+    await Promise.resolve();
+
+    expect(firstPipeline.destroy).toHaveBeenCalledTimes(1);
+    expect(firstSettled).toBe(false);
+
+    const second = processor
+      .process({
+        assetId: "33333333-3333-4333-8333-333333333334",
+        declaredMimeType: "image/png",
+        siteId,
+        slot: "preview",
+        source: Buffer.from("second")
+      })
+      .catch((error: unknown) => error);
+
+    await Promise.resolve();
+
+    expect(events).not.toContain("second:metadata");
+    expect(semaphore.stats?.()).toEqual({ active: 1, queued: 1 });
+
+    rejectNative(new Error("AbortError"));
+
+    await expect(first).resolves.toMatchObject({ code: "CLIENT_ABORTED" });
+    await expect(second).resolves.toMatchObject({ code: "IMAGE_INVALID" });
+    expect(semaphore.stats?.()).toEqual({ active: 0, queued: 0 });
+  });
+
+  it("poisons the processor and rejects new work when destroyed native work never drains", async () => {
+    vi.useFakeTimers();
+
+    try {
+      const hungPipeline = {
+        destroy: vi.fn(),
+        metadata: vi.fn(() => new Promise(() => undefined)),
+        timeout: vi.fn(() => hungPipeline)
+      };
+      const sharpFactory = vi.fn(() => hungPipeline);
+      const processor = createSharpImageProcessor({
+        drainFailureGraceMs: 10,
+        sharpFactory,
+        timeoutMs: 5
+      } as never);
+      const first = processor
+        .process({
+          assetId,
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source: Buffer.from("hung")
+        })
+        .catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(15);
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(first).resolves.toMatchObject({
+        code: "IMAGE_PROCESSOR_BUSY",
+        statusCode: 503
+      });
+      await expect(
+        processor.process({
+          assetId: "33333333-3333-4333-8333-333333333334",
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source: Buffer.from("new")
+        })
+      ).rejects.toMatchObject({
+        code: "IMAGE_PROCESSOR_BUSY",
+        statusCode: 503
+      });
+      expect(sharpFactory).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps semaphore compatibility for rejected operations", async () => {

@@ -43,7 +43,8 @@ export type ImageProcessingDiagnosticStage =
   | "METADATA_READ"
   | "PROCESSING_COMPLETED"
   | "PROCESSING_STARTED"
-  | "PROCESSING_TIMEOUT";
+  | "PROCESSING_TIMEOUT"
+  | "PROCESSOR_DRAIN_FAILED";
 
 export interface ImageProcessingDiagnosticEvent {
   durationMs?: number | undefined;

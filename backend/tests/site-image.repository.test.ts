@@ -93,10 +93,95 @@ describe("site image repository lifecycle recheck", () => {
     expect(db.tx.storageCleanupJob.create).toHaveBeenCalledTimes(2);
     expect(db.tx.auditLog.create).toHaveBeenCalledTimes(2);
   });
+
+  it("uses a bounded transaction and transaction-local statement timeout for gallery attach", async () => {
+    const db = createFakePrisma(siteRecord());
+    const repository = createPrismaSiteImageRepository({ prisma: db.prisma });
+
+    await expect(
+      repository.addGalleryImage({
+        context: mutationContext("editor"),
+        image: galleryImage({
+          assetId: "33333333-3333-4333-8333-333333333334"
+        }),
+        siteId,
+        uploadReservationIds: ["reservation-1"]
+      })
+    ).resolves.toMatchObject({
+      id: siteId
+    });
+
+    expect(db.transactionOptions[0]).toMatchObject({
+      maxWait: 10000,
+      timeout: 10000
+    });
+    expect(db.tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(db.tx.$executeRaw.mock.calls[0]?.[1]).toBe("10000");
+    expect(db.tx.site.findUnique.mock.invocationCallOrder[0] as number).toBeLessThan(
+      db.tx.site.update.mock.invocationCallOrder[0] as number
+    );
+    expect(db.tx.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps a transaction deadline overrun to a safe retryable database temporary error", async () => {
+    const transactionError = Object.assign(
+      new Error("Transaction already closed: transaction timed out"),
+      { code: "P2028" }
+    );
+    const db = createFakePrisma(siteRecord(), { transactionError });
+    const repository = createPrismaSiteImageRepository({ prisma: db.prisma });
+
+    await expect(
+      repository.addGalleryImage({
+        context: mutationContext("editor"),
+        image: galleryImage({
+          assetId: "33333333-3333-4333-8333-333333333334"
+        }),
+        siteId,
+        uploadReservationIds: ["reservation-1"]
+      })
+    ).rejects.toMatchObject({
+      code: "DATABASE_TEMPORARY",
+      message: "Database operation timed out.",
+      statusCode: 503
+    });
+
+    expect(db.tx.site.update).not.toHaveBeenCalled();
+    expect(db.tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("rolls back gallery attach when the audit write fails", async () => {
+    const db = createFakePrisma(siteRecord());
+    const repository = createPrismaSiteImageRepository({ prisma: db.prisma });
+
+    db.tx.auditLog.create.mockRejectedValueOnce(new Error("audit failed"));
+
+    await expect(
+      repository.addGalleryImage({
+        context: mutationContext("editor"),
+        image: galleryImage({
+          assetId: "33333333-3333-4333-8333-333333333334"
+        }),
+        siteId,
+        uploadReservationIds: ["reservation-1"]
+      })
+    ).rejects.toThrow("audit failed");
+
+    await expect(repository.getSiteForImageMutation(siteId)).resolves.toMatchObject({
+      galleryImages: [galleryImage()]
+    });
+    expect(db.tx.site.update).toHaveBeenCalledTimes(1);
+    expect(db.tx.auditLog.create).toHaveBeenCalledTimes(1);
+  });
 });
 
-function createFakePrisma(site: ReturnType<typeof siteRecord>) {
+function createFakePrisma(
+  site: ReturnType<typeof siteRecord>,
+  options: { transactionError?: unknown } = {}
+) {
+  const transactionOptions: unknown[] = [];
   const tx = {
+    $executeRaw: vi.fn(),
     auditLog: {
       create: vi.fn()
     },
@@ -111,10 +196,25 @@ function createFakePrisma(site: ReturnType<typeof siteRecord>) {
   };
   type FakeTx = typeof tx;
   const prisma = {
-    $transaction: vi.fn(async (operation: (tx: FakeTx) => Promise<unknown>) => operation(tx))
+    $transaction: vi.fn(
+      async (
+        operation: (tx: FakeTx) => Promise<unknown>,
+        nextTransactionOptions?: unknown
+      ) => {
+        transactionOptions.push(nextTransactionOptions);
+        if (options.transactionError !== undefined) {
+          throw options.transactionError;
+        }
+
+        return operation(tx);
+      }
+    ),
+    site: {
+      findUnique: vi.fn(async () => site)
+    }
   };
 
-  return { prisma: prisma as never, tx };
+  return { prisma: prisma as never, transactionOptions, tx };
 }
 
 function siteRecord(overrides: Record<string, unknown> = {}) {
@@ -130,13 +230,16 @@ function siteRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function galleryImage(): ManagedGalleryImage {
+function galleryImage(overrides: Partial<ManagedGalleryImage> = {}): ManagedGalleryImage {
+  const nextAssetId = overrides.assetId ?? assetId;
+
   return {
     alt: "Gallery",
-    assetId,
+    assetId: nextAssetId,
     sortOrder: 0,
-    storagePath: `sites/${siteId}/gallery/${assetId}`,
-    url: `https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/${siteId}/gallery/${assetId}/1200.webp`
+    storagePath: `sites/${siteId}/gallery/${nextAssetId}`,
+    url: `https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/${siteId}/gallery/${nextAssetId}/1200.webp`,
+    ...overrides
   };
 }
 

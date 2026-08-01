@@ -106,6 +106,7 @@ export function createSiteEditorScreen(options) {
   let pendingDraft = null;
   let imageRecoveryNotice = false;
   let imageRetryPlan = null;
+  const imageProcessingTimeoutCounts = new Map();
   let clientRequestId = null;
   let clientRequestIdError = null;
   let draftSaveTimer = null;
@@ -547,16 +548,15 @@ export function createSiteEditorScreen(options) {
         succeededItems.push(imageUploadDetail("Главное изображение", imageSelection.previewFile));
       } catch (error) {
         failedCount += 1;
-        const failureRequestId = readRequestId(error);
-        const retryable = isRetryableImageUploadError(error);
+        const failure = classifyImageUploadFailure(error, previewClientFileId);
 
-        requestId ??= failureRequestId;
+        requestId ??= failure.requestId;
         failedItems.push(imageUploadDetail("Главное изображение", imageSelection.previewFile, {
-          message: safeMessage(error),
-          requestId: failureRequestId,
-          retryable
+          message: failure.message,
+          requestId: failure.requestId,
+          retryable: failure.retryable
         }));
-        if (retryable) {
+        if (failure.retryable) {
           retryPlan.preview = {
             alt: imageSelection.previewAlt,
             clientFileId: previewClientFileId,
@@ -585,20 +585,20 @@ export function createSiteEditorScreen(options) {
             clientFileId,
             file
           });
+          imageProcessingTimeoutCounts.delete(clientFileId);
           succeededCount += 1;
           succeededItems.push(imageUploadDetail("Изображение галереи", file));
         } catch (error) {
-          const failureRequestId = readRequestId(error);
-          const retryable = isRetryableImageUploadError(error);
+          const failure = classifyImageUploadFailure(error, clientFileId);
 
-          requestId ??= failureRequestId;
+          requestId ??= failure.requestId;
           failedCount += 1;
           failedItems.push(imageUploadDetail("Изображение галереи", file, {
-            message: safeMessage(error),
-            requestId: failureRequestId,
-            retryable
+            message: failure.message,
+            requestId: failure.requestId,
+            retryable: failure.retryable
           }));
-          if (retryable) {
+          if (failure.retryable) {
             retryPlan.gallery.push({
               clientFileId,
               file,
@@ -655,6 +655,28 @@ export function createSiteEditorScreen(options) {
     }
 
     return response.data.image;
+  }
+
+  function classifyImageUploadFailure(error, clientFileId) {
+    const requestId = readRequestId(error);
+    let message = safeMessage(error);
+    let retryable = isRetryableImageUploadError(error);
+
+    if (error?.code === "IMAGE_PROCESSING_TIMEOUT" && typeof clientFileId === "string") {
+      const nextCount = (imageProcessingTimeoutCounts.get(clientFileId) ?? 0) + 1;
+
+      imageProcessingTimeoutCounts.set(clientFileId, nextCount);
+      if (nextCount >= 2) {
+        retryable = false;
+        message = "Изображение повторно не обработалось. Сожмите или перекодируйте файл и загрузите заново.";
+      }
+    }
+
+    return {
+      message,
+      requestId,
+      retryable
+    };
   }
 
   function renderCreateSavedNextStep(saved, options = {}) {
@@ -871,20 +893,20 @@ export function createSiteEditorScreen(options) {
             }),
             method: "PUT"
           });
+          imageProcessingTimeoutCounts.delete(plan.preview.clientFileId);
           succeededCount += 1;
           succeededItems.push(imageUploadDetail("Главное изображение", plan.preview.file));
         } catch (error) {
           failedCount += 1;
-          const failureRequestId = readRequestId(error);
-          const retryable = isRetryableImageUploadError(error);
+          const failure = classifyImageUploadFailure(error, plan.preview.clientFileId);
 
-          requestId ??= failureRequestId;
+          requestId ??= failure.requestId;
           failedItems.push(imageUploadDetail("Главное изображение", plan.preview.file, {
-            message: safeMessage(error),
-            requestId: failureRequestId,
-            retryable
+            message: failure.message,
+            requestId: failure.requestId,
+            retryable: failure.retryable
           }));
-          if (retryable) {
+          if (failure.retryable) {
             nextPlan.preview = plan.preview;
           }
         }
@@ -906,20 +928,20 @@ export function createSiteEditorScreen(options) {
               clientFileId: item.clientFileId,
               file: item.file
             });
+            imageProcessingTimeoutCounts.delete(item.clientFileId);
             succeededCount += 1;
             succeededItems.push(imageUploadDetail("Изображение галереи", item.file));
           } catch (error) {
-            const failureRequestId = readRequestId(error);
-            const retryable = isRetryableImageUploadError(error);
+            const failure = classifyImageUploadFailure(error, item.clientFileId);
 
-            requestId ??= failureRequestId;
+            requestId ??= failure.requestId;
             failedCount += 1;
             failedItems.push(imageUploadDetail("Изображение галереи", item.file, {
-              message: safeMessage(error),
-              requestId: failureRequestId,
-              retryable
+              message: failure.message,
+              requestId: failure.requestId,
+              retryable: failure.retryable
             }));
-            if (retryable) {
+            if (failure.retryable) {
               nextPlan.gallery.push(item);
             }
           }
@@ -2126,8 +2148,8 @@ function hasAnyImagesInRetryPlan(plan) {
 }
 
 const RETRYABLE_IMAGE_UPLOAD_ERROR_CODES = new Set([
-  "CLIENT_ABORTED",
   "CONCURRENT_MODIFICATION",
+  "DATABASE_TEMPORARY",
   "IMAGE_PROCESSING_TIMEOUT",
   "IMAGE_PROCESSOR_BUSY",
   "IMAGE_STORAGE_TIMEOUT",

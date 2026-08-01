@@ -119,6 +119,8 @@ const MAX_VARIANTS_PER_IMAGE = 6;
 const STORAGE_INSPECT_TIMEOUT_MS = 10_000;
 const STORAGE_REMOVE_TIMEOUT_MS = 15_000;
 const STORAGE_UPLOAD_TIMEOUT_MS = 15_000;
+const STORAGE_CLEANUP_JOB_TIMEOUT_MS = 10_000;
+const UPLOAD_RESERVATION_TIMEOUT_MS = 10_000;
 const DATABASE_ATTACH_TIMEOUT_MS = 10_000;
 const GALLERY_BATCH_CANCELLATION_GRACE_MS = 5_000;
 
@@ -506,7 +508,7 @@ async function prepareGalleryBatchCandidate(
           entityId: input.siteId,
           paths: processed.variants.map((variant) => variant.path),
           runAfter: addMinutes(input.context.now, 15)
-        });
+        }, createDatabaseDeadlineOptions(UPLOAD_RESERVATION_TIMEOUT_MS));
 
         const uploadStartedAt = Date.now();
 
@@ -644,7 +646,7 @@ async function replacePreview(
           entityId: input.siteId,
           paths: processed.variants.map((variant) => variant.path),
           runAfter: reservationRunAfter
-        });
+        }, createDatabaseDeadlineOptions(UPLOAD_RESERVATION_TIMEOUT_MS));
         cleanupScheduled = reservations.length > 0;
         setStage("RESERVATIONS_CREATED");
 
@@ -652,6 +654,7 @@ async function replacePreview(
 
         setStage("STORAGE_UPLOAD_STARTED");
         for (const variant of processed.variants) {
+          assertRequestSignalCanContinue(input.signal);
           uploaded.push(
             await options.storage.uploadObject({
               body: variant.body,
@@ -666,6 +669,7 @@ async function replacePreview(
               upsert: false
             })
           );
+          assertRequestSignalCanContinue(input.signal);
           uploadedVariantCount = uploaded.length;
           setStage(
             variant.format === "webp"
@@ -702,6 +706,8 @@ async function replacePreview(
           );
         }
         setStage("PREVIEW_URL_SELECTED");
+
+        assertRequestSignalCanContinue(input.signal);
 
         const updated = await options.repository.replacePreview({
           assetId: input.file.assetId,
@@ -826,9 +832,10 @@ async function addSingleGallery(
         entityId: input.siteId,
         paths: processed.variants.map((variant) => variant.path),
         runAfter: addMinutes(input.context.now, 15)
-      });
+      }, createDatabaseDeadlineOptions(UPLOAD_RESERVATION_TIMEOUT_MS));
 
       for (const variant of processed.variants) {
+        assertRequestSignalCanContinue(input.signal);
         await options.storage.uploadObject({
           body: variant.body,
           cacheControl: "31536000",
@@ -841,6 +848,7 @@ async function addSingleGallery(
           path: variant.path,
           upsert: false
         });
+        assertRequestSignalCanContinue(input.signal);
       }
 
       const image = buildManagedGalleryImage(options, {
@@ -849,6 +857,7 @@ async function addSingleGallery(
         processed,
         siteId: input.siteId
       });
+      assertRequestSignalCanContinue(input.signal);
       const updated = await options.repository.addGalleryImage({
         context: input.context,
         image,
@@ -957,24 +966,34 @@ async function withGalleryBatchTimeout<T>(
   operation: (timeoutState: GalleryBatchTimeoutState) => Promise<T>
 ): Promise<T> {
   const timeoutMs = calculateGalleryBatchTimeoutMs(processor, fileCount);
-  const timeoutState = {
+  const timeoutState: GalleryBatchTimeoutState = {
     controller: new AbortController(),
     timedOut: false,
     timeoutMs
   };
   let timeout: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      const error = imageProcessingTimeout();
+  timeout = setTimeout(() => {
+    const error = imageProcessingTimeout();
 
-      timeoutState.timedOut = true;
-      timeoutState.controller.abort(error);
-      reject(error);
-    }, timeoutMs);
-  });
+    timeoutState.timedOut = true;
+    timeoutState.cancelledError = error;
+    timeoutState.controller.abort(requestCancelled());
+  }, timeoutMs);
 
   try {
-    return await Promise.race([operation(timeoutState), timeoutPromise]);
+    const result = await operation(timeoutState);
+
+    if (timeoutState.timedOut) {
+      throw timeoutState.cancelledError ?? imageProcessingTimeout();
+    }
+
+    return result;
+  } catch (error) {
+    if (timeoutState.timedOut) {
+      throw timeoutState.cancelledError ?? imageProcessingTimeout();
+    }
+
+    throw error;
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
@@ -1093,7 +1112,8 @@ async function cleanUnattachedObjectsBeforeUpload(
       reason: "partial_upload_retry",
       runAfter: input.context.now,
       storagePath: path
-    }))
+    })),
+    createDatabaseDeadlineOptions(STORAGE_CLEANUP_JOB_TIMEOUT_MS)
   );
   assertGalleryBatchCanContinue(input.state);
   await options.storage.removeObjects(
@@ -1128,6 +1148,12 @@ function assertGalleryBatchCanContinue(timeoutState?: GalleryBatchTimeoutState):
   }
   if (timeoutState?.timedOut === true) {
     throw imageProcessingTimeout();
+  }
+}
+
+function assertRequestSignalCanContinue(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw clientAborted();
   }
 }
 
@@ -1176,8 +1202,8 @@ function isRetryableImageUploadError(error: unknown): boolean {
 }
 
 const retryableImageUploadErrorCodes = new Set([
-  "CLIENT_ABORTED",
   "CONCURRENT_MODIFICATION",
+  "DATABASE_TEMPORARY",
   "IMAGE_PROCESSING_TIMEOUT",
   "IMAGE_PROCESSOR_BUSY",
   "IMAGE_STORAGE_TIMEOUT",
@@ -1254,18 +1280,19 @@ function calculateGalleryBatchTimeoutMs(
     1,
     Math.min(MAX_GALLERY_BATCH_FILES, Math.trunc(Number(fileCount) || 1))
   );
-  const processingWaves = Math.ceil(safeFileCount / GALLERY_BATCH_CONCURRENCY);
   const processorTimeoutMs = readProcessorTimeoutMs(processor) ?? 90_000;
-  const perFileStorageBudgetMs =
+  const perFileBudgetMs =
+    processorTimeoutMs +
     STORAGE_INSPECT_TIMEOUT_MS +
+    STORAGE_CLEANUP_JOB_TIMEOUT_MS +
     STORAGE_REMOVE_TIMEOUT_MS +
-    MAX_VARIANTS_PER_IMAGE * STORAGE_UPLOAD_TIMEOUT_MS;
+    STORAGE_INSPECT_TIMEOUT_MS +
+    UPLOAD_RESERVATION_TIMEOUT_MS +
+    MAX_VARIANTS_PER_IMAGE * STORAGE_UPLOAD_TIMEOUT_MS +
+    DATABASE_ATTACH_TIMEOUT_MS +
+    GALLERY_BATCH_CANCELLATION_GRACE_MS;
 
-  return (
-    processingWaves * processorTimeoutMs +
-    safeFileCount * (perFileStorageBudgetMs + DATABASE_ATTACH_TIMEOUT_MS) +
-    GALLERY_BATCH_CANCELLATION_GRACE_MS
-  );
+  return safeFileCount * perFileBudgetMs;
 }
 
 function toGalleryImageMetadataLogFields(
@@ -1302,6 +1329,10 @@ function createStorageOperationContext(
     signal,
     timeoutMs
   };
+}
+
+function createDatabaseDeadlineOptions(timeoutMs: number): { timeoutMs: number } {
+  return { timeoutMs };
 }
 
 function isImageProcessingTimeoutError(error: unknown): boolean {
@@ -1593,6 +1624,22 @@ function imageProcessingTimeout(): AppError {
     code: "IMAGE_PROCESSING_TIMEOUT",
     message: "Image processing timed out.",
     statusCode: 504
+  });
+}
+
+function requestCancelled(): AppError {
+  return new AppError({
+    code: "REQUEST_CANCELLED",
+    message: "Image operation was cancelled.",
+    statusCode: 499
+  });
+}
+
+function clientAborted(): AppError {
+  return new AppError({
+    code: "CLIENT_ABORTED",
+    message: "Image upload request was aborted.",
+    statusCode: 499
   });
 }
 

@@ -42,6 +42,7 @@ export interface SharpImageProcessorOptions {
   maxPixels?: number;
   maxQueued?: number;
   queueWaitTimeoutMs?: number;
+  drainFailureGraceMs?: number;
   semaphore?: ImagePipelineSemaphore;
   sharpFactory?: SharpFactory;
   timeoutMs?: number;
@@ -64,6 +65,7 @@ interface NormalizedSharpImageProcessorOptions {
   maxPixels: number;
   maxQueued: number;
   queueWaitTimeoutMs: number;
+  drainFailureGraceMs: number;
   sharpFactory: SharpFactory;
   timeoutMs: number;
 }
@@ -72,11 +74,14 @@ interface ProcessingContext {
   aborted: boolean;
   activePipelines: Set<Sharp>;
   deadlineAt: number;
+  drainFailureGraceMs: number;
   maxPixels: number;
   sharpFactory: SharpFactory;
   signal?: AbortSignal | undefined;
+  sharpCounterBaseline: ReturnType<typeof sharp.counters>;
   timedOut: boolean;
   timeoutMs: number;
+  wakeDrain?: (() => void) | undefined;
 }
 
 const declaredMimeTypes = new Map<string, ImageSourceFormat>([
@@ -93,7 +98,8 @@ const defaultTimeoutMs = IMAGE_PROCESSING_TIMEOUT_LIMITS.default;
 const defaultMaxConcurrency = IMAGE_PROCESSING_CONCURRENCY_LIMITS.default;
 const defaultMaxQueued = IMAGE_PROCESSING_MAX_QUEUE_LIMITS.default;
 const defaultQueueWaitTimeoutMs = IMAGE_PROCESSING_QUEUE_WAIT_LIMITS.default;
-const sharpCacheMemoryMb = 32;
+const defaultDrainFailureGraceMs = 5_000;
+const sharpCacheMemoryMb = 16;
 
 export function createSharpImageProcessor(
   options: SharpImageProcessorOptions = {}
@@ -109,11 +115,30 @@ export function createSharpImageProcessor(
       maxQueued: normalized.maxQueued,
       queueWaitTimeoutMs: normalized.queueWaitTimeoutMs
     });
+  let poisonedError: AppError | undefined;
 
   return {
     timeoutMs: normalized.timeoutMs,
     process(input) {
-      return semaphore.run(() => processImageWithTimeout(input, normalized), {
+      if (poisonedError !== undefined) {
+        return Promise.reject(poisonedError);
+      }
+      return semaphore.run(async () => {
+        if (poisonedError !== undefined) {
+          throw poisonedError;
+        }
+
+        try {
+          return await processImageWithTimeout(input, normalized);
+        } catch (error) {
+          if (isProcessorDrainFailed(error)) {
+            poisonedError = processorUnavailable();
+            throw poisonedError;
+          }
+
+          throw error;
+        }
+      }, {
         signal: input.signal
       });
     }
@@ -137,8 +162,10 @@ async function processImageWithTimeout(
     aborted: false,
     activePipelines: new Set(),
     deadlineAt: performance.now() + options.timeoutMs,
+    drainFailureGraceMs: options.drainFailureGraceMs,
     maxPixels: options.maxPixels,
     sharpFactory: options.sharpFactory,
+    sharpCounterBaseline: sharp.counters(),
     signal: input.signal,
     timedOut: false,
     timeoutMs: options.timeoutMs
@@ -146,59 +173,50 @@ async function processImageWithTimeout(
   const startedAt = performance.now();
   let timeout: NodeJS.Timeout | undefined;
   let abortListener: (() => void) | undefined;
-  let abortReject: ((error: AppError) => void) | undefined;
-  const abortPromise = new Promise<never>((_resolve, reject) => {
-    abortReject = reject;
-  });
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => {
-      context.timedOut = true;
-      const timeoutError = imageProcessingTimeout();
-
-      emitProcessingDiagnostic(input, {
-        durationMs: performance.now() - startedAt,
-        errorCategory: timeoutError.code,
-        stage: "PROCESSING_TIMEOUT",
-        timeoutMs: options.timeoutMs
-      });
-      reject(timeoutError);
-
-      for (const pipeline of context.activePipelines) {
-        try {
-          pipeline.destroy(timeoutError);
-        } catch {
-          continue;
-        }
-      }
-    }, options.timeoutMs);
-  });
+  let timeoutDiagnosticEmitted = false;
 
   try {
     if (input.signal?.aborted === true) {
       throw clientAborted();
     }
+    const processingPromise = processImage(input, options, context);
+
+    timeout = setTimeout(() => {
+      const timeoutError = imageProcessingTimeout();
+
+      context.timedOut = true;
+      if (!timeoutDiagnosticEmitted) {
+        timeoutDiagnosticEmitted = true;
+        emitProcessingDiagnostic(input, {
+          durationMs: performance.now() - startedAt,
+          errorCategory: timeoutError.code,
+          stage: "PROCESSING_TIMEOUT",
+          timeoutMs: options.timeoutMs
+        });
+      }
+      destroyActivePipelines(context, timeoutError);
+      context.wakeDrain?.();
+    }, options.timeoutMs);
+
     if (input.signal !== undefined) {
       abortListener = () => {
         const abortError = clientAborted();
 
         context.aborted = true;
-        abortReject?.(abortError);
-        for (const pipeline of context.activePipelines) {
-          try {
-            pipeline.destroy(abortError);
-          } catch {
-            continue;
-          }
-        }
+        destroyActivePipelines(context, abortError);
+        context.wakeDrain?.();
       };
       input.signal.addEventListener("abort", abortListener, { once: true });
     }
 
-    const processed = await Promise.race([
-      processImage(input, options, context),
-      timeoutPromise,
-      abortPromise
-    ]);
+    const processed = await awaitProcessingSettlement(processingPromise, context, () => {
+      emitProcessingDiagnostic(input, {
+        durationMs: performance.now() - startedAt,
+        errorCategory: "PROCESSOR_DRAIN_FAILED",
+        stage: "PROCESSOR_DRAIN_FAILED",
+        timeoutMs: options.timeoutMs
+      });
+    });
 
     emitProcessingDiagnostic(input, {
       durationMs: performance.now() - startedAt,
@@ -220,7 +238,6 @@ async function processImageWithTimeout(
     if (abortListener !== undefined && input.signal !== undefined) {
       input.signal.removeEventListener("abort", abortListener);
     }
-    context.activePipelines.clear();
   }
 }
 
@@ -348,6 +365,7 @@ async function readMetadata(
       }),
       (pipeline) => pipeline.metadata()
     );
+    assertProcessingCanContinue(context);
   } catch (error) {
     if (context.aborted || isClientAborted(error)) {
       throw clientAborted();
@@ -532,6 +550,132 @@ async function runTrackedPipeline<T>(
   }
 }
 
+async function awaitProcessingSettlement<T>(
+  processingPromise: Promise<T>,
+  context: ProcessingContext,
+  onDrainFailed: () => void
+): Promise<T> {
+  let settled = false;
+  let fulfilled = false;
+  let settledValue: T | undefined;
+  let settledError: unknown;
+  let wake: (() => void) | undefined;
+  let drainExpired = false;
+  let drainTimer: NodeJS.Timeout | undefined;
+
+  processingPromise.then(
+    (value) => {
+      settled = true;
+      fulfilled = true;
+      settledValue = value;
+      wake?.();
+    },
+    (error: unknown) => {
+      settled = true;
+      settledError = error;
+      wake?.();
+    }
+  );
+
+  try {
+    while (!settled) {
+      if ((context.timedOut || context.aborted) && drainTimer === undefined) {
+        drainTimer = setTimeout(() => {
+          drainExpired = true;
+          wake?.();
+        }, context.drainFailureGraceMs);
+      }
+
+      if (drainExpired) {
+        onDrainFailed();
+        throw processorDrainFailed();
+      }
+
+      await waitForSettlementTick(
+        drainTimer === undefined ? 50 : context.drainFailureGraceMs,
+        () => settled || drainExpired,
+        (listener) => {
+          wake = listener;
+          context.wakeDrain = listener;
+        }
+      );
+      wake = undefined;
+      context.wakeDrain = undefined;
+    }
+  } finally {
+    if (drainTimer !== undefined) {
+      clearTimeout(drainTimer);
+    }
+  }
+
+  await waitForNativeDrain(context, onDrainFailed);
+
+  if (fulfilled) {
+    return settledValue as T;
+  }
+
+  throw settledError;
+}
+
+async function waitForNativeDrain(
+  context: ProcessingContext,
+  onDrainFailed: () => void
+): Promise<void> {
+  const deadlineAt = performance.now() + context.drainFailureGraceMs;
+
+  while (
+    context.activePipelines.size > 0 ||
+    sharpCountersAboveBaseline(context.sharpCounterBaseline)
+  ) {
+    if (performance.now() >= deadlineAt) {
+      onDrainFailed();
+      throw processorDrainFailed();
+    }
+
+    await waitForSettlementTick(10, () => false, () => undefined);
+  }
+}
+
+function waitForSettlementTick(
+  ms: number,
+  isSettled: () => boolean,
+  setWake: (wake: () => void) => void
+): Promise<void> {
+  if (isSettled()) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+
+    setWake(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+function destroyActivePipelines(context: ProcessingContext, error: AppError): void {
+  for (const pipeline of context.activePipelines) {
+    try {
+      pipeline.destroy(error);
+    } catch {
+      continue;
+    }
+  }
+}
+
+function sharpCountersAboveBaseline(
+  baseline: ReturnType<typeof sharp.counters>
+): boolean {
+  const current = sharp.counters();
+
+  return (
+    current.process > baseline.process ||
+    current.queue > baseline.queue
+  );
+}
+
 function normalizeSourceFormat(metadata: Metadata): ImageSourceFormat | null {
   if (
     metadata.format === "jpeg" ||
@@ -582,6 +726,11 @@ function normalizeOptions(
       options.queueWaitTimeoutMs,
       defaultQueueWaitTimeoutMs,
       "queueWaitTimeoutMs"
+    ),
+    drainFailureGraceMs: readPositiveInteger(
+      options.drainFailureGraceMs,
+      defaultDrainFailureGraceMs,
+      "drainFailureGraceMs"
     ),
     sharpFactory: options.sharpFactory ?? sharp,
     timeoutMs: readPositiveInteger(options.timeoutMs, defaultTimeoutMs, "timeoutMs")
@@ -662,6 +811,22 @@ function imageProcessingTimeout(): AppError {
   );
 }
 
+function processorDrainFailed(): AppError {
+  return createImageAppError(
+    "IMAGE_PROCESSOR_BUSY",
+    "Image processor is unavailable while native work drains.",
+    503
+  );
+}
+
+function processorUnavailable(): AppError {
+  return createImageAppError(
+    "IMAGE_PROCESSOR_BUSY",
+    "Image processor is temporarily unavailable.",
+    503
+  );
+}
+
 function clientAborted(): AppError {
   return createImageAppError(
     "CLIENT_ABORTED",
@@ -672,6 +837,14 @@ function clientAborted(): AppError {
 
 function isImageProcessingTimeout(error: unknown): boolean {
   return error instanceof AppError && error.code === "IMAGE_PROCESSING_TIMEOUT";
+}
+
+function isProcessorDrainFailed(error: unknown): boolean {
+  return (
+    error instanceof AppError &&
+    error.code === "IMAGE_PROCESSOR_BUSY" &&
+    error.message === "Image processor is unavailable while native work drains."
+  );
 }
 
 function isClientAborted(error: unknown): boolean {
