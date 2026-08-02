@@ -95,10 +95,34 @@ export interface PublicCatalogSyncFailedStageLogEntry {
   stage: PublicCatalogSyncFailedStage;
 }
 
+export interface PublicCatalogDryRunCompletedLogEntry {
+  blockersCount: number;
+  byteLength: number | null;
+  durationMs: number;
+  event: "public_catalog_dry_run_completed";
+  itemsCount: number;
+  requestId: string;
+  revision: number;
+  sha256: string | null;
+  status: "ready" | "blocked";
+}
+
+export interface PublicCatalogDryRunFailedLogEntry {
+  durationMs: number;
+  errorClass: string;
+  errorCode: ErrorCode;
+  event: "public_catalog_dry_run_failed";
+  requestId: string;
+  revision: number | null;
+  stage: string;
+}
+
 export type AppLogEntry =
   | AuthSecurityLogEntry
   | GalleryImageFileLogEntry
   | LifecycleLogEntry
+  | PublicCatalogDryRunCompletedLogEntry
+  | PublicCatalogDryRunFailedLogEntry
   | PublicCatalogSyncFailedStageLogEntry
   | RequestLogEntry
   | SiteCreateDraftFailedLogEntry;

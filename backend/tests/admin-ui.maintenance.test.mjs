@@ -174,6 +174,116 @@ describe("admin maintenance canonical assets screen", () => {
     ]);
   });
 
+  it("runs public catalog dry-run with exact confirmation and never calls sync", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath === "/api/admin/public-catalog/dry-run") {
+          return Promise.resolve({
+            data: {
+              blockers: [],
+              blockersTruncated: false,
+              byteLength: 2048,
+              durationMs: 10,
+              itemsCount: 16,
+              requestId: "req_dry_ready",
+              revision: 9,
+              sha256: "c".repeat(64),
+              status: "ready"
+            }
+          });
+        }
+        return Promise.resolve({ data: publicCatalogStatus() });
+      })
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    expect(screen.element.textContent).toContain("Проверить каталог без публикации");
+    expect(screen.element.textContent).toContain(
+      "Проверяет будущий snapshot. Ничего не публикует и не изменяет."
+    );
+
+    click(screen.element, '[data-action="public-catalog-dry-run"]');
+    expect(screen.element.querySelector('[data-action="confirm-dialog"]').disabled).toBe(true);
+    setValue(screen.element, "typedConfirmation", "WEB00-PUBLIC-CATALOG-DRY-RUN-V1");
+    expect(screen.element.querySelector('[data-action="confirm-dialog"]').disabled).toBe(false);
+    click(screen.element, '[data-action="confirm-dialog"]');
+
+    await waitFor(() => screen.element.textContent.includes("READY"));
+    expect(screen.element.textContent).toContain("req_dry_ready");
+    expect(requests).toContainEqual({
+      options: {
+        body: { confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" },
+        method: "POST",
+        timeoutMs: 45000
+      },
+      requestPath: "/api/admin/public-catalog/dry-run"
+    });
+    expect(
+      requests.some((requestItem) => requestItem.requestPath === "/api/admin/public-catalog/sync")
+    ).toBe(false);
+  });
+
+  it("renders blocked dry-run blockers as text without creating HTML elements", async () => {
+    const documentRef = createFakeDocument();
+    const maliciousSlug = "<img src=x onerror=alert(1)>";
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath === "/api/admin/public-catalog/dry-run") {
+          return Promise.resolve({
+            data: {
+              blockers: [
+                {
+                  errorCode: "PUBLIC_CATALOG_DRY_RUN_BLOCKED",
+                  fieldPath: "galleryImages[0].url",
+                  itemIndex: 0,
+                  reasonCode: "INVALID_URL_CREDENTIALS",
+                  siteId: "site_1",
+                  slug: maliciousSlug,
+                  stage: "item_validate"
+                }
+              ],
+              blockersTruncated: false,
+              byteLength: null,
+              durationMs: 12,
+              itemsCount: 1,
+              requestId: "req_dry_blocked",
+              revision: 9,
+              sha256: null,
+              status: "blocked"
+            }
+          });
+        }
+        return Promise.resolve({ data: publicCatalogStatus() });
+      })
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="public-catalog-dry-run"]');
+    setValue(screen.element, "typedConfirmation", "WEB00-PUBLIC-CATALOG-DRY-RUN-V1");
+    click(screen.element, '[data-action="confirm-dialog"]');
+
+    await waitFor(() => screen.element.textContent.includes("BLOCKED"));
+    expect(screen.element.textContent).toContain(maliciousSlug);
+    expect(screen.element.querySelector("img")).toBeNull();
+    expect(screen.element.textContent).toContain("INVALID_URL_CREDENTIALS");
+    expect(screen.element.textContent).not.toMatch(/postgres:\/\/|token|password|service_role/i);
+  });
+
   it("renders Russian preview state labels including legacy normalization", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {

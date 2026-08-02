@@ -63,6 +63,7 @@ import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cl
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 import { createPrismaPublicCatalogSyncRepository } from "./modules/public-catalog/public-catalog-control.repository.js";
+import { createPublicCatalogDryRunService } from "./modules/public-catalog/public-catalog-dry-run.service.js";
 import { createPublicCatalogSnapshotStorage } from "./modules/public-catalog/public-catalog-snapshot-storage.js";
 import { createPublicCatalogSyncService } from "./modules/public-catalog/public-catalog-sync.service.js";
 import {
@@ -130,10 +131,17 @@ export function startServer(options: StartServerOptions): StartedServer {
   });
   const publicCatalogSyncService = createPublicCatalogSyncService({
     cleanup: storageCleanupRepository,
+    imageUrlPolicy,
     logger,
     now: options.now ?? (() => new Date()),
     repository: createPrismaPublicCatalogSyncRepository({ prisma }),
     storage: publicCatalogSnapshotStorage
+  });
+  const publicCatalogDryRunService = createPublicCatalogDryRunService({
+    imageUrlPolicy,
+    logger,
+    now: options.now ?? (() => new Date()),
+    prisma
   });
   const authRepository = createAuthRepository({ prisma });
   const authService = createAuthService({
@@ -211,6 +219,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       repository: createPrismaCanonicalAssetReconciliationRepository({ prisma })
     }),
     publicCatalogService: createAdminPublicCatalogService({
+      dryRunService: publicCatalogDryRunService,
       repository: createPrismaAdminPublicCatalogRepository({ prisma }),
       syncService: publicCatalogSyncService
     }),

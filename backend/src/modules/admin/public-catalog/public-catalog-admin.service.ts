@@ -1,4 +1,6 @@
 import type { AdminMutationContext } from "../admin.types.js";
+import type { PublicCatalogDryRunService } from "../../public-catalog/public-catalog-dry-run.service.js";
+import type { PublicCatalogDryRunResult } from "../../public-catalog/public-catalog-dry-run.types.js";
 import type { PublicCatalogSyncResult, PublicCatalogSyncService } from "../../public-catalog/public-catalog-sync.service.js";
 
 export interface AdminPublicCatalogStatus {
@@ -22,6 +24,7 @@ export interface AdminPublicCatalogRepository {
 }
 
 export interface AdminPublicCatalogService {
+  dryRun(context: AdminMutationContext): Promise<PublicCatalogDryRunResult>;
   getStatus(): Promise<AdminPublicCatalogStatus>;
   sync(context: AdminMutationContext): Promise<PublicCatalogSyncResult>;
   updateSettings(
@@ -31,10 +34,15 @@ export interface AdminPublicCatalogService {
 }
 
 export function createAdminPublicCatalogService(options: {
+  dryRunService: PublicCatalogDryRunService;
   repository: AdminPublicCatalogRepository;
   syncService: PublicCatalogSyncService;
 }): AdminPublicCatalogService {
   return {
+    async dryRun(context) {
+      return options.dryRunService.dryRun({ requestId: context.requestId });
+    },
+
     async getStatus() {
       return options.repository.getStatus();
     },

@@ -19,6 +19,7 @@ export function createAdminPublicCatalogRouter(
     controller.updateSettings
   );
   router.post("/public-catalog/sync", requirePublicCatalogMaintenance, controller.sync);
+  router.post("/public-catalog/dry-run", requirePublicCatalogMaintenance, controller.dryRun);
 
   return router;
 }

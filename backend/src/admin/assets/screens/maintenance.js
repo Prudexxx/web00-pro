@@ -14,8 +14,10 @@ const CANONICAL_ASSETS_APPLY_PATH =
 const PUBLIC_CATALOG_STATUS_PATH = "/api/admin/public-catalog/status";
 const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
 const PUBLIC_CATALOG_SYNC_PATH = "/api/admin/public-catalog/sync";
+const PUBLIC_CATALOG_DRY_RUN_PATH = "/api/admin/public-catalog/dry-run";
 const CANONICAL_ASSETS_CONFIRMATION = "WEB00-CANONICAL-ASSETS-15-7";
 const PUBLIC_CATALOG_SYNC_CONFIRMATION = "WEB00-PUBLIC-CATALOG-SYNC-V1";
+const PUBLIC_CATALOG_DRY_RUN_CONFIRMATION = "WEB00-PUBLIC-CATALOG-DRY-RUN-V1";
 const EXPECTED_TARGET_SLUGS = Object.freeze(["mebel", "massage", "drova"]);
 const EXPECTED_PREVIEW_STATES = Object.freeze([
   "already-canonical",
@@ -140,6 +142,19 @@ export function createMaintenanceScreen(options) {
       }
     }
   });
+  const publicCatalogDryRunButton = createElement("button", {
+    documentRef,
+    text: "Проверить каталог без публикации",
+    attributes: {
+      "data-action": "public-catalog-dry-run",
+      type: "button"
+    },
+    on: {
+      click: () => {
+        openPublicCatalogDryRunDialog(publicCatalogDryRunButton);
+      }
+    }
+  });
   const publicCatalogPanel = createElement("section", {
     documentRef,
     className: "admin-maintenance-card",
@@ -152,6 +167,10 @@ export function createMaintenanceScreen(options) {
         documentRef,
         text:
           "DB-публикация карточек и публичный snapshot показываются отдельно. Pending/failed не отменяет уже опубликованную карточку."
+      }),
+      createElement("p", {
+        documentRef,
+        text: "Проверяет будущий snapshot. Ничего не публикует и не изменяет."
       }),
       createElement("label", {
         documentRef,
@@ -169,6 +188,7 @@ export function createMaintenanceScreen(options) {
         children: [
           publicCatalogCheckButton,
           publicCatalogSaveButton,
+          publicCatalogDryRunButton,
           publicCatalogSyncButton
         ]
       }),
@@ -333,6 +353,41 @@ export function createMaintenanceScreen(options) {
     }
   }
 
+  async function runPublicCatalogDryRun() {
+    if (role !== "admin" || publicCatalogBusy) {
+      return;
+    }
+
+    publicCatalogBusy = true;
+    setPublicCatalogButtonsBusy(true);
+    replaceContent(publicCatalogStatus, createElement("p", {
+      documentRef,
+      text: "Проверяем публичный каталог без публикации..."
+    }));
+
+    try {
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_DRY_RUN_PATH, {
+        body: {
+          confirmation: PUBLIC_CATALOG_DRY_RUN_CONFIRMATION
+        },
+        method: "POST",
+        timeoutMs: 45000
+      });
+      const dryRun = parsePublicCatalogDryRunResult(response?.data);
+
+      renderPublicCatalogDryRun(dryRun);
+      statusRegion.textContent = dryRun.status === "ready"
+        ? "Публичный каталог: READY dry-run."
+        : "Публичный каталог: BLOCKED dry-run.";
+    } catch (error) {
+      renderError(publicCatalogStatus, documentRef, error);
+      statusRegion.textContent = "Не удалось проверить публичный каталог.";
+    } finally {
+      publicCatalogBusy = false;
+      setPublicCatalogButtonsBusy(false);
+    }
+  }
+
   function openPublicCatalogSyncDialog(invoker) {
     if (role !== "admin" || publicCatalogBusy) {
       return;
@@ -347,6 +402,25 @@ export function createMaintenanceScreen(options) {
       documentRef,
       onConfirm: runPublicCatalogSync,
       title: "Синхронизировать публичный каталог"
+    });
+    replaceContent(dialogHost, currentDialog.element);
+    currentDialog.open(invoker);
+  }
+
+  function openPublicCatalogDryRunDialog(invoker) {
+    if (role !== "admin" || publicCatalogBusy) {
+      return;
+    }
+
+    currentDialog?.destroy();
+    currentDialog = createConfirmationDialog({
+      confirmationText: PUBLIC_CATALOG_DRY_RUN_CONFIRMATION,
+      confirmLabel: "Проверить",
+      description:
+        "Backend построит будущий snapshot в read-only режиме без публикации, DB-записей и Storage.",
+      documentRef,
+      onConfirm: runPublicCatalogDryRun,
+      title: "Проверить публичный каталог без публикации"
     });
     replaceContent(dialogHost, currentDialog.element);
     currentDialog.open(invoker);
@@ -616,6 +690,7 @@ export function createMaintenanceScreen(options) {
   function setPublicCatalogButtonsBusy(busy) {
     setBusy(publicCatalogCheckButton, busy);
     setBusy(publicCatalogSaveButton, busy);
+    setBusy(publicCatalogDryRunButton, busy);
     setBusy(publicCatalogSyncButton, busy);
   }
 
@@ -644,6 +719,94 @@ export function createMaintenanceScreen(options) {
 
   function renderPublicCatalogSync(sync) {
     replaceContent(publicCatalogStatus, publicCatalogSyncElement(sync));
+  }
+
+  function renderPublicCatalogDryRun(dryRun) {
+    if (dryRun.status === "ready") {
+      replaceContent(publicCatalogStatus, createElement("section", {
+        documentRef,
+        className: "admin-maintenance-summary",
+        children: [
+          createElement("p", {
+            documentRef,
+            text: "Public catalog dry-run: READY"
+          }),
+          createElement("p", {
+            documentRef,
+            text: `requestId ${dryRun.requestId}`
+          }),
+          createElement("p", {
+            documentRef,
+            text: `Revision ${dryRun.revision}, items ${dryRun.itemsCount}`
+          }),
+          createElement("p", {
+            documentRef,
+            text: `Bytes ${dryRun.byteLength}, checksum ${dryRun.sha256}`
+          })
+        ]
+      }));
+      return;
+    }
+
+    replaceContent(publicCatalogStatus, createElement("section", {
+      documentRef,
+      className: "admin-maintenance-summary",
+      children: [
+        createElement("p", {
+          documentRef,
+          text: "Public catalog dry-run: BLOCKED"
+        }),
+        createElement("p", {
+          documentRef,
+          text: `requestId ${dryRun.requestId}`
+        }),
+        createElement("p", {
+          documentRef,
+          text: `Blockers ${dryRun.blockers.length}${dryRun.blockersTruncated ? " (truncated)" : ""}`
+        }),
+        renderPublicCatalogDryRunBlockers(dryRun.blockers)
+      ]
+    }));
+  }
+
+  function renderPublicCatalogDryRunBlockers(blockers) {
+    if (blockers.length === 0) {
+      return createElement("p", {
+        documentRef,
+        text: "Blockers не переданы."
+      });
+    }
+
+    return createElement("table", {
+      documentRef,
+      className: "admin-data-table admin-maintenance-table",
+      children: [
+        createElement("thead", {
+          documentRef,
+          children: [
+            createElement("tr", {
+              documentRef,
+              children: [
+                tableHead(documentRef, "Card"),
+                tableHead(documentRef, "Field"),
+                tableHead(documentRef, "Reason")
+              ]
+            })
+          ]
+        }),
+        createElement("tbody", {
+          documentRef,
+          children: blockers.map((blocker) => createElement("tr", {
+            documentRef,
+            children: [
+              tableCell(documentRef, "Card", blocker.slug ?? blocker.siteId ?? ""),
+              tableCell(documentRef, "Field", blocker.fieldPath ?? ""),
+              tableCell(documentRef, "Reason", blocker.reasonCode)
+            ]
+          }))
+        })
+      ]
+    });
   }
 
   function publicCatalogSyncElement(sync) {
@@ -858,6 +1021,104 @@ function parsePublicCatalogSyncResult(value) {
   throw invalidResponseError();
 }
 
+function parsePublicCatalogDryRunResult(value) {
+  if (!isRecord(value)) {
+    throw invalidResponseError();
+  }
+
+  const durationMs = readNonNegativeInteger(value.durationMs);
+  const itemsCount = readNonNegativeInteger(value.itemsCount);
+  const revision = readNonNegativeInteger(value.revision);
+  if (
+    durationMs === null ||
+    itemsCount === null ||
+    revision === null ||
+    typeof value.requestId !== "string" ||
+    value.requestId.length === 0 ||
+    !Array.isArray(value.blockers) ||
+    typeof value.blockersTruncated !== "boolean"
+  ) {
+    throw invalidResponseError();
+  }
+
+  const blockers = value.blockers.map(parsePublicCatalogDryRunBlocker);
+  if (blockers.some((blocker) => blocker === null)) {
+    throw invalidResponseError();
+  }
+
+  if (value.status === "ready") {
+    const byteLength = readNonNegativeInteger(value.byteLength);
+    if (
+      byteLength === null ||
+      blockers.length !== 0 ||
+      value.blockersTruncated !== false ||
+      typeof value.sha256 !== "string" ||
+      !/^[a-f0-9]{64}$/.test(value.sha256)
+    ) {
+      throw invalidResponseError();
+    }
+
+    return {
+      blockers: [],
+      blockersTruncated: false,
+      byteLength,
+      durationMs,
+      itemsCount,
+      requestId: value.requestId,
+      revision,
+      sha256: value.sha256,
+      status: "ready"
+    };
+  }
+
+  if (value.status === "blocked") {
+    if (value.byteLength !== null || value.sha256 !== null) {
+      throw invalidResponseError();
+    }
+
+    return {
+      blockers,
+      blockersTruncated: value.blockersTruncated,
+      byteLength: null,
+      durationMs,
+      itemsCount,
+      requestId: value.requestId,
+      revision,
+      sha256: null,
+      status: "blocked"
+    };
+  }
+
+  throw invalidResponseError();
+}
+
+function parsePublicCatalogDryRunBlocker(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    value.errorCode !== "PUBLIC_CATALOG_DRY_RUN_BLOCKED" ||
+    !isNullableString(value.fieldPath) ||
+    !isNullableString(value.siteId) ||
+    !isNullableString(value.slug) ||
+    !isNullableNonNegativeInteger(value.itemIndex) ||
+    typeof value.reasonCode !== "string" ||
+    typeof value.stage !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    errorCode: "PUBLIC_CATALOG_DRY_RUN_BLOCKED",
+    fieldPath: value.fieldPath,
+    itemIndex: value.itemIndex,
+    reasonCode: value.reasonCode,
+    siteId: value.siteId,
+    slug: value.slug,
+    stage: value.stage
+  };
+}
+
 function applyStatusMessage(report) {
   if (report.status === "applied") {
     return "Канонические изображения восстановлены. Карточки остались черновиками и не опубликованы.";
@@ -1018,6 +1279,14 @@ function readTotals(value) {
 
 function readNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function isNullableNonNegativeInteger(value) {
+  return value === null || readNonNegativeInteger(value) !== null;
+}
+
+function isNullableString(value) {
+  return value === null || typeof value === "string";
 }
 
 function invalidResponseError() {

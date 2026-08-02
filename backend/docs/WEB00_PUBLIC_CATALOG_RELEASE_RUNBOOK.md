@@ -21,6 +21,47 @@ Therefore the safe release model is staged/manual migration compatibility:
 - first public snapshot sync must occur after the migration and backend deploy;
 - frontend snapshot consumption must be merged only after the backend manifest is readable and verified.
 
+## AP0 read-only dry-run gate
+
+AP0 adds a production-equivalent dry-run endpoint for exact RCA before any future atomic publication schema work.
+
+Endpoint:
+
+- `POST /api/admin/public-catalog/dry-run`
+
+Confirmation:
+
+- `WEB00-PUBLIC-CATALOG-DRY-RUN-V1`
+
+Execution boundary:
+
+- The dry-run uses one PostgreSQL `REPEATABLE READ` transaction.
+- The transaction executes `SET TRANSACTION READ ONLY` before catalog control, settings, and projection reads.
+- The dry-run uses the same pure pre-storage snapshot preparation path as sync.
+- The dry-run does not acquire a sync lease.
+- The dry-run does not change `desiredRevision`, `publishedRevision`, `syncStatus`, or lease fields.
+- The dry-run does not write `audit_logs` or `storage_cleanup_jobs`.
+- The dry-run does not call Storage, upload a snapshot, upload a manifest, or verify public Storage objects.
+- The dry-run does not execute public catalog sync.
+
+Expected result evidence:
+
+- `status=ready` means the projected catalog can be mapped, validated, serialized, parsed, and hashed locally through the pre-storage builder path.
+- `status=blocked` means the response contains up to 100 safe blockers with stage, reason code, item index, site id, slug, and field path.
+- Unexpected Prisma, system, programming, or invariant failures return `PUBLIC_CATALOG_DRY_RUN_FAILED`.
+- Concurrent dry-run requests return `PUBLIC_CATALOG_DRY_RUN_IN_PROGRESS`.
+- The response never includes snapshot bytes, the full snapshot body, provider responses, secrets, or credentialed URLs.
+
+Zero-mutation verification for an owner-approved production AP0 dry-run must confirm:
+
+- catalog control row is unchanged;
+- fixture or scoped audit rows are unchanged;
+- storage cleanup jobs are unchanged;
+- no Storage object is created;
+- no public catalog sync is executed.
+
+This runbook section documents the later owner-triggered production AP0 dry-run only. It does not authorize production dry-run, production sync, Render deploy, database mutation, or frontend PR #14 changes by itself.
+
 ## Stage A: backend PR
 
 1. Merge backend PR into `feat/web00-backend-production` after owner approval.

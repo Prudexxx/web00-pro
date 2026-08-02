@@ -6,6 +6,9 @@ import {
   validatePublicCatalogSnapshot
 } from "../src/modules/public-catalog/public-catalog.snapshot.js";
 import { mapSiteToPublicCatalogItem } from "../src/modules/public-catalog/public-catalog.mapper.js";
+import {
+  preparePublicCatalogSnapshotCandidate
+} from "../src/modules/public-catalog/public-catalog-snapshot-preparation.js";
 import type { PublicSiteRecord } from "../src/modules/public-catalog/public-catalog.types.js";
 
 const siteRecord = {
@@ -79,6 +82,31 @@ describe("public catalog snapshot", () => {
       revision: 4,
       settings: { showDemoInModal: false }
     });
+  });
+
+  it("keeps pure preparation byte-equivalent with the canonical snapshot builder", async () => {
+    const generatedAt = new Date("2026-08-01T00:00:00.000Z");
+    const settings = { showDemoInModal: false };
+    const items = [mapSiteToPublicCatalogItem(siteRecord)];
+    const built = await buildPublicCatalogSnapshot({
+      generatedAt,
+      items,
+      revision: 4,
+      settings
+    });
+    const prepared = await preparePublicCatalogSnapshotCandidate({
+      generatedAt,
+      records: [siteRecord],
+      revision: 4,
+      settings
+    });
+
+    expect(prepared.status).toBe("ready");
+    if (prepared.status !== "ready") {
+      throw new Error("Expected prepared snapshot to be ready.");
+    }
+    expect(prepared.built.bytes).toBe(built.bytes);
+    expect(prepared.built.sha256).toBe(built.sha256);
   });
 
   it("changes checksum for public changes and keeps it stable for non-public row order", async () => {

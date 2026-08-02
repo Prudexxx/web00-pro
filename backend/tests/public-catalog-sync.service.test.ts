@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
+import type { ManagedImageUrlPolicy } from "../src/modules/images/image.types.js";
 import {
   createPublicCatalogSyncService,
   type PublicCatalogSyncRepository
 } from "../src/modules/public-catalog/public-catalog-sync.service.js";
+import {
+  preparePublicCatalogSnapshotCandidate
+} from "../src/modules/public-catalog/public-catalog-snapshot-preparation.js";
 import {
   PUBLIC_CATALOG_CONTROL_ID,
   type PublicCatalogControlState
@@ -86,21 +90,21 @@ function createStorage(): PublicCatalogSnapshotStorage & { operations: string[] 
 
   return {
     operations,
-    async fetchText(input) {
+    fetchText: vi.fn(async (input) => {
       operations.push(`fetch:${input.path}:${input.cacheBust}`);
       const text = uploaded.get(input.path);
       if (text === undefined) {
         throw new Error(`missing ${input.path}`);
       }
       return text;
-    },
-    getPublicUrl(path) {
+    }),
+    getPublicUrl: vi.fn((path) => {
       return `https://storage.example.test/storage/v1/object/public/web00-catalog-images/${path}`;
-    },
-    async uploadJson(input) {
+    }),
+    uploadJson: vi.fn(async (input) => {
       operations.push(`upload:${input.path}:${input.upsert}`);
       uploaded.set(input.path, input.body);
-    }
+    })
   };
 }
 
@@ -209,6 +213,95 @@ describe("public catalog sync service", () => {
       })
     );
     expect(repository.failLease).not.toHaveBeenCalled();
+  });
+
+  it("keeps sync on the storage upload, fetch, and public URL contract", async () => {
+    const repository = createRepository();
+    const storage = createStorage();
+    storage.getPublicUrl = vi.fn(storage.getPublicUrl);
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => "lease_storage_contract",
+      now: () => now,
+      repository,
+      storage
+    });
+
+    await service.syncOnce({ requestId: "req_storage_contract" });
+
+    expect(storage.uploadJson).toHaveBeenCalledTimes(2);
+    expect(storage.fetchText).toHaveBeenCalledTimes(2);
+    expect(storage.getPublicUrl).toHaveBeenCalledWith(
+      "public-catalog/v1/snapshots/revision-1.json"
+    );
+  });
+
+  it("uses the shared pure preparation result inside snapshot_build", async () => {
+    const direct = await preparePublicCatalogSnapshotCandidate({
+      generatedAt: now,
+      records: [siteRecord],
+      revision: 1,
+      settings: { showDemoInModal: true }
+    });
+
+    expect(direct.status).toBe("ready");
+    if (direct.status !== "ready") {
+      throw new Error("Expected shared preparation to be ready.");
+    }
+
+    const repository = createRepository();
+    const storage = createStorage();
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => "lease_shared_preparation",
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_shared_preparation" });
+
+    expect(result).toMatchObject({
+      checksum: direct.built.sha256,
+      itemsCount: direct.itemsCount,
+      status: "ready"
+    });
+  });
+
+  it("uses the same managed image policy as dry-run during shared snapshot preparation", async () => {
+    const imageUrlPolicy = createManagedImageUrlPolicyFixture();
+    const managedRecord = createManagedSiteRecord();
+    const direct = await preparePublicCatalogSnapshotCandidate({
+      generatedAt: now,
+      imageUrlPolicy,
+      records: [managedRecord],
+      revision: 1,
+      settings: { showDemoInModal: true }
+    });
+
+    expect(direct.status).toBe("ready");
+    if (direct.status !== "ready") {
+      throw new Error("Expected managed preparation to be ready.");
+    }
+    expect(direct.built.snapshot.items[0]?.previewImage?.variants).toHaveLength(2);
+    expect(direct.built.snapshot.items[0]?.galleryImages[0]?.variants).toHaveLength(2);
+
+    const repository = createRepository();
+    vi.mocked(repository.listSnapshotSites).mockResolvedValue([managedRecord]);
+    const storage = createStorage();
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => "lease_managed_preparation",
+      imageUrlPolicy,
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_managed_preparation" });
+
+    expect(result).toMatchObject({
+      checksum: direct.built.sha256,
+      itemsCount: direct.itemsCount,
+      status: "ready"
+    });
   });
 
   it("runs one bounded second pass when dirty state remains pending after finalize", async () => {
@@ -616,3 +709,61 @@ describe("public catalog sync service", () => {
     expect(repository.failLease).not.toHaveBeenCalled();
   });
 });
+
+function createManagedSiteRecord(): PublicSiteRecord {
+  return {
+    ...siteRecord,
+    galleryImages: [
+      {
+        alt: "",
+        assetId: "00000000-0000-4000-8000-000000000902",
+        sortOrder: 0,
+        storagePath:
+          "sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/00000000-0000-4000-8000-000000000902.webp",
+        url:
+          "https://cdn.example.test/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/00000000-0000-4000-8000-000000000902.webp"
+      }
+    ],
+    previewImageUrl:
+      "https://cdn.example.test/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/preview/00000000-0000-4000-8000-000000000901.webp"
+  };
+}
+
+function createManagedImageUrlPolicyFixture(): ManagedImageUrlPolicy {
+  return {
+    buildVariants: (input) =>
+      input.widths.map((width) => ({
+        avifUrl: `https://cdn.example.test/variants/${input.assetId}-${width}.avif`,
+        webpUrl: `https://cdn.example.test/variants/${input.assetId}-${width}.webp`,
+        width
+      })),
+    parseManagedGallery: (siteId, url) =>
+      siteId === "3c205371-b407-4d27-8e5c-0dd2a3be8092" &&
+      url ===
+        "https://cdn.example.test/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/00000000-0000-4000-8000-000000000902.webp"
+        ? {
+            assetId: "00000000-0000-4000-8000-000000000902",
+            siteId,
+            slot: "gallery",
+            storagePath:
+              "sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/gallery/00000000-0000-4000-8000-000000000902.webp",
+            url,
+            widths: [320, 640]
+          }
+        : null,
+    parseManagedPreview: (siteId, url) =>
+      siteId === "3c205371-b407-4d27-8e5c-0dd2a3be8092" &&
+      url ===
+        "https://cdn.example.test/sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/preview/00000000-0000-4000-8000-000000000901.webp"
+        ? {
+            assetId: "00000000-0000-4000-8000-000000000901",
+            siteId,
+            slot: "preview",
+            storagePath:
+              "sites/3c205371-b407-4d27-8e5c-0dd2a3be8092/preview/00000000-0000-4000-8000-000000000901.webp",
+            url,
+            widths: [320, 640]
+          }
+        : null
+  };
+}

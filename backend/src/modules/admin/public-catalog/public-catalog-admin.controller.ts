@@ -2,12 +2,14 @@ import type { RequestHandler, Response } from "express";
 import type { AuthRequest } from "../../auth/auth.types.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import {
+  parsePublicCatalogDryRunInput,
   parsePublicCatalogSettingsInput,
   parsePublicCatalogSyncInput
 } from "./public-catalog-admin.schemas.js";
 import type { AdminPublicCatalogService } from "./public-catalog-admin.service.js";
 
 export interface AdminPublicCatalogController {
+  dryRun: RequestHandler;
   getStatus: RequestHandler;
   sync: RequestHandler;
   updateSettings: RequestHandler;
@@ -20,6 +22,17 @@ export function createAdminPublicCatalogController(options: {
   const now = options.now ?? (() => new Date());
 
   return {
+    dryRun: async (request, response, next) => {
+      try {
+        parsePublicCatalogDryRunInput(request.body);
+        response.json({
+          data: await options.service.dryRun(createContext(request as AuthRequest, response, now))
+        });
+      } catch (error) {
+        next(error);
+      }
+    },
+
     getStatus: async (_request, response, next) => {
       try {
         response.json({ data: await options.service.getStatus() });

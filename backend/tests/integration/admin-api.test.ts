@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import request from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/app.js";
 import { parseAuthEnv } from "../../src/config/auth-env.js";
 import { assertTestDatabaseUrl, parseTestDatabaseEnv } from "../../src/config/database-env.js";
@@ -16,8 +16,16 @@ import { createAdminAuditLogService } from "../../src/modules/admin/audit/audit-
 import { createPrismaAdminAuditLogRepository } from "../../src/modules/admin/audit/audit-log.repository.js";
 import { createAdminCategoryService } from "../../src/modules/admin/categories/category.service.js";
 import { createPrismaAdminCategoryRepository } from "../../src/modules/admin/categories/category.repository.js";
+import { createPrismaAdminPublicCatalogRepository } from "../../src/modules/admin/public-catalog/public-catalog-admin.repository.js";
+import { createAdminPublicCatalogService } from "../../src/modules/admin/public-catalog/public-catalog-admin.service.js";
 import { createAdminSiteService } from "../../src/modules/admin/sites/site.service.js";
 import { createPrismaAdminSiteRepository } from "../../src/modules/admin/sites/site.repository.js";
+import {
+  PUBLIC_CATALOG_CONTROL_ID
+} from "../../src/modules/public-catalog/public-catalog-control.repository.js";
+import {
+  createPublicCatalogDryRunService
+} from "../../src/modules/public-catalog/public-catalog-dry-run.service.js";
 import { createPrismaPublicCatalogRepository } from "../../src/modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "../../src/modules/public-catalog/public-catalog.service.js";
 
@@ -385,6 +393,55 @@ describe("admin audit log API", () => {
   });
 });
 
+describe("admin public catalog dry-run API", () => {
+  it("runs through admin routing without mutating fixture data, audits, control, cleanup jobs, or storage", async () => {
+    const category = await createCategory("ap0-category");
+    const site = await createSite({
+      categoryId: category.id,
+      published: true,
+      slug: "ap0-site"
+    });
+    const requestId = `${requestPrefix}ap0_dry_run`;
+    const before = await readAp0FixtureEvidence({
+      categorySlug: category.slug,
+      requestIdPrefix: requestId,
+      siteSlug: site.slug,
+      userId: adminUserId
+    });
+    const response = await request(createAdminApp())
+      .post("/api/admin/public-catalog/dry-run")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .set("X-Request-Id", requestId)
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(200);
+
+    expect(["ready", "blocked"]).toContain(response.body.data.status);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /postgres:\/\/|postgresql:\/\/|service_role|token|password|secret|provider response|fullDescription\":\"Full/i
+    );
+
+    const after = await readAp0FixtureEvidence({
+      categorySlug: category.slug,
+      requestIdPrefix: requestId,
+      siteSlug: site.slug,
+      userId: adminUserId
+    });
+
+    expect(after.control).toEqual(before.control);
+    expect(after.auditLogCount).toBe(before.auditLogCount);
+    expect(after.storageCleanupJobCount).toBe(before.storageCleanupJobCount);
+    expect(after.site).toEqual(before.site);
+    expect(after.sitePublicImageFields).toEqual(before.sitePublicImageFields);
+    expect(after.category).toEqual(before.category);
+    expect(after.user).toEqual(before.user);
+    expect(after.control?.desiredRevision).toBe(before.control?.desiredRevision);
+    expect(after.control?.publishedRevision).toBe(before.control?.publishedRevision);
+    expect(after.control?.syncStatus).toBe(before.control?.syncStatus);
+    expect(after.control?.syncLeaseId).toBe(before.control?.syncLeaseId);
+    expect(after.control?.syncLeaseExpiresAt).toEqual(before.control?.syncLeaseExpiresAt);
+  });
+});
+
 function createAdminApp() {
   const authEnv = parseAuthEnv(process.env, { nodeEnv: testEnv.NODE_ENV });
   const authRepository = createAuthRepository({ prisma });
@@ -417,6 +474,20 @@ function createAdminApp() {
   const publicCatalogService = createPublicCatalogService({
     repository: createPrismaPublicCatalogRepository({ prisma })
   });
+  const dryRunService = createPublicCatalogDryRunService({
+    logger: { log: vi.fn() },
+    now: () => new Date("2026-08-02T04:00:00.000Z"),
+    prisma
+  });
+  const publicCatalogAdminService = createAdminPublicCatalogService({
+    dryRunService,
+    repository: createPrismaAdminPublicCatalogRepository({ prisma }),
+    syncService: {
+      syncOnce: async () => {
+        throw new Error("AP0 integration test must not execute public catalog sync.");
+      }
+    }
+  });
   const adminRoutes = createAdminRouter({
     auditLogService: createAdminAuditLogService({
       repository: createPrismaAdminAuditLogRepository({ prisma })
@@ -425,6 +496,7 @@ function createAdminApp() {
     categoryService: createAdminCategoryService({
       repository: createPrismaAdminCategoryRepository({ prisma })
     }),
+    publicCatalogService: publicCatalogAdminService,
     siteService: createAdminSiteService({
       repository: createPrismaAdminSiteRepository({ prisma }),
       now: () => new Date("2026-07-25T12:00:00.000Z")
@@ -436,6 +508,37 @@ function createAdminApp() {
     env: testEnv,
     publicCatalogService
   });
+}
+
+async function readAp0FixtureEvidence(input: {
+  categorySlug: string;
+  requestIdPrefix: string;
+  siteSlug: string;
+  userId: string;
+}) {
+  return {
+    auditLogCount: await prisma.auditLog.count({
+      where: {
+        OR: [
+          { actorUserId: input.userId },
+          { requestId: { startsWith: input.requestIdPrefix } }
+        ]
+      }
+    }),
+    category: await prisma.category.findUnique({ where: { slug: input.categorySlug } }),
+    control: await prisma.publicCatalogControl.findUnique({
+      where: { id: PUBLIC_CATALOG_CONTROL_ID }
+    }),
+    site: await prisma.site.findUnique({ where: { slug: input.siteSlug } }),
+    sitePublicImageFields: await prisma.site.findUnique({
+      select: { galleryImages: true, previewImageUrl: true },
+      where: { slug: input.siteSlug }
+    }),
+    storageCleanupJobCount: await prisma.storageCleanupJob.count({
+      where: { storagePath: { contains: input.requestIdPrefix } }
+    }),
+    user: await prisma.user.findUnique({ where: { id: input.userId } })
+  };
 }
 
 async function signAccessToken(userId: string, role: "admin" | "editor"): Promise<string> {

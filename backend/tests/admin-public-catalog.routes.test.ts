@@ -6,6 +6,7 @@ import { requestIdMiddleware } from "../src/lib/request-id.js";
 import { errorHandler } from "../src/middleware/error-handler.js";
 import { createAdminPublicCatalogRouter } from "../src/modules/admin/public-catalog/public-catalog-admin.routes.js";
 import type { AdminPublicCatalogService } from "../src/modules/admin/public-catalog/public-catalog-admin.service.js";
+import { AppError } from "../src/lib/errors.js";
 import type { AuthenticatedPrincipal } from "../src/modules/auth/auth.types.js";
 
 describe("admin public catalog routes", () => {
@@ -44,6 +45,97 @@ describe("admin public catalog routes", () => {
       })
     );
   });
+
+  it("requires admin RBAC and exact confirmation for dry-run", async () => {
+    const service = createPublicCatalogService();
+
+    await request(createApp(service))
+      .post("/api/admin/public-catalog/dry-run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(401);
+
+    await request(createApp(service, editorPrincipal()))
+      .post("/api/admin/public-catalog/dry-run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(403);
+
+    await request(createApp(service, adminPrincipal()))
+      .post("/api/admin/public-catalog/dry-run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-SYNC-V1" })
+      .expect(400);
+
+    expect(service.dryRun).not.toHaveBeenCalled();
+
+    const response = await request(createApp(service, adminPrincipal()))
+      .post("/api/admin/public-catalog/dry-run")
+      .set("X-Request-Id", "req_public_catalog_dry_run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({
+      requestId: "req_public_catalog_dry_run",
+      status: "ready"
+    });
+    expect(service.sync).not.toHaveBeenCalled();
+  });
+
+  it("surfaces singleton dry-run concurrency guard across requests in the same app", async () => {
+    const started = createDeferredValue<void>();
+    const release = createDeferredValue<void>();
+    let active = false;
+    const service = createPublicCatalogService();
+    service.dryRun = vi.fn(async () => {
+      if (active) {
+        throw new AppError({
+          code: "PUBLIC_CATALOG_DRY_RUN_IN_PROGRESS",
+          message: "Public catalog dry-run is already in progress.",
+          statusCode: 409
+        });
+      }
+      active = true;
+      try {
+        started.resolve();
+        await release.promise;
+        return {
+          blockers: [],
+          blockersTruncated: false,
+          byteLength: 1200,
+          durationMs: 10,
+          itemsCount: 16,
+          requestId: "req_first",
+          revision: 8,
+          sha256: "b".repeat(64),
+          status: "ready" as const
+        };
+      } finally {
+        active = false;
+      }
+    });
+    const app = createApp(service, adminPrincipal());
+
+    const first = request(app)
+      .post("/api/admin/public-catalog/dry-run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(200);
+    const firstResponse = first.then((response) => response);
+    await started.promise;
+
+    await request(app)
+      .post("/api/admin/public-catalog/dry-run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(409)
+      .expect((response) => {
+        expect(response.body.error.code).toBe("PUBLIC_CATALOG_DRY_RUN_IN_PROGRESS");
+      });
+
+    release.resolve();
+    await firstResponse;
+
+    await request(app)
+      .post("/api/admin/public-catalog/dry-run")
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(200);
+  });
 });
 
 function createApp(service: AdminPublicCatalogService, principal?: AuthenticatedPrincipal) {
@@ -68,6 +160,17 @@ function createApp(service: AdminPublicCatalogService, principal?: Authenticated
 
 function createPublicCatalogService(): AdminPublicCatalogService {
   return {
+    dryRun: vi.fn(async () => ({
+      blockers: [],
+      blockersTruncated: false,
+      byteLength: 1200,
+      durationMs: 10,
+      itemsCount: 16,
+      requestId: "req_public_catalog_dry_run",
+      revision: 8,
+      sha256: "b".repeat(64),
+      status: "ready" as const
+    })),
     getStatus: vi.fn(async () => ({
       currentItemsCount: 16,
       currentSnapshotChecksum: "a".repeat(64),
@@ -109,6 +212,16 @@ function createPublicCatalogService(): AdminPublicCatalogService {
       }
     }))
   };
+}
+
+function createDeferredValue<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, reject, resolve };
 }
 
 function adminPrincipal(): AuthenticatedPrincipal {

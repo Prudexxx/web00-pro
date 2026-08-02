@@ -1,14 +1,16 @@
 import { createHash } from "node:crypto";
 import { AppError, type ErrorCode } from "../../lib/errors.js";
 import type { AppLogger, PublicCatalogSyncFailedStage } from "../../lib/logger.js";
-import { mapSiteToPublicCatalogItem } from "./public-catalog.mapper.js";
+import type { ManagedImageUrlPolicy } from "../images/image.types.js";
 import {
   buildPublicCatalogManifest,
-  buildPublicCatalogSnapshot,
   validatePublicCatalogManifest,
   validatePublicCatalogSnapshot,
   type PublicCatalogSnapshotSettings
 } from "./public-catalog.snapshot.js";
+import {
+  preparePublicCatalogSnapshotCandidate
+} from "./public-catalog-snapshot-preparation.js";
 import type {
   FinalizePublicCatalogLeaseOptions,
   PublicCatalogControlState
@@ -77,6 +79,7 @@ export type PublicCatalogSyncResult =
 export interface PublicCatalogSyncServiceOptions {
   cleanup?: Pick<StorageCleanupRepository, "createJobs">;
   createLeaseId?: () => string;
+  imageUrlPolicy?: ManagedImageUrlPolicy;
   leaseTtlMs?: number;
   logger?: Pick<AppLogger, "log">;
   now?: () => Date;
@@ -155,15 +158,23 @@ export function createPublicCatalogSyncService(
               stage: "snapshot_build"
             },
             async () => {
-              const builtSnapshot = await buildPublicCatalogSnapshot({
+              const preparationInput = {
                 generatedAt: now(),
-                items: records.map((record) => mapSiteToPublicCatalogItem(record)),
+                records,
                 revision: lease.revision,
                 settings
-              });
+              };
+              const prepared = await preparePublicCatalogSnapshotCandidate(
+                options.imageUrlPolicy === undefined
+                  ? preparationInput
+                  : { ...preparationInput, imageUrlPolicy: options.imageUrlPolicy }
+              );
+              if (prepared.status === "blocked") {
+                throw new Error("Public catalog snapshot candidate blocked.");
+              }
 
               return {
-                built: builtSnapshot,
+                built: prepared.built,
                 snapshotPath: buildPublicCatalogSnapshotPath(lease.revision)
               };
             }

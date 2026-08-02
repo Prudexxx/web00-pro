@@ -103,6 +103,40 @@ export function validatePublicCatalogControlState(
   return state;
 }
 
+export function createDefaultPublicCatalogControlState(): PublicCatalogControlState {
+  return validatePublicCatalogControlState({
+    currentItemsCount: null,
+    currentSnapshotChecksum: null,
+    currentSnapshotPath: null,
+    desiredRevision: 1,
+    id: PUBLIC_CATALOG_CONTROL_ID,
+    lastSyncErrorCode: null,
+    lastSyncRequestId: null,
+    publishedRevision: 0,
+    showDemoInModal: false,
+    syncLeaseExpiresAt: null,
+    syncLeaseId: null,
+    syncStatus: "pending"
+  });
+}
+
+export function resolvePublicCatalogAnalysisRevision(
+  state: PublicCatalogControlState
+): number {
+  validatePublicCatalogControlState(state);
+
+  const revision =
+    state.desiredRevision > state.publishedRevision
+      ? Math.min(state.publishedRevision + 1, state.desiredRevision)
+      : state.desiredRevision;
+
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new Error("Invalid public catalog analysis revision.");
+  }
+
+  return revision;
+}
+
 export function markPublicCatalogDirtyState(
   state: PublicCatalogControlState,
   _reason: string
@@ -240,7 +274,7 @@ export async function markPublicCatalogDirty(
     })) as PublicCatalogControlRow | null;
     const before =
       existing === null
-        ? defaultControlState()
+        ? createDefaultPublicCatalogControlState()
         : rowToState(existing);
     const next = markPublicCatalogDirtyState(before, reason);
 
@@ -473,20 +507,7 @@ function rowToState(row: PublicCatalogControlRow): PublicCatalogControlState {
 }
 
 function defaultControlState(): PublicCatalogControlState {
-  return {
-    currentItemsCount: null,
-    currentSnapshotChecksum: null,
-    currentSnapshotPath: null,
-    desiredRevision: 1,
-    id: PUBLIC_CATALOG_CONTROL_ID,
-    lastSyncErrorCode: null,
-    lastSyncRequestId: null,
-    publishedRevision: 0,
-    showDemoInModal: false,
-    syncLeaseExpiresAt: null,
-    syncLeaseId: null,
-    syncStatus: "pending"
-  };
+  return createDefaultPublicCatalogControlState();
 }
 
 function isMissingPublicCatalogControlTable(error: unknown): boolean {
