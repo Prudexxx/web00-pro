@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { AppError, type ErrorCode } from "../../lib/errors.js";
+import type { AppLogger, PublicCatalogSyncFailedStage } from "../../lib/logger.js";
 import { mapSiteToPublicCatalogItem } from "./public-catalog.mapper.js";
 import {
   buildPublicCatalogManifest,
@@ -77,6 +78,7 @@ export interface PublicCatalogSyncServiceOptions {
   cleanup?: Pick<StorageCleanupRepository, "createJobs">;
   createLeaseId?: () => string;
   leaseTtlMs?: number;
+  logger?: Pick<AppLogger, "log">;
   now?: () => Date;
   repository: PublicCatalogSyncRepository;
   storage: PublicCatalogSnapshotStorage;
@@ -102,11 +104,20 @@ export function createPublicCatalogSyncService(
         | null = null;
 
       for (let pass = 0; pass < maxCoalescedSyncPasses; pass += 1) {
-        const lease = await options.repository.acquireLease({
-          leaseId: createLeaseId(),
-          now: now(),
-          ttlMs: leaseTtlMs
-        });
+        const lease = await runPublicCatalogSyncStage(
+          {
+            logger: options.logger,
+            requestId: input.requestId,
+            revision: null,
+            stage: "lease"
+          },
+          () =>
+            options.repository.acquireLease({
+              leaseId: createLeaseId(),
+              now: now(),
+              ttlMs: leaseTtlMs
+            })
+        );
 
         if (lease === null) {
           return {
@@ -118,76 +129,154 @@ export function createPublicCatalogSyncService(
         }
 
         try {
-          const settings = await options.repository.readSettings();
-          const records = await options.repository.listSnapshotSites();
-          const built = await buildPublicCatalogSnapshot({
-            generatedAt: now(),
-            items: records.map((record) => mapSiteToPublicCatalogItem(record)),
-            revision: lease.revision,
-            settings
-          });
-          const snapshotPath = buildPublicCatalogSnapshotPath(lease.revision);
+          const settings = await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "settings"
+            },
+            () => options.repository.readSettings()
+          );
+          const records = await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "projection"
+            },
+            () => options.repository.listSnapshotSites()
+          );
+          const { built, snapshotPath } = await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "snapshot_build"
+            },
+            async () => {
+              const builtSnapshot = await buildPublicCatalogSnapshot({
+                generatedAt: now(),
+                items: records.map((record) => mapSiteToPublicCatalogItem(record)),
+                revision: lease.revision,
+                settings
+              });
 
-          await options.storage.uploadJson({
-            body: built.bytes,
-            path: snapshotPath,
-            requestId: input.requestId,
-            timeoutMs: storageTimeoutMs,
-            upsert: false
-          });
+              return {
+                built: builtSnapshot,
+                snapshotPath: buildPublicCatalogSnapshotPath(lease.revision)
+              };
+            }
+          );
 
-          const fetchedSnapshot = await options.storage.fetchText({
-            cacheBust: false,
-            path: snapshotPath,
-            requestId: input.requestId,
-            timeoutMs: storageTimeoutMs
-          });
+          await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "snapshot_upload"
+            },
+            () =>
+              options.storage.uploadJson({
+                body: built.bytes,
+                path: snapshotPath,
+                requestId: input.requestId,
+                timeoutMs: storageTimeoutMs,
+                upsert: false
+              })
+          );
 
-          assertFetchedSnapshot(fetchedSnapshot, built.bytes, built.sha256);
+          await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "snapshot_verify"
+            },
+            async () => {
+              const fetchedSnapshot = await options.storage.fetchText({
+                cacheBust: false,
+                path: snapshotPath,
+                requestId: input.requestId,
+                timeoutMs: storageTimeoutMs
+              });
 
-          const manifest = buildPublicCatalogManifest({
-            generatedAt: now(),
-            itemsCount: built.snapshot.itemsCount,
-            revision: built.snapshot.revision,
-            sha256: built.sha256,
-            snapshotPath,
-            snapshotUrl: options.storage.getPublicUrl(snapshotPath)
-          });
-          const manifestBytes = `${JSON.stringify(manifest)}\n`;
+              assertFetchedSnapshot(fetchedSnapshot, built.bytes, built.sha256);
+            }
+          );
 
-          await options.storage.uploadJson({
-            body: manifestBytes,
-            path: PUBLIC_CATALOG_MANIFEST_PATH,
-            requestId: input.requestId,
-            timeoutMs: storageTimeoutMs,
-            upsert: true
-          });
+          await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "manifest_upload"
+            },
+            async () => {
+              const manifest = buildPublicCatalogManifest({
+                generatedAt: now(),
+                itemsCount: built.snapshot.itemsCount,
+                revision: built.snapshot.revision,
+                sha256: built.sha256,
+                snapshotPath,
+                snapshotUrl: options.storage.getPublicUrl(snapshotPath)
+              });
+              const manifestBytes = `${JSON.stringify(manifest)}\n`;
 
-          const fetchedManifest = await options.storage.fetchText({
-            cacheBust: true,
-            path: PUBLIC_CATALOG_MANIFEST_PATH,
-            requestId: input.requestId,
-            timeoutMs: storageTimeoutMs
-          });
-          const verifiedManifest = validatePublicCatalogManifest(JSON.parse(fetchedManifest));
+              await options.storage.uploadJson({
+                body: manifestBytes,
+                path: PUBLIC_CATALOG_MANIFEST_PATH,
+                requestId: input.requestId,
+                timeoutMs: storageTimeoutMs,
+                upsert: true
+              });
+            }
+          );
 
-          if (
-            verifiedManifest.revision !== built.snapshot.revision ||
-            verifiedManifest.sha256 !== built.sha256 ||
-            verifiedManifest.itemsCount !== built.snapshot.itemsCount ||
-            verifiedManifest.snapshotPath !== snapshotPath
-          ) {
-            throw snapshotInvalid();
-          }
+          await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "manifest_verify"
+            },
+            async () => {
+              const fetchedManifest = await options.storage.fetchText({
+                cacheBust: true,
+                path: PUBLIC_CATALOG_MANIFEST_PATH,
+                requestId: input.requestId,
+                timeoutMs: storageTimeoutMs
+              });
+              const verifiedManifest = validatePublicCatalogManifest(JSON.parse(fetchedManifest));
 
-          const finalized = await options.repository.finalizeLease({
-            checksum: built.sha256,
-            itemsCount: built.snapshot.itemsCount,
-            leaseId: lease.leaseId,
-            publishedRevision: lease.revision,
-            requestId: input.requestId,
-            snapshotPath
-          });
+              if (
+                verifiedManifest.revision !== built.snapshot.revision ||
+                verifiedManifest.sha256 !== built.sha256 ||
+                verifiedManifest.itemsCount !== built.snapshot.itemsCount ||
+                verifiedManifest.snapshotPath !== snapshotPath
+              ) {
+                throw snapshotInvalid();
+              }
+            }
+          );
+
+          const finalized = await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "db_finalize"
+            },
+            () =>
+              options.repository.finalizeLease({
+                checksum: built.sha256,
+                itemsCount: built.snapshot.itemsCount,
+                leaseId: lease.leaseId,
+                publishedRevision: lease.revision,
+                requestId: input.requestId,
+                snapshotPath
+              })
+          );
 
           await enqueuePublicCatalogRetentionCleanup({
             cleanup: options.cleanup,
@@ -238,6 +327,54 @@ export function createPublicCatalogSyncService(
       };
     }
   };
+}
+
+async function runPublicCatalogSyncStage<T>(
+  input: {
+    logger: Pick<AppLogger, "log"> | undefined;
+    requestId: string;
+    revision: number | null;
+    stage: PublicCatalogSyncFailedStage;
+  },
+  operation: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+
+  try {
+    return await operation();
+  } catch (error) {
+    logPublicCatalogSyncStageFailure({
+      durationMs: Math.max(0, Date.now() - startedAt),
+      error,
+      logger: input.logger,
+      requestId: input.requestId,
+      revision: input.revision,
+      stage: input.stage
+    });
+    throw error;
+  }
+}
+
+function logPublicCatalogSyncStageFailure(input: {
+  durationMs: number;
+  error: unknown;
+  logger: Pick<AppLogger, "log"> | undefined;
+  requestId: string;
+  revision: number | null;
+  stage: PublicCatalogSyncFailedStage;
+}): void {
+  try {
+    input.logger?.log({
+      durationMs: input.durationMs,
+      errorClass: safeErrorClass(input.error),
+      errorCode: toPublicCatalogSyncErrorCode(input.error),
+      requestId: input.requestId,
+      revision: input.revision,
+      stage: input.stage
+    });
+  } catch {
+    // Diagnostics must never replace the sync failure being reported.
+  }
 }
 
 async function enqueuePublicCatalogRetentionCleanup(options: {
@@ -306,7 +443,8 @@ function assertFetchedSnapshot(
 function toPublicCatalogSyncErrorCode(error: unknown): ErrorCode {
   if (
     error instanceof AppError &&
-    (error.code === "PUBLIC_CATALOG_STORAGE_TIMEOUT" ||
+    (error.code === "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID" ||
+      error.code === "PUBLIC_CATALOG_STORAGE_TIMEOUT" ||
       error.code === "PUBLIC_CATALOG_STORAGE_UNAVAILABLE" ||
       error.code === "PUBLIC_CATALOG_SNAPSHOT_INVALID" ||
       error.code === "PUBLIC_CATALOG_SYNC_CONFLICT")
@@ -315,6 +453,17 @@ function toPublicCatalogSyncErrorCode(error: unknown): ErrorCode {
   }
 
   return "PUBLIC_CATALOG_SYNC_FAILED";
+}
+
+function safeErrorClass(error: unknown): string {
+  const value =
+    error instanceof Error
+      ? error.name || error.constructor.name
+      : typeof error === "object" && error !== null
+        ? "NonErrorObject"
+        : "NonError";
+
+  return /^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(value) ? value : "Error";
 }
 
 function snapshotInvalid(): AppError {

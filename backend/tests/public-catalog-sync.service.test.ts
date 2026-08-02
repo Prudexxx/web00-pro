@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AppError } from "../src/lib/errors.js";
 import {
   createPublicCatalogSyncService,
   type PublicCatalogSyncRepository
@@ -101,6 +102,52 @@ function createStorage(): PublicCatalogSnapshotStorage & { operations: string[] 
       uploaded.set(input.path, input.body);
     }
   };
+}
+
+type FailedSyncStage =
+  | "lease"
+  | "settings"
+  | "projection"
+  | "snapshot_build"
+  | "snapshot_upload"
+  | "snapshot_verify"
+  | "manifest_upload"
+  | "manifest_verify"
+  | "db_finalize";
+
+function secretBearingError(): Error {
+  return new Error(
+    "provider body postgres://user:password@db.example/render?token=secret storage/v1/object"
+  );
+}
+
+function expectSafeStageLog(input: {
+  logger: { log: ReturnType<typeof vi.fn> };
+  requestId: string;
+  revision: number | null;
+  stage: FailedSyncStage;
+}): void {
+  expect(input.logger.log).toHaveBeenCalledTimes(1);
+  const entry = input.logger.log.mock.calls[0]?.[0] as Record<string, unknown>;
+
+  expect(Object.keys(entry).sort()).toEqual([
+    "durationMs",
+    "errorClass",
+    "errorCode",
+    "requestId",
+    "revision",
+    "stage"
+  ]);
+  expect(entry).toMatchObject({
+    durationMs: expect.any(Number),
+    errorClass: expect.any(String),
+    errorCode: expect.any(String),
+    requestId: input.requestId,
+    revision: input.revision,
+    stage: input.stage
+  });
+  expect(Number.isFinite(entry.durationMs)).toBe(true);
+  expect(entry.durationMs as number).toBeGreaterThanOrEqual(0);
 }
 
 describe("public catalog sync service", () => {
@@ -268,6 +315,222 @@ describe("public catalog sync service", () => {
       })
     );
     expect(JSON.stringify(result)).not.toContain("manifest unavailable raw provider body");
+  });
+
+  it("preserves storage configuration invalid instead of collapsing it to generic sync failed", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.acquireLease).mockResolvedValueOnce({
+      leaseId: "lease_config_invalid",
+      revision: 1,
+      state: control({
+        syncLeaseExpiresAt: new Date("2026-08-01T16:01:00.000Z"),
+        syncLeaseId: "lease_config_invalid",
+        syncStatus: "syncing"
+      })
+    });
+    const storage = createStorage();
+    storage.getPublicUrl = vi.fn(() => {
+      throw new AppError({
+        code: "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID",
+        message: "Storage public origin is invalid and must not leak.",
+        statusCode: 503
+      });
+    });
+    const logger = { log: vi.fn() };
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => "lease_config_invalid",
+      logger,
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_config_invalid" });
+
+    expect(result).toMatchObject({
+      errorCode: "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID",
+      publishedRevision: 0,
+      requestId: "req_config_invalid",
+      status: "failed"
+    });
+    expect(repository.failLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorCode: "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID",
+        leaseId: "lease_config_invalid",
+        requestId: "req_config_invalid"
+      })
+    );
+    expectSafeStageLog({
+      logger,
+      requestId: "req_config_invalid",
+      revision: 1,
+      stage: "manifest_upload"
+    });
+  });
+
+  it("keeps unknown provider errors generic and excludes secrets from diagnostics", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.acquireLease).mockResolvedValueOnce({
+      leaseId: "lease_unknown",
+      revision: 1,
+      state: control({
+        syncLeaseExpiresAt: new Date("2026-08-01T16:01:00.000Z"),
+        syncLeaseId: "lease_unknown",
+        syncStatus: "syncing"
+      })
+    });
+    const storage = createStorage();
+    const originalUpload = storage.uploadJson.bind(storage);
+    storage.uploadJson = vi.fn(async (input) => {
+      if (input.path === "public-catalog/v1/manifest.json") {
+        throw secretBearingError();
+      }
+      await originalUpload(input);
+    });
+    const logger = { log: vi.fn() };
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => "lease_unknown",
+      logger,
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_unknown" });
+
+    expect(result).toMatchObject({
+      errorCode: "PUBLIC_CATALOG_SYNC_FAILED",
+      publishedRevision: 0,
+      requestId: "req_unknown",
+      status: "failed"
+    });
+    expect(repository.failLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorCode: "PUBLIC_CATALOG_SYNC_FAILED",
+        leaseId: "lease_unknown",
+        requestId: "req_unknown"
+      })
+    );
+    expectSafeStageLog({
+      logger,
+      requestId: "req_unknown",
+      revision: 1,
+      stage: "manifest_upload"
+    });
+    expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
+      /postgres:\/\/|password|token|secret|storage\/v1|provider body/i
+    );
+  });
+
+  it.each([
+    "lease",
+    "settings",
+    "projection",
+    "snapshot_build",
+    "snapshot_upload",
+    "snapshot_verify",
+    "manifest_upload",
+    "manifest_verify",
+    "db_finalize"
+  ] as const)("logs a safe diagnostic event when %s fails", async (stage) => {
+    const repository = createRepository();
+    const storage = createStorage();
+    const logger = { log: vi.fn() };
+    const requestId = `req_stage_${stage}`;
+    const failure = secretBearingError();
+
+    if (stage === "lease") {
+      vi.mocked(repository.acquireLease).mockRejectedValueOnce(failure);
+    } else {
+      vi.mocked(repository.acquireLease).mockResolvedValueOnce({
+        leaseId: "lease_stage",
+        revision: 1,
+        state: control({
+          syncLeaseExpiresAt: new Date("2026-08-01T16:01:00.000Z"),
+          syncLeaseId: "lease_stage",
+          syncStatus: "syncing"
+        })
+      });
+    }
+
+    if (stage === "settings") {
+      vi.mocked(repository.readSettings).mockRejectedValueOnce(failure);
+    } else if (stage === "projection") {
+      vi.mocked(repository.listSnapshotSites).mockRejectedValueOnce(failure);
+    } else if (stage === "snapshot_build") {
+      vi.mocked(repository.listSnapshotSites).mockResolvedValueOnce([
+        { ...siteRecord, slug: "" }
+      ]);
+    } else if (stage === "snapshot_upload") {
+      storage.uploadJson = vi.fn(async (input) => {
+        if (input.path.endsWith("/revision-1.json")) {
+          throw failure;
+        }
+      });
+    } else if (stage === "snapshot_verify") {
+      storage.fetchText = vi.fn(async (input) => {
+        if (input.path.endsWith("/revision-1.json")) {
+          throw failure;
+        }
+        return "{\"schemaVersion\":1}\n";
+      });
+    } else if (stage === "manifest_upload") {
+      const originalUpload = storage.uploadJson.bind(storage);
+      storage.uploadJson = vi.fn(async (input) => {
+        if (input.path === "public-catalog/v1/manifest.json") {
+          throw failure;
+        }
+        await originalUpload(input);
+      });
+    } else if (stage === "manifest_verify") {
+      const originalFetch = storage.fetchText.bind(storage);
+      storage.fetchText = vi.fn(async (input) => {
+        if (input.path === "public-catalog/v1/manifest.json") {
+          throw failure;
+        }
+        return originalFetch(input);
+      });
+    } else if (stage === "db_finalize") {
+      vi.mocked(repository.finalizeLease).mockRejectedValueOnce(failure);
+    }
+
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => "lease_stage",
+      logger,
+      now: () => now,
+      repository,
+      storage
+    });
+
+    if (stage === "lease") {
+      await expect(service.syncOnce({ requestId })).rejects.toThrow(/provider body/);
+      expect(repository.failLease).not.toHaveBeenCalled();
+    } else {
+      const result = await service.syncOnce({ requestId });
+
+      expect(result).toMatchObject({
+        errorCode: "PUBLIC_CATALOG_SYNC_FAILED",
+        requestId,
+        status: "failed"
+      });
+      expect(repository.failLease).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorCode: "PUBLIC_CATALOG_SYNC_FAILED",
+          leaseId: "lease_stage",
+          requestId
+        })
+      );
+    }
+
+    expectSafeStageLog({
+      logger,
+      requestId,
+      revision: stage === "lease" ? null : 1,
+      stage
+    });
+    expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
+      /postgres:\/\/|password|token|secret|storage\/v1|provider body/i
+    );
   });
 
   it("enqueues stale immutable versions after a verified manifest while preserving current and previous 19", async () => {

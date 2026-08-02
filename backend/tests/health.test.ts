@@ -105,7 +105,10 @@ describe("GET /api/health", () => {
     expect(entries).toHaveLength(1);
     const entry = entries[0];
 
-    expect(entry).toBeDefined();
+    if (entry === undefined || !("method" in entry)) {
+      throw new Error("Expected a request log entry.");
+    }
+
     expect(entry).toMatchObject({
       environment: "test",
       level: "info",
@@ -114,9 +117,6 @@ describe("GET /api/health", () => {
       service: "web00-backend",
       statusCode: 201
     });
-    if (entry === undefined || !("durationMs" in entry)) {
-      throw new Error("Expected a request log entry.");
-    }
 
     expect(entry.requestId).toMatch(/^req_[0-9a-f-]{36}$/);
     expect(entry.time).toEqual(expect.any(String));

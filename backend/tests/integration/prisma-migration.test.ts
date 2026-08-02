@@ -321,6 +321,57 @@ describe("B2 PostgreSQL migration", () => {
     });
   });
 
+  it("allows public catalog audit rows while still rejecting unknown entity types", async () => {
+    await withTestClient(async (client) => {
+      const suffix = randomUUID();
+      const requestId = `req_public_catalog_${suffix}`;
+
+      await client.query("BEGIN");
+
+      try {
+        await client.query(
+          `
+            INSERT INTO audit_logs (action, entity_type, request_id)
+            VALUES ($1, $2, $3)
+          `,
+          ["public_catalog.dirty", "public_catalog", requestId]
+        );
+
+        const row = await client.query<{ action: string; entity_type: string }>(
+          `
+            SELECT action, entity_type
+            FROM audit_logs
+            WHERE request_id = $1
+          `,
+          [requestId]
+        );
+
+        expect(row.rows).toEqual([
+          {
+            action: "public_catalog.dirty",
+            entity_type: "public_catalog"
+          }
+        ]);
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+
+      await expectRejectedTransaction(
+        client,
+        async () => undefined,
+        async () => {
+          await client.query(
+            `
+              INSERT INTO audit_logs (action, entity_type, request_id)
+              VALUES ($1, $2, $3)
+            `,
+            ["public_catalog.dirty", "definitely_unknown_entity_type", `req_unknown_${suffix}`]
+          );
+        }
+      );
+    });
+  });
+
   it("blocks category cascade deletes and preserves related sites", async () => {
     await withTestClient(async (client) => {
       const suffix = randomUUID();

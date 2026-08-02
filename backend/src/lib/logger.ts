@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import type { AppEnv } from "../config/env.js";
+import type { ErrorCode } from "./errors.js";
 
 export interface RequestLogEntry {
   durationMs: number;
@@ -74,10 +75,31 @@ export interface GalleryImageFileLogEntry {
   width?: number | undefined;
 }
 
+export type PublicCatalogSyncFailedStage =
+  | "db_finalize"
+  | "lease"
+  | "manifest_upload"
+  | "manifest_verify"
+  | "projection"
+  | "settings"
+  | "snapshot_build"
+  | "snapshot_upload"
+  | "snapshot_verify";
+
+export interface PublicCatalogSyncFailedStageLogEntry {
+  durationMs: number;
+  errorClass: string;
+  errorCode: ErrorCode;
+  requestId: string;
+  revision: number | null;
+  stage: PublicCatalogSyncFailedStage;
+}
+
 export type AppLogEntry =
   | AuthSecurityLogEntry
   | GalleryImageFileLogEntry
   | LifecycleLogEntry
+  | PublicCatalogSyncFailedStageLogEntry
   | RequestLogEntry
   | SiteCreateDraftFailedLogEntry;
 

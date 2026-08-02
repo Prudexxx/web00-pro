@@ -130,6 +130,7 @@ export function startServer(options: StartServerOptions): StartedServer {
   });
   const publicCatalogSyncService = createPublicCatalogSyncService({
     cleanup: storageCleanupRepository,
+    logger,
     now: options.now ?? (() => new Date()),
     repository: createPrismaPublicCatalogSyncRepository({ prisma }),
     storage: publicCatalogSnapshotStorage
