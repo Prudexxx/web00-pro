@@ -283,6 +283,14 @@ describe("admin sites API", () => {
     expect(restored.status).toBe("draft");
     expect(restored.publishedAt).toBeNull();
 
+    await prisma.site.update({
+      data: {
+        galleryImages: [],
+        previewImageUrl: null
+      },
+      where: { id: site.id }
+    });
+
     await request(app)
       .delete(`/api/admin/sites/${site.id}`)
       .set("Authorization", `Bearer ${adminToken}`)
