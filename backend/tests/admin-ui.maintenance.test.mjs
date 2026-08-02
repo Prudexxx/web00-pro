@@ -55,6 +55,125 @@ describe("admin maintenance canonical assets screen", () => {
     expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(false);
   });
 
+  it("loads public catalog controls without consuming canonical-assets API and fetches status explicitly", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath === "/api/admin/maintenance/canonical-assets") {
+          return Promise.resolve({ data: readyReport() });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.resolve({
+            data: publicCatalogStatus({
+              currentItemsCount: 16,
+              currentSnapshotPath: "public-catalog/v1/revisions/7/catalog.json",
+              showDemoInModal: true
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+
+    expect(apiClient.requestJson).not.toHaveBeenCalled();
+    expect(screen.element.textContent).toContain("Публичный каталог");
+    expect(screen.element.textContent).toContain("Статус публичного каталога ещё не загружен.");
+
+    click(screen.element, '[data-action="check-canonical-assets"]');
+    await waitFor(() => screen.element.textContent.includes("mebel"));
+    expect(screen.element.querySelector('[data-action="apply-canonical-assets"]').disabled).toBe(false);
+
+    click(screen.element, '[data-action="check-public-catalog"]');
+    await waitFor(() => screen.element.textContent.includes("DB mutation result: ready"));
+
+    expect(screen.element.textContent).toContain("Revision: desired 7, published 7");
+    expect(screen.element.textContent).toContain("Snapshot: public-catalog/v1/revisions/7/catalog.json");
+    expect(screen.element.querySelector('[data-field="show-demo-in-modal"]').checked).toBe(true);
+    expect(apiClient.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      "/api/admin/maintenance/canonical-assets",
+      "/api/admin/public-catalog/status"
+    ]);
+  });
+
+  it("rejects malformed public catalog status responses", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn(() => Promise.resolve({
+        data: publicCatalogStatus({
+          currentItemsCount: "sixteen"
+        })
+      }))
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="check-public-catalog"]');
+    await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
+  });
+
+  it("requires exact confirmation before running public catalog sync", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath === "/api/admin/public-catalog/sync") {
+          return Promise.resolve({
+            data: {
+              checksum: "a".repeat(64),
+              itemsCount: 16,
+              publishedRevision: 8,
+              requestId: "req_public_catalog_sync",
+              snapshotPath: "public-catalog/v1/snapshots/revision-8.json",
+              status: "ready"
+            }
+          });
+        }
+        return Promise.resolve({ data: publicCatalogStatus() });
+      })
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="sync-public-catalog"]');
+
+    expect(screen.element.querySelector('[data-action="confirm-dialog"]').disabled).toBe(true);
+    expect(apiClient.requestJson).not.toHaveBeenCalled();
+    setValue(screen.element, "typedConfirmation", "WEB00-PUBLIC-CATALOG-SYNC-V1");
+    expect(screen.element.querySelector('[data-action="confirm-dialog"]').disabled).toBe(false);
+    click(screen.element, '[data-action="confirm-dialog"]');
+    await waitFor(() => screen.element.textContent.includes("Published revision 8, items 16"));
+
+    expect(requests).toEqual([
+      {
+        options: {
+          body: { confirmation: "WEB00-PUBLIC-CATALOG-SYNC-V1" },
+          method: "POST",
+          timeoutMs: 45000
+        },
+        requestPath: "/api/admin/public-catalog/sync"
+      }
+    ]);
+  });
+
   it("renders Russian preview state labels including legacy normalization", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {
@@ -465,6 +584,21 @@ function readyReport() {
       plannedPreviewUpdates: 3,
       targetSites: 3
     }
+  };
+}
+
+function publicCatalogStatus(overrides = {}) {
+  return {
+    currentItemsCount: null,
+    currentSnapshotChecksum: null,
+    currentSnapshotPath: null,
+    desiredRevision: 7,
+    lastSyncErrorCode: null,
+    lastSyncRequestId: null,
+    publishedRevision: 7,
+    showDemoInModal: false,
+    syncStatus: "ready",
+    ...overrides
   };
 }
 

@@ -12,6 +12,8 @@ import type { SiteImageService } from "./images/site-image.service.js";
 import type { MultipartImageParser } from "../images/image.types.js";
 import { createAdminMaintenanceRouter } from "./maintenance/maintenance.routes.js";
 import type { AdminMaintenanceService } from "./maintenance/maintenance.service.js";
+import { createAdminPublicCatalogRouter } from "./public-catalog/public-catalog-admin.routes.js";
+import type { AdminPublicCatalogService } from "./public-catalog/public-catalog-admin.service.js";
 import { createAdminUserRouter } from "./users/user.routes.js";
 import type { AdminUserService } from "./users/user.service.js";
 import type { AuthService } from "../auth/auth.types.js";
@@ -24,6 +26,7 @@ export interface AdminRouterOptions {
   imageService?: SiteImageService;
   maintenanceService?: AdminMaintenanceService;
   now?: () => Date;
+  publicCatalogService?: AdminPublicCatalogService;
   siteService: AdminSiteService;
   userService?: AdminUserService;
 }
@@ -68,6 +71,15 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
         options.now === undefined
           ? { service: options.maintenanceService }
           : { now: options.now, service: options.maintenanceService }
+      )
+    );
+  }
+  if (options.publicCatalogService !== undefined) {
+    router.use(
+      createAdminPublicCatalogRouter(
+        options.now === undefined
+          ? { service: options.publicCatalogService }
+          : { now: options.now, service: options.publicCatalogService }
       )
     );
   }

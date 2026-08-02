@@ -17,7 +17,8 @@ export type B5Permission =
   | "user.changeRole"
   | "user.disable"
   | "user.enable"
-  | "maintenance.canonicalAssets";
+  | "maintenance.canonicalAssets"
+  | "maintenance.publicCatalog";
 
 export interface PermissionPolicy {
   has(role: string, permission: B5Permission): boolean;

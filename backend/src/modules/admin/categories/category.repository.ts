@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import type { AdminMutationContext } from "../admin.types.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import {
   categoryNotFound,
   isUniqueConflict,
@@ -40,6 +41,14 @@ const categorySelect = {
   title: true,
   updatedAt: true
 } satisfies Prisma.CategorySelect;
+
+const PUBLIC_CATALOG_CATEGORY_PROJECTION_FIELDS = [
+  "active",
+  "description",
+  "slug",
+  "sortOrder",
+  "title"
+] as const satisfies readonly (keyof AdminCategoryRecord)[];
 
 export function createPrismaAdminCategoryRepository(
   options: { prisma: PrismaClient }
@@ -179,6 +188,14 @@ export function createPrismaAdminCategoryRepository(
             entityId: id
           });
 
+          if (hasPublicCatalogCategoryProjectionChange(before, after)) {
+            await markPublicCatalogDirty(tx, "category.update", {
+              actorUserId: context.actor.id,
+              reasonContext: { categoryId: id, slug: after.slug },
+              requestId: context.requestId
+            });
+          }
+
           return after;
         });
       } catch (error) {
@@ -262,4 +279,13 @@ function changedCategoryFields(
   }
 
   return changed as Prisma.InputJsonValue;
+}
+
+function hasPublicCatalogCategoryProjectionChange(
+  before: AdminCategoryRecord,
+  after: AdminCategoryRecord
+): boolean {
+  return PUBLIC_CATALOG_CATEGORY_PROJECTION_FIELDS.some(
+    (field) => before[field] !== after[field]
+  );
 }

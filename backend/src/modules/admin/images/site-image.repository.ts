@@ -7,6 +7,7 @@ import {
 } from "../../../cli/cli-user.repository.js";
 import type { ManagedGalleryImage } from "../../images/image.types.js";
 import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
 import {
   assertCanDeleteSiteImages,
@@ -65,6 +66,13 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        if (hasPublicProjection(before) || hasPublicProjection(after as SiteImageMutationSite)) {
+          await markPublicCatalogDirty(tx, "site.image.gallery_add", {
+            actorUserId: input.context.actor.id,
+            reasonContext: { siteId: input.siteId },
+            requestId: input.context.requestId
+          });
+        }
 
         return after as SiteImageMutationSite;
       });
@@ -101,6 +109,13 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        if (hasPublicProjection(before) || hasPublicProjection(after as SiteImageMutationSite)) {
+          await markPublicCatalogDirty(tx, "site.image.gallery_delete", {
+            actorUserId: input.context.actor.id,
+            reasonContext: { siteId: input.siteId },
+            requestId: input.context.requestId
+          });
+        }
 
         return after as SiteImageMutationSite;
       });
@@ -127,6 +142,13 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        if (hasPublicProjection(before) || hasPublicProjection(after as SiteImageMutationSite)) {
+          await markPublicCatalogDirty(tx, "site.image.preview_delete", {
+            actorUserId: input.context.actor.id,
+            reasonContext: { siteId: input.siteId },
+            requestId: input.context.requestId
+          });
+        }
 
         return after as SiteImageMutationSite;
       });
@@ -173,6 +195,13 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        if (hasPublicProjection(before) || hasPublicProjection(after as SiteImageMutationSite)) {
+          await markPublicCatalogDirty(tx, "site.image.preview_replace", {
+            actorUserId: input.context.actor.id,
+            reasonContext: { siteId: input.siteId },
+            requestId: input.context.requestId
+          });
+        }
 
         return after as SiteImageMutationSite;
       });
@@ -202,6 +231,13 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        if (hasPublicProjection(before) || hasPublicProjection(after as SiteImageMutationSite)) {
+          await markPublicCatalogDirty(tx, "site.image.gallery_update", {
+            actorUserId: input.context.actor.id,
+            reasonContext: { siteId: input.siteId },
+            requestId: input.context.requestId
+          });
+        }
 
         return after as SiteImageMutationSite;
       });
@@ -348,6 +384,10 @@ function normalizeGallery(items: Record<string, unknown>[]): Record<string, unkn
     ...item,
     sortOrder: index
   }));
+}
+
+function hasPublicProjection(site: Pick<SiteImageMutationSite, "active" | "deletedAt" | "status">): boolean {
+  return site.status === "published" && site.active && site.deletedAt === null;
 }
 
 function noopPreviewStage(_stage: PreviewUploadStage): void {
