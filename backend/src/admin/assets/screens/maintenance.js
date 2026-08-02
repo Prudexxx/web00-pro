@@ -11,6 +11,9 @@ import { createConfirmationDialog } from "../dialog.js";
 const CANONICAL_ASSETS_DRY_RUN_PATH = "/api/admin/maintenance/canonical-assets";
 const CANONICAL_ASSETS_APPLY_PATH =
   "/api/admin/maintenance/canonical-assets/reconcile";
+const PUBLIC_CATALOG_STATUS_PATH = "/api/admin/public-catalog/status";
+const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
+const PUBLIC_CATALOG_SYNC_PATH = "/api/admin/public-catalog/sync";
 const CANONICAL_ASSETS_CONFIRMATION = "WEB00-CANONICAL-ASSETS-15-7";
 const EXPECTED_TARGET_SLUGS = Object.freeze(["mebel", "massage", "drova"]);
 const EXPECTED_PREVIEW_STATES = Object.freeze([
@@ -38,6 +41,7 @@ export function createMaintenanceScreen(options) {
   let applyReady = false;
   let mutationBusy = false;
   let checking = false;
+  let publicCatalogBusy = false;
 
   const statusRegion = createLiveRegion({
     className: "admin-screen-status",
@@ -81,6 +85,95 @@ export function createMaintenanceScreen(options) {
       }
     }
   });
+  const publicCatalogStatus = createElement("section", {
+    documentRef,
+    className: "admin-maintenance-results",
+    attributes: {
+      "aria-live": "polite",
+      "data-region": "public-catalog-status"
+    }
+  });
+  const publicCatalogToggle = createElement("input", {
+    documentRef,
+    attributes: {
+      "data-field": "show-demo-in-modal",
+      type: "checkbox"
+    }
+  });
+  const publicCatalogCheckButton = createElement("button", {
+    documentRef,
+    text: "Обновить статус каталога",
+    attributes: {
+      "data-action": "check-public-catalog",
+      type: "button"
+    },
+    on: {
+      click: () => {
+        void loadPublicCatalogStatus();
+      }
+    }
+  });
+  const publicCatalogSaveButton = createElement("button", {
+    documentRef,
+    text: "Сохранить настройку демо",
+    attributes: {
+      "data-action": "save-public-catalog-settings",
+      type: "button"
+    },
+    on: {
+      click: () => {
+        void submitPublicCatalogSettings();
+      }
+    }
+  });
+  const publicCatalogSyncButton = createElement("button", {
+    documentRef,
+    text: "Синхронизировать snapshot",
+    attributes: {
+      "data-action": "sync-public-catalog",
+      type: "button"
+    },
+    on: {
+      click: () => {
+        void runPublicCatalogSync();
+      }
+    }
+  });
+  const publicCatalogPanel = createElement("section", {
+    documentRef,
+    className: "admin-maintenance-card",
+    children: [
+      createElement("h3", {
+        documentRef,
+        text: "Публичный каталог"
+      }),
+      createElement("p", {
+        documentRef,
+        text:
+          "DB-публикация карточек и публичный snapshot показываются отдельно. Pending/failed не отменяет уже опубликованную карточку."
+      }),
+      createElement("label", {
+        documentRef,
+        children: [
+          publicCatalogToggle,
+          createElement("span", {
+            documentRef,
+            text: "Показать демо в модальном окне"
+          })
+        ]
+      }),
+      createElement("div", {
+        documentRef,
+        className: "admin-form-actions",
+        children: [
+          publicCatalogCheckButton,
+          publicCatalogSaveButton,
+          publicCatalogSyncButton
+        ]
+      }),
+      publicCatalogStatus
+    ]
+  });
   const actionPanel = createElement("div", {
     documentRef,
     className: "admin-form-actions",
@@ -115,6 +208,7 @@ export function createMaintenanceScreen(options) {
         text: "Действие доступно только администратору и не публикует карточки."
       }),
       ...(role === "admin" ? [actionPanel] : []),
+      ...(role === "admin" ? [publicCatalogPanel] : []),
       statusRegion,
       results,
       dialogHost
@@ -132,6 +226,10 @@ export function createMaintenanceScreen(options) {
       documentRef,
       text: "Сначала выполните dry-run. Apply станет доступен только для ready-отчёта без blockers."
     }));
+    replaceContent(publicCatalogStatus, createElement("p", {
+      documentRef,
+      text: "Статус публичного каталога ещё не загружен."
+    }));
     updateApplyState();
   }
 
@@ -143,7 +241,92 @@ export function createMaintenanceScreen(options) {
   }
 
   function isMutationBusy() {
-    return mutationBusy;
+    return mutationBusy || publicCatalogBusy;
+  }
+
+  async function loadPublicCatalogStatus() {
+    if (role !== "admin" || publicCatalogBusy) {
+      return;
+    }
+
+    publicCatalogBusy = true;
+    setPublicCatalogButtonsBusy(true);
+    replaceContent(publicCatalogStatus, createElement("p", {
+      documentRef,
+      text: "Загрузка статуса публичного каталога..."
+    }));
+
+    try {
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_STATUS_PATH, {
+        method: "GET",
+        timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonGet
+      });
+      const status = parsePublicCatalogStatus(response?.data);
+
+      renderPublicCatalogStatus(status);
+      statusRegion.textContent = "Статус публичного каталога обновлён.";
+    } catch (error) {
+      renderError(publicCatalogStatus, documentRef, error);
+      statusRegion.textContent = "Не удалось загрузить публичный каталог.";
+    } finally {
+      publicCatalogBusy = false;
+      setPublicCatalogButtonsBusy(false);
+    }
+  }
+
+  async function submitPublicCatalogSettings() {
+    if (role !== "admin" || publicCatalogBusy) {
+      return;
+    }
+
+    publicCatalogBusy = true;
+    setPublicCatalogButtonsBusy(true);
+
+    try {
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_SETTINGS_PATH, {
+        body: {
+          showDemoInModal: publicCatalogToggle.checked === true
+        },
+        method: "PATCH",
+        timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonMutation
+      });
+      const payload = parsePublicCatalogSettingsResult(response?.data);
+
+      renderPublicCatalogStatus(payload.status, payload.sync);
+      statusRegion.textContent = publicCatalogSyncMessage(payload.sync);
+    } catch (error) {
+      renderError(publicCatalogStatus, documentRef, error);
+      statusRegion.textContent = "Не удалось сохранить настройку публичного каталога.";
+    } finally {
+      publicCatalogBusy = false;
+      setPublicCatalogButtonsBusy(false);
+    }
+  }
+
+  async function runPublicCatalogSync() {
+    if (role !== "admin" || publicCatalogBusy) {
+      return;
+    }
+
+    publicCatalogBusy = true;
+    setPublicCatalogButtonsBusy(true);
+
+    try {
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_SYNC_PATH, {
+        method: "POST",
+        timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonMutation
+      });
+      const sync = parsePublicCatalogSyncResult(response?.data);
+
+      renderPublicCatalogSync(sync);
+      statusRegion.textContent = publicCatalogSyncMessage(sync);
+    } catch (error) {
+      renderError(publicCatalogStatus, documentRef, error);
+      statusRegion.textContent = "Не удалось синхронизировать публичный каталог.";
+    } finally {
+      publicCatalogBusy = false;
+      setPublicCatalogButtonsBusy(false);
+    }
   }
 
   async function runDryRun() {
@@ -407,6 +590,70 @@ export function createMaintenanceScreen(options) {
     }
   }
 
+  function setPublicCatalogButtonsBusy(busy) {
+    setBusy(publicCatalogCheckButton, busy);
+    setBusy(publicCatalogSaveButton, busy);
+    setBusy(publicCatalogSyncButton, busy);
+  }
+
+  function renderPublicCatalogStatus(status, sync) {
+    publicCatalogToggle.checked = status.showDemoInModal === true;
+    replaceContent(publicCatalogStatus, createElement("div", {
+      documentRef,
+      className: "admin-maintenance-summary",
+      children: [
+        createElement("p", {
+          documentRef,
+          text: `DB mutation result: ${status.syncStatus}`
+        }),
+        createElement("p", {
+          documentRef,
+          text: `Revision: desired ${status.desiredRevision}, published ${status.publishedRevision}`
+        }),
+        createElement("p", {
+          documentRef,
+          text: `Snapshot: ${status.currentSnapshotPath ?? "ещё не опубликован"}`
+        }),
+        ...(sync === undefined ? [] : [publicCatalogSyncElement(sync)])
+      ]
+    }));
+  }
+
+  function renderPublicCatalogSync(sync) {
+    replaceContent(publicCatalogStatus, publicCatalogSyncElement(sync));
+  }
+
+  function publicCatalogSyncElement(sync) {
+    return createElement("section", {
+      documentRef,
+      className: "admin-maintenance-summary",
+      children: [
+        createElement("p", {
+          documentRef,
+          text: `Public snapshot sync result: ${sync.status}`
+        }),
+        createElement("p", {
+          documentRef,
+          text: sync.status === "ready"
+            ? `Published revision ${sync.publishedRevision}, items ${sync.itemsCount}`
+            : sync.status === "failed"
+              ? `Failed requestId ${sync.requestId}, code ${sync.errorCode}`
+              : `Pending revision ${sync.desiredRevision}`
+        })
+      ]
+    });
+  }
+
+  function publicCatalogSyncMessage(sync) {
+    if (sync.status === "ready") {
+      return "Публичный каталог: READY.";
+    }
+    if (sync.status === "failed") {
+      return `Публичный каталог: FAILED. requestId ${sync.requestId}`;
+    }
+    return "Публичный каталог: PENDING.";
+  }
+
   return {
     destroy,
     element,
@@ -463,6 +710,129 @@ function parseMaintenanceReport(report, options = {}) {
     targets,
     totals
   };
+}
+
+function parsePublicCatalogStatus(value) {
+  if (!isRecord(value)) {
+    throw invalidResponseError();
+  }
+
+  const syncStatus = value.syncStatus;
+  if (
+    syncStatus !== "pending" &&
+    syncStatus !== "syncing" &&
+    syncStatus !== "ready" &&
+    syncStatus !== "failed"
+  ) {
+    throw invalidResponseError();
+  }
+
+  const desiredRevision = readNonNegativeInteger(value.desiredRevision);
+  const publishedRevision = readNonNegativeInteger(value.publishedRevision);
+  if (desiredRevision === null || publishedRevision === null) {
+    throw invalidResponseError();
+  }
+
+  const currentItemsCount =
+    value.currentItemsCount === null ? null : readNonNegativeInteger(value.currentItemsCount);
+  if (currentItemsCount === null && value.currentItemsCount !== null) {
+    throw invalidResponseError();
+  }
+
+  return {
+    currentItemsCount,
+    currentSnapshotChecksum:
+      typeof value.currentSnapshotChecksum === "string" ? value.currentSnapshotChecksum : null,
+    currentSnapshotPath:
+      typeof value.currentSnapshotPath === "string" ? value.currentSnapshotPath : null,
+    desiredRevision,
+    lastSyncErrorCode:
+      typeof value.lastSyncErrorCode === "string" ? value.lastSyncErrorCode : null,
+    lastSyncRequestId:
+      typeof value.lastSyncRequestId === "string" ? value.lastSyncRequestId : null,
+    publishedRevision,
+    showDemoInModal: value.showDemoInModal === true,
+    syncStatus
+  };
+}
+
+function parsePublicCatalogSettingsResult(value) {
+  if (!isRecord(value)) {
+    throw invalidResponseError();
+  }
+
+  return {
+    status: parsePublicCatalogStatus(value.status),
+    sync: parsePublicCatalogSyncResult(value.sync)
+  };
+}
+
+function parsePublicCatalogSyncResult(value) {
+  if (!isRecord(value)) {
+    throw invalidResponseError();
+  }
+
+  if (value.status === "ready") {
+    const publishedRevision = readNonNegativeInteger(value.publishedRevision);
+    const itemsCount = readNonNegativeInteger(value.itemsCount);
+    if (
+      publishedRevision === null ||
+      itemsCount === null ||
+      typeof value.checksum !== "string" ||
+      typeof value.requestId !== "string" ||
+      typeof value.snapshotPath !== "string"
+    ) {
+      throw invalidResponseError();
+    }
+
+    return {
+      checksum: value.checksum,
+      itemsCount,
+      publishedRevision,
+      requestId: value.requestId,
+      snapshotPath: value.snapshotPath,
+      status: "ready"
+    };
+  }
+
+  if (value.status === "failed") {
+    const publishedRevision = readNonNegativeInteger(value.publishedRevision);
+    if (
+      publishedRevision === null ||
+      typeof value.errorCode !== "string" ||
+      typeof value.requestId !== "string"
+    ) {
+      throw invalidResponseError();
+    }
+
+    return {
+      errorCode: value.errorCode,
+      publishedRevision,
+      requestId: value.requestId,
+      status: "failed"
+    };
+  }
+
+  if (value.status === "pending") {
+    const desiredRevision = readNonNegativeInteger(value.desiredRevision);
+    const publishedRevision = readNonNegativeInteger(value.publishedRevision);
+    if (
+      desiredRevision === null ||
+      publishedRevision === null ||
+      typeof value.requestId !== "string"
+    ) {
+      throw invalidResponseError();
+    }
+
+    return {
+      desiredRevision,
+      publishedRevision,
+      requestId: value.requestId,
+      status: "pending"
+    };
+  }
+
+  throw invalidResponseError();
 }
 
 function applyStatusMessage(report) {

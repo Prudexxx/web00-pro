@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import { AppError } from "../../../lib/errors.js";
 import type { AdminMutationContext } from "../admin.types.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import {
   categoryInactive,
   categoryNotFound,
@@ -265,6 +266,11 @@ export function createPrismaAdminSiteRepository(
           context,
           entityId: id
         });
+        await markPublicCatalogDirty(tx, "site.permanentDelete", {
+          actorUserId: context.actor.id,
+          reasonContext: { siteId: id },
+          requestId: context.requestId
+        });
       });
     },
     async publishSite(id, context) {
@@ -388,6 +394,14 @@ export function createPrismaAdminSiteRepository(
             entityId: id
           });
 
+          if (hasPublicProjection(before as AdminSiteRecord) || hasPublicProjection(after as AdminSiteRecord)) {
+            await markPublicCatalogDirty(tx, "site.update", {
+              actorUserId: context.actor.id,
+              reasonContext: { siteId: id, slug: after.slug },
+              requestId: context.requestId
+            });
+          }
+
           return after as AdminSiteRecord;
         });
       } catch (error) {
@@ -448,6 +462,14 @@ async function lifecycleUpdate(
       context,
       entityId: id
     });
+
+    if (hasPublicProjection(before) || hasPublicProjection(after)) {
+      await markPublicCatalogDirty(tx, options.action, {
+        actorUserId: context.actor.id,
+        reasonContext: { siteId: id, slug: after.slug },
+        requestId: context.requestId
+      });
+    }
 
     return after;
   });
@@ -739,4 +761,8 @@ function changedSiteFields(from: AdminSiteRecord, to: AdminSiteRecord): Prisma.I
   }
 
   return changed as Prisma.InputJsonValue;
+}
+
+function hasPublicProjection(site: Pick<AdminSiteRecord, "active" | "deletedAt" | "status">): boolean {
+  return site.status === "published" && site.active && site.deletedAt === null;
 }

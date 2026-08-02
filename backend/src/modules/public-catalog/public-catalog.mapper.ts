@@ -109,6 +109,13 @@ export function mapSiteDetail(
   };
 }
 
+export function mapSiteToPublicCatalogItem(
+  record: PublicSiteRecord,
+  imageUrlPolicy?: ManagedImageUrlPolicy
+): PublicSiteDetail {
+  return mapSiteDetail(record, imageUrlPolicy);
+}
+
 function mapGalleryImages(
   images: PublicGalleryImage[],
   siteTitle: string,

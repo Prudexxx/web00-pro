@@ -37,6 +37,8 @@ import { createPrismaAdminAuditLogRepository } from "./modules/admin/audit/audit
 import { createAdminAuditLogService } from "./modules/admin/audit/audit-log.service.js";
 import { createPrismaAdminCategoryRepository } from "./modules/admin/categories/category.repository.js";
 import { createAdminCategoryService } from "./modules/admin/categories/category.service.js";
+import { createPrismaAdminPublicCatalogRepository } from "./modules/admin/public-catalog/public-catalog-admin.repository.js";
+import { createAdminPublicCatalogService } from "./modules/admin/public-catalog/public-catalog-admin.service.js";
 import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repository.js";
 import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
 import {
@@ -60,6 +62,9 @@ import { createPrismaStorageCleanupRepository } from "./modules/storage-cleanup/
 import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cleanup.worker.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
+import { createPrismaPublicCatalogSyncRepository } from "./modules/public-catalog/public-catalog-control.repository.js";
+import { createPublicCatalogSnapshotStorage } from "./modules/public-catalog/public-catalog-snapshot-storage.js";
+import { createPublicCatalogSyncService } from "./modules/public-catalog/public-catalog-sync.service.js";
 import {
   createPrismaReadinessProbe,
   createReadinessService
@@ -109,6 +114,9 @@ export function startServer(options: StartServerOptions): StartedServer {
     publicBaseUrl: options.storageConfig.publicBaseUrl
   });
   const imageStorage = createSupabaseImageStorage(options.storageConfig);
+  const publicCatalogSnapshotStorage = createPublicCatalogSnapshotStorage(
+    options.storageConfig
+  );
   const storageCleanupRepository = createPrismaStorageCleanupRepository({ prisma });
   const storageCleanupWorker = createStorageCleanupWorker({
     clock: { now: options.now ?? (() => new Date()) },
@@ -119,6 +127,12 @@ export function startServer(options: StartServerOptions): StartedServer {
   const publicCatalogService = createPublicCatalogService({
     imageUrlPolicy,
     repository
+  });
+  const publicCatalogSyncService = createPublicCatalogSyncService({
+    cleanup: storageCleanupRepository,
+    now: options.now ?? (() => new Date()),
+    repository: createPrismaPublicCatalogSyncRepository({ prisma }),
+    storage: publicCatalogSnapshotStorage
   });
   const authRepository = createAuthRepository({ prisma });
   const authService = createAuthService({
@@ -194,6 +208,10 @@ export function startServer(options: StartServerOptions): StartedServer {
     maintenanceService: createAdminMaintenanceService({
       readCatalog: readCanonicalAssetSourceCatalog,
       repository: createPrismaCanonicalAssetReconciliationRepository({ prisma })
+    }),
+    publicCatalogService: createAdminPublicCatalogService({
+      repository: createPrismaAdminPublicCatalogRepository({ prisma }),
+      syncService: publicCatalogSyncService
     }),
     userService: createAdminUserService({
       repository: createPrismaAdminUserRepository({ prisma })

@@ -32,6 +32,7 @@ const authorizedQamaxNonBackendPaths = new Set([
   "contacts.html",
   "docs/WEB00_BACKEND_READINESS_AUDIT.md",
   "docs/WEB00_FRONTEND_TO_BACKEND_HANDOFF.md",
+  "docs/WEB00_PUBLIC_CATALOG_ALWAYS_AVAILABLE_IMPLEMENTATION_PLAN.md",
   "faq.html",
   "how-it-works.html",
   "index.html",

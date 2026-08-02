@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import type { AdminMutationContext } from "../admin.types.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import {
   categoryNotFound,
   isUniqueConflict,
@@ -177,6 +178,12 @@ export function createPrismaAdminCategoryRepository(
             beforeJson: changedCategoryFields(after, before),
             context,
             entityId: id
+          });
+
+          await markPublicCatalogDirty(tx, "category.update", {
+            actorUserId: context.actor.id,
+            reasonContext: { categoryId: id, slug: after.slug },
+            requestId: context.requestId
           });
 
           return after;
