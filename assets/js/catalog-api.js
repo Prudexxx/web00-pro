@@ -465,6 +465,21 @@
 
   async function resolveCatalogForPage(options = {}) {
     const kind = options.kind || "solutions";
+    const snapshotClient = window.WEB00_PUBLIC_CATALOG_SNAPSHOT;
+    if (
+      snapshotClient &&
+      typeof snapshotClient.readConfig === "function" &&
+      typeof snapshotClient.resolveCatalogState === "function" &&
+      snapshotClient.readConfig().enabled
+    ) {
+      return snapshotClient.resolveCatalogState({
+        kind,
+        limit: options.limit || 3,
+        onUpgrade: options.onUpgrade,
+        staticCatalog: getStaticCatalog(),
+      });
+    }
+
     const config = getConfig();
     if (!config.apiEnabled) {
       return withStateFlags(getStaticCatalog(), {
