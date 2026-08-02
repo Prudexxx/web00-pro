@@ -13,6 +13,7 @@
   let catalogState = null;
   let popularCatalogState = null;
   let catalogRetryUsed = false;
+  const TRUSTED_DEMO_ORIGINS = new Set(["https://prudexxx.github.io"]);
   const TITLE_ALIASES = new Map([
     ["Каталог мебели", "Мебельный магазин"],
     ["Сайт для клининга", "Услуга клининга"],
@@ -754,6 +755,37 @@
     return catalogState && Array.isArray(catalogState.items) ? catalogState.items : solutions();
   }
 
+  function catalogHasData(state) {
+    return Boolean(state && Array.isArray(state.items) && state.items.length > 0);
+  }
+
+  function catalogRevision(state) {
+    const revision = Number(state && state.revision);
+    return Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+  }
+
+  function shouldApplyCatalogState(current, next) {
+    if (!next || !Array.isArray(next.items)) return false;
+    if (catalogRevision(next) < catalogRevision(current)) return false;
+    if (catalogHasData(current) && !catalogHasData(next)) return false;
+    return true;
+  }
+
+  function applyCatalogState(next, options = {}) {
+    if (!shouldApplyCatalogState(catalogState, next)) return;
+    catalogState = next;
+    if (options.render !== false && catalogHasData(catalogState)) renderSolutions();
+    updateCatalogStateNodes(catalogState);
+  }
+
+  function applyPopularCatalogState(next) {
+    if (!next || !Array.isArray(next.items)) return;
+    if (catalogRevision(next) < catalogRevision(popularCatalogState)) return;
+    if (catalogHasData(popularCatalogState) && !catalogHasData(next)) return;
+    popularCatalogState = next;
+    renderPopularSolutions();
+  }
+
   function solutionIdentifier(solution) {
     return solution?.key || solution?.id || solution?.slug || "";
   }
@@ -818,6 +850,41 @@
 
   function solutionOriginalDemoUrl(solution) {
     return solution.siteUrl || solution.originalDemoUrl || solution.externalDemoUrl || solution.demoUrl || "";
+  }
+
+  function catalogSettings() {
+    return (
+      catalogState?.settings ||
+      popularCatalogState?.settings ||
+      { showDemoInModal: false }
+    );
+  }
+
+  function isTrustedDemoUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    try {
+      const url = new URL(raw, window.location.href);
+      return url.protocol === "https:" && TRUSTED_DEMO_ORIGINS.has(url.origin) && !url.username && !url.password;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function shouldEmbedExternalDemo(solution, demoUrl) {
+    return (
+      solution?.demoMode === "external-iframe" &&
+      catalogSettings().showDemoInModal === true &&
+      isTrustedDemoUrl(demoUrl)
+    );
+  }
+
+  function openExternalDemo(url) {
+    if (typeof window.open === "function") {
+      window.open(url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    window.location.href = url;
   }
 
   function solutionGallery(solution) {
@@ -900,9 +967,9 @@
   function updateCatalogStateNodes(state, options = {}) {
     const loading = options.loading === true;
     setCatalogStateNode("[data-catalog-loading]", loading);
-    setCatalogStateNode("[data-catalog-fallback]", !loading && Boolean(state?.staticFallbackActive));
+    setCatalogStateNode("[data-catalog-fallback]", !loading && Boolean(state?.staticFallbackActive || state?.lifecycle === "degraded"));
     setCatalogStateNode("[data-catalog-empty]", !loading && state?.lifecycle === "empty");
-    setCatalogStateNode("[data-catalog-fatal]", !loading && state?.lifecycle === "fatal");
+    setCatalogStateNode("[data-catalog-fatal]", !loading && state?.lifecycle === "fatal" && !catalogHasData(state));
     $$("[data-catalog-retry]").forEach((button) => {
       button.disabled = loading || catalogRetryUsed;
     });
@@ -915,13 +982,12 @@
       return catalogState;
     }
     catalogState = CATALOG.getStaticCatalog();
-    updateCatalogStateNodes(null, { loading: true });
-    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
-      if (nextCatalogState) {
-        catalogState = nextCatalogState;
-        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
-      }
-      updateCatalogStateNodes(catalogState);
+    updateCatalogStateNodes(catalogState);
+    CATALOG.resolveCatalogForPage({
+      kind: "solutions",
+      onUpgrade: (nextCatalogState) => applyCatalogState(nextCatalogState)
+    }).then((nextCatalogState) => {
+      applyCatalogState(nextCatalogState);
     }).catch(() => {
       updateCatalogStateNodes(catalogState);
     });
@@ -933,9 +999,12 @@
       popularCatalogState = null;
       return popularCatalogState;
     }
-    CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3 }).then((nextPopularCatalogState) => {
-      if (nextPopularCatalogState) popularCatalogState = nextPopularCatalogState;
-      renderPopularSolutions();
+    CATALOG.resolveCatalogForPage({
+      kind: "popular",
+      limit: 3,
+      onUpgrade: applyPopularCatalogState
+    }).then((nextPopularCatalogState) => {
+      applyPopularCatalogState(nextPopularCatalogState);
     }).catch(() => undefined);
     return popularCatalogState;
   }
@@ -943,8 +1012,11 @@
   async function initBriefCatalogState() {
     if (!CATALOG || page !== "brief") return catalogState;
     catalogState = CATALOG.getStaticCatalog();
-    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
-      if (nextCatalogState) catalogState = nextCatalogState;
+    CATALOG.resolveCatalogForPage({
+      kind: "solutions",
+      onUpgrade: (nextCatalogState) => applyCatalogState(nextCatalogState, { render: false })
+    }).then((nextCatalogState) => {
+      applyCatalogState(nextCatalogState, { render: false });
     }).catch(() => undefined);
     return catalogState;
   }
@@ -955,11 +1027,11 @@
     if (button) button.disabled = true;
     updateCatalogStateNodes(catalogState, { loading: true });
     try {
-      const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions" });
-      if (nextCatalogState) {
-        catalogState = nextCatalogState;
-        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
-      }
+      const nextCatalogState = await CATALOG.resolveCatalogForPage({
+        kind: "solutions",
+        onUpgrade: (upgradeState) => applyCatalogState(upgradeState)
+      });
+      applyCatalogState(nextCatalogState);
     } catch (_) {
       // Keep the currently visible saved catalog if the retry cannot complete.
     } finally {
@@ -980,7 +1052,7 @@
   function setDemoDialogMode(solution) {
     const dialog = $("[data-modal=\"demo\"] .modal__dialog");
     if (!dialog) return;
-    dialog.classList.toggle("modal__dialog--demo-2", solution?.demoMode === "external-iframe");
+    dialog.classList.toggle("modal__dialog--demo-2", solution?.embedExternalDemo === true);
   }
 
   function fitDemoDesktopCanvas(target) {
@@ -1165,7 +1237,7 @@
   function renderPopularSolutions() {
     const grid = $("#popular-templates .mock-card-grid");
     if (!grid || !popularCatalogState) return;
-    if (popularCatalogState.source === "api" && popularCatalogState.lifecycle === "empty") {
+    if (popularCatalogState.lifecycle === "empty") {
       grid.innerHTML = `
         <article class="mock-template-card mock-template-card--empty">
           <div class="mock-card-body">
@@ -1177,7 +1249,7 @@
       `;
       return;
     }
-    if (!(popularCatalogState.source === "api" && popularCatalogState.lifecycle === "ready")) return;
+    if (popularCatalogState.lifecycle !== "ready" && popularCatalogState.lifecycle !== "degraded") return;
 
     grid.innerHTML = popularCatalogState.items.slice(0, 3).map((solution, index) => {
       const identifier = solutionIdentifier(solution);
@@ -1446,8 +1518,13 @@
       return;
     }
     activeSolution = solution;
-    const isExternalFrame = solution?.demoMode === "external-iframe";
-    setDemoDialogMode(solution);
+    const isExternalDemo = solution?.demoMode === "external-iframe";
+    const embedExternalDemo = shouldEmbedExternalDemo(solution, demoUrl);
+    if (isExternalDemo && !embedExternalDemo) {
+      openExternalDemo(demoUrl);
+      return;
+    }
+    setDemoDialogMode({ ...solution, embedExternalDemo });
     const target = $("[data-demo-modal-content]");
     if (!target) return;
     const features = solutionFeatures(solution);
@@ -1456,11 +1533,11 @@
     const originalDemoUrl = solutionOriginalDemoUrl(solution);
     const identifier = solutionIdentifier(solution);
     target.innerHTML = `
-      <div class="demo-modal ${isExternalFrame ? "demo-modal--external" : ""}">
+      <div class="demo-modal ${embedExternalDemo ? "demo-modal--external" : ""}">
         <div class="demo-modal__head">
-          <div><h2 id="demo-title">${esc(isExternalFrame ? solution.title : `Демо: ${solution.title}`)}</h2><p>${isExternalFrame ? "Полный просмотр открывается отдельно." : "Локальная демо-страница открывается внутри WEB00 Pro."}</p></div>
-          ${isExternalFrame ? "" : `<div class="segmented"><button class="is-active" type="button" data-demo-device="desktop">Desktop</button><button type="button" data-demo-device="mobile">Mobile</button></div>`}
-          ${externalLink(originalDemoUrl, isExternalFrame ? "Открыть отдельно" : "Открыть оригинал")}
+          <div><h2 id="demo-title">${esc(embedExternalDemo ? solution.title : `Демо: ${solution.title}`)}</h2><p>${embedExternalDemo ? "Полный просмотр открыт в защищённом окне WEB00 Pro." : "Локальная демо-страница открывается внутри WEB00 Pro."}</p></div>
+          ${embedExternalDemo ? "" : `<div class="segmented"><button class="is-active" type="button" data-demo-device="desktop">Desktop</button><button type="button" data-demo-device="mobile">Mobile</button></div>`}
+          ${externalLink(originalDemoUrl, embedExternalDemo ? "Открыть отдельно" : "Открыть оригинал")}
           <a class="btn btn--primary btn--small" href="${attr(briefUrl({ solution: identifier }))}">Хочу такой сайт</a>
         </div>
         <div class="demo-layout">
@@ -1471,10 +1548,11 @@
             <div class="mini-meta"><span>${esc(price)}</span><span>${esc(time)}</span></div>
           </aside>
           <div class="demo-frame ${demoUrl ? "demo-frame--live" : ""}" data-demo-frame>
-            ${isExternalFrame ? `
+            ${embedExternalDemo ? `
+              <iframe data-demo-iframe src="${attr(demoUrl)}" title="Демо: ${attr(solution.title)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>
               <div class="demo-frame__external-fallback" data-demo-external-fallback>
                 <span>▤</span>
-                <h3>Полный просмотр открывается отдельно</h3>
+                <h3>Если iframe заблокирован</h3>
                 <p>Откройте сайт в отдельном окне для полного просмотра.</p>
                 ${externalLink(originalDemoUrl, "Открыть отдельно", "btn btn--primary btn--small")}
               </div>
@@ -1518,7 +1596,7 @@
         externalFallback.hidden = false;
       });
     }
-    if (isExternalFrame) fitDemoDesktopCanvas(target);
+    if (embedExternalDemo) fitDemoDesktopCanvas(target);
     setModal("demo", true);
   }
 
