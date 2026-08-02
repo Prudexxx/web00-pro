@@ -164,6 +164,77 @@ describe("public catalog sync service", () => {
     expect(repository.failLease).not.toHaveBeenCalled();
   });
 
+  it("runs one bounded second pass when dirty state remains pending after finalize", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.acquireLease)
+      .mockResolvedValueOnce({
+        leaseId: "lease_first",
+        revision: 1,
+        state: control({
+          desiredRevision: 2,
+          publishedRevision: 0,
+          syncLeaseExpiresAt: new Date("2026-08-01T16:01:00.000Z"),
+          syncLeaseId: "lease_first",
+          syncStatus: "syncing"
+        })
+      })
+      .mockResolvedValueOnce({
+        leaseId: "lease_second",
+        revision: 2,
+        state: control({
+          desiredRevision: 2,
+          publishedRevision: 1,
+          syncLeaseExpiresAt: new Date("2026-08-01T16:01:00.000Z"),
+          syncLeaseId: "lease_second",
+          syncStatus: "syncing"
+        })
+      });
+    vi.mocked(repository.finalizeLease)
+      .mockResolvedValueOnce(
+        control({
+          desiredRevision: 2,
+          publishedRevision: 1,
+          syncStatus: "pending"
+        })
+      )
+      .mockResolvedValueOnce(
+        control({
+          currentItemsCount: 1,
+          currentSnapshotPath: "public-catalog/v1/snapshots/revision-2.json",
+          desiredRevision: 2,
+          publishedRevision: 2,
+          syncStatus: "ready"
+        })
+      );
+    const storage = createStorage();
+    const leaseIds = ["lease_first", "lease_second"];
+    const service = createPublicCatalogSyncService({
+      createLeaseId: () => leaseIds.shift() ?? "unexpected_lease",
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_dirty_during_sync" });
+
+    expect(result).toMatchObject({
+      publishedRevision: 2,
+      status: "ready"
+    });
+    expect(repository.acquireLease).toHaveBeenCalledTimes(2);
+    expect(storage.operations).toEqual([
+      "upload:public-catalog/v1/snapshots/revision-1.json:false",
+      "fetch:public-catalog/v1/snapshots/revision-1.json:false",
+      "upload:public-catalog/v1/manifest.json:true",
+      "fetch:public-catalog/v1/manifest.json:true",
+      "upload:public-catalog/v1/snapshots/revision-2.json:false",
+      "fetch:public-catalog/v1/snapshots/revision-2.json:false",
+      "upload:public-catalog/v1/manifest.json:true",
+      "fetch:public-catalog/v1/manifest.json:true"
+    ]);
+    expect(repository.failLease).not.toHaveBeenCalled();
+  });
+
   it("does not finalize DB state when manifest upload fails", async () => {
     const repository = createRepository();
     const storage = createStorage();

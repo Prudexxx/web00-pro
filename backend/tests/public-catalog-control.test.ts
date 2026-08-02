@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PUBLIC_CATALOG_CONTROL_ID,
   acquirePublicCatalogLeaseState,
   assertPublicCatalogRevision,
+  createPrismaPublicCatalogSyncRepository,
   finalizePublicCatalogLeaseState,
   markPublicCatalogDirtyState,
   recoverStalePublicCatalogLeaseState,
@@ -134,6 +135,46 @@ describe("public catalog control state", () => {
       desiredRevision: 2,
       publishedRevision: 1,
       syncStatus: "pending"
+    });
+  });
+
+  it("does not acquire a lease when another sync wins the control-row update", async () => {
+    const upserted = control({
+      desiredRevision: 2,
+      publishedRevision: 1,
+      syncStatus: "pending"
+    });
+    const prisma = {
+      publicCatalogControl: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        upsert: vi.fn().mockResolvedValue(upserted)
+      }
+    };
+    const repository = createPrismaPublicCatalogSyncRepository({
+      prisma: prisma as never
+    });
+
+    await expect(
+      repository.acquireLease({
+        leaseId: "lease_lost",
+        now,
+        ttlMs: 30_000
+      })
+    ).resolves.toBeNull();
+    expect(prisma.publicCatalogControl.updateMany).toHaveBeenCalledWith({
+      data: {
+        syncLeaseExpiresAt: new Date("2026-08-01T00:00:30.000Z"),
+        syncLeaseId: "lease_lost",
+        syncStatus: "syncing"
+      },
+      where: {
+        desiredRevision: 2,
+        id: PUBLIC_CATALOG_CONTROL_ID,
+        publishedRevision: 1,
+        syncLeaseExpiresAt: null,
+        syncLeaseId: null,
+        syncStatus: "pending"
+      }
     });
   });
 

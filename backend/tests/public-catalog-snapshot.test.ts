@@ -34,10 +34,26 @@ const siteRecord = {
 describe("public catalog snapshot", () => {
   it("uses the canonical public mapper for snapshot items", () => {
     expect(mapSiteToPublicCatalogItem(siteRecord)).toEqual({
-      ...mapSiteToPublicCatalogItem(siteRecord),
+      category: { slug: "goods", title: "Товары" },
+      deliveryLabel: "7 дней",
+      demoMode: "external",
+      demoUrl: "https://prudexxx.github.io/web00-pro/demo.html",
+      developmentDays: 7,
+      featured: true,
+      features: ["Fast"],
       fullDescription: "Full",
+      galleryImages: [],
+      previewImage: null,
+      previewImageUrl: "https://prudexxx.github.io/web00-pro/assets/img/previews/example.png",
+      previewType: "image",
+      priceAmountCents: 100000,
+      priceLabel: "от 10 000 ₽",
       publishedAt: "2026-07-24T00:00:00.000Z",
-      slug: "example"
+      shortDescription: "Short",
+      siteUrl: "https://example.com",
+      slug: "example",
+      tags: ["tag"],
+      title: "Example"
     });
   });
 
@@ -146,6 +162,25 @@ describe("public catalog snapshot", () => {
         settings: { showDemoInModal: false }
       })
     ).rejects.toThrow(/bytes/i);
+  });
+
+  it("accepts explicit item count boundaries through 1000 public catalog items", async () => {
+    const item = mapSiteToPublicCatalogItem(siteRecord);
+
+    for (const count of [0, 1, 15, 16, 1000]) {
+      const snapshot = await buildPublicCatalogSnapshot({
+        generatedAt: new Date("2026-08-01T00:00:00.000Z"),
+        items: Array.from({ length: count }, (_, index) => ({
+          ...item,
+          slug: `site-${index}`
+        })),
+        revision: 1,
+        settings: { showDemoInModal: false }
+      });
+
+      expect(snapshot.snapshot.itemsCount).toBe(count);
+      expect(validatePublicCatalogSnapshot(JSON.parse(snapshot.bytes)).itemsCount).toBe(count);
+    }
   });
 
   it("builds and validates a manifest bound to exact snapshot checksum/count", async () => {

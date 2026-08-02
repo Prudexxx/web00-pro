@@ -124,6 +124,56 @@ describe("admin maintenance canonical assets screen", () => {
     await waitFor(() => screen.element.textContent.includes("Сервер вернул некорректный ответ."));
   });
 
+  it("requires exact confirmation before running public catalog sync", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath === "/api/admin/public-catalog/sync") {
+          return Promise.resolve({
+            data: {
+              checksum: "a".repeat(64),
+              itemsCount: 16,
+              publishedRevision: 8,
+              requestId: "req_public_catalog_sync",
+              snapshotPath: "public-catalog/v1/snapshots/revision-8.json",
+              status: "ready"
+            }
+          });
+        }
+        return Promise.resolve({ data: publicCatalogStatus() });
+      })
+    };
+    const screen = createMaintenanceScreen({
+      apiClient,
+      documentRef,
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    click(screen.element, '[data-action="sync-public-catalog"]');
+
+    expect(screen.element.querySelector('[data-action="confirm-dialog"]').disabled).toBe(true);
+    expect(apiClient.requestJson).not.toHaveBeenCalled();
+    setValue(screen.element, "typedConfirmation", "WEB00-PUBLIC-CATALOG-SYNC-V1");
+    expect(screen.element.querySelector('[data-action="confirm-dialog"]').disabled).toBe(false);
+    click(screen.element, '[data-action="confirm-dialog"]');
+    await waitFor(() => screen.element.textContent.includes("Published revision 8, items 16"));
+
+    expect(requests).toEqual([
+      {
+        options: {
+          body: { confirmation: "WEB00-PUBLIC-CATALOG-SYNC-V1" },
+          method: "POST",
+          timeoutMs: 45000
+        },
+        requestPath: "/api/admin/public-catalog/sync"
+      }
+    ]);
+  });
+
   it("renders Russian preview state labels including legacy normalization", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {

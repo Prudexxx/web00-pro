@@ -1,7 +1,10 @@
 import type { RequestHandler, Response } from "express";
 import type { AuthRequest } from "../../auth/auth.types.js";
 import type { AdminMutationContext } from "../admin.types.js";
-import { parsePublicCatalogSettingsInput } from "./public-catalog-admin.schemas.js";
+import {
+  parsePublicCatalogSettingsInput,
+  parsePublicCatalogSyncInput
+} from "./public-catalog-admin.schemas.js";
 import type { AdminPublicCatalogService } from "./public-catalog-admin.service.js";
 
 export interface AdminPublicCatalogController {
@@ -27,6 +30,7 @@ export function createAdminPublicCatalogController(options: {
 
     sync: async (request, response, next) => {
       try {
+        parsePublicCatalogSyncInput(request.body);
         response.json({
           data: await options.service.sync(createContext(request as AuthRequest, response, now))
         });

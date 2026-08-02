@@ -325,14 +325,25 @@ export function createPrismaPublicCatalogSyncRepository(
 
       const acquired = acquirePublicCatalogLeaseState(state, input);
 
-      await prisma.publicCatalogControl.update({
+      const updated = await prisma.publicCatalogControl.updateMany({
         data: {
           syncLeaseExpiresAt: acquired.state.syncLeaseExpiresAt,
           syncLeaseId: acquired.state.syncLeaseId,
           syncStatus: acquired.state.syncStatus
         },
-        where: { id: PUBLIC_CATALOG_CONTROL_ID }
+        where: {
+          desiredRevision: state.desiredRevision,
+          id: PUBLIC_CATALOG_CONTROL_ID,
+          publishedRevision: state.publishedRevision,
+          syncLeaseExpiresAt: state.syncLeaseExpiresAt,
+          syncLeaseId: state.syncLeaseId,
+          syncStatus: state.syncStatus
+        }
       });
+
+      if (updated.count !== 1) {
+        return null;
+      }
 
       return {
         leaseId: input.leaseId,

@@ -1,5 +1,7 @@
 import { AppError, type ErrorDetail } from "../../../lib/errors.js";
 
+export const PUBLIC_CATALOG_SYNC_CONFIRMATION = "WEB00-PUBLIC-CATALOG-SYNC-V1";
+
 export function parsePublicCatalogSettingsInput(input: unknown): {
   showDemoInModal: boolean;
 } {
@@ -14,6 +16,21 @@ export function parsePublicCatalogSettingsInput(input: unknown): {
   }
 
   return { showDemoInModal: value };
+}
+
+export function parsePublicCatalogSyncInput(input: unknown): {
+  confirmation: typeof PUBLIC_CATALOG_SYNC_CONFIRMATION;
+} {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw validationError("body", "Must be an object.");
+  }
+
+  const value = (input as Record<string, unknown>).confirmation;
+  if (value !== PUBLIC_CATALOG_SYNC_CONFIRMATION) {
+    throw validationError("confirmation", "Must match the public catalog sync confirmation.");
+  }
+
+  return { confirmation: PUBLIC_CATALOG_SYNC_CONFIRMATION };
 }
 
 function validationError(path: string, message: string): AppError {

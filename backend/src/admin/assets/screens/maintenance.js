@@ -15,6 +15,7 @@ const PUBLIC_CATALOG_STATUS_PATH = "/api/admin/public-catalog/status";
 const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
 const PUBLIC_CATALOG_SYNC_PATH = "/api/admin/public-catalog/sync";
 const CANONICAL_ASSETS_CONFIRMATION = "WEB00-CANONICAL-ASSETS-15-7";
+const PUBLIC_CATALOG_SYNC_CONFIRMATION = "WEB00-PUBLIC-CATALOG-SYNC-V1";
 const EXPECTED_TARGET_SLUGS = Object.freeze(["mebel", "massage", "drova"]);
 const EXPECTED_PREVIEW_STATES = Object.freeze([
   "already-canonical",
@@ -135,7 +136,7 @@ export function createMaintenanceScreen(options) {
     },
     on: {
       click: () => {
-        void runPublicCatalogSync();
+        openPublicCatalogSyncDialog(publicCatalogSyncButton);
       }
     }
   });
@@ -313,6 +314,9 @@ export function createMaintenanceScreen(options) {
 
     try {
       const response = await apiClient.requestJson(PUBLIC_CATALOG_SYNC_PATH, {
+        body: {
+          confirmation: PUBLIC_CATALOG_SYNC_CONFIRMATION
+        },
         method: "POST",
         timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonMutation
       });
@@ -327,6 +331,25 @@ export function createMaintenanceScreen(options) {
       publicCatalogBusy = false;
       setPublicCatalogButtonsBusy(false);
     }
+  }
+
+  function openPublicCatalogSyncDialog(invoker) {
+    if (role !== "admin" || publicCatalogBusy) {
+      return;
+    }
+
+    currentDialog?.destroy();
+    currentDialog = createConfirmationDialog({
+      confirmationText: PUBLIC_CATALOG_SYNC_CONFIRMATION,
+      confirmLabel: "Синхронизировать",
+      description:
+        "Backend создаст новую публичную версию snapshot только после проверки immutable файла и manifest.",
+      documentRef,
+      onConfirm: runPublicCatalogSync,
+      title: "Синхронизировать публичный каталог"
+    });
+    replaceContent(dialogHost, currentDialog.element);
+    currentDialog.open(invoker);
   }
 
   async function runDryRun() {

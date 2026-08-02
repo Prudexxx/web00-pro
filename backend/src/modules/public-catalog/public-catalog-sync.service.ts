@@ -85,6 +85,7 @@ export interface PublicCatalogSyncServiceOptions {
 
 const defaultLeaseTtlMs = 60_000;
 const defaultStorageTimeoutMs = 15_000;
+const maxCoalescedSyncPasses = 2;
 
 export function createPublicCatalogSyncService(
   options: PublicCatalogSyncServiceOptions
@@ -96,124 +97,145 @@ export function createPublicCatalogSyncService(
 
   return {
     async syncOnce(input) {
-      const lease = await options.repository.acquireLease({
-        leaseId: createLeaseId(),
-        now: now(),
-        ttlMs: leaseTtlMs
-      });
+      let lastPending:
+        | { desiredRevision: number; publishedRevision: number }
+        | null = null;
 
-      if (lease === null) {
-        return {
-          desiredRevision: 0,
-          publishedRevision: 0,
-          requestId: input.requestId,
-          status: "pending"
-        };
-      }
-
-      try {
-        const settings = await options.repository.readSettings();
-        const records = await options.repository.listSnapshotSites();
-        const built = await buildPublicCatalogSnapshot({
-          generatedAt: now(),
-          items: records.map((record) => mapSiteToPublicCatalogItem(record)),
-          revision: lease.revision,
-          settings
-        });
-        const snapshotPath = buildPublicCatalogSnapshotPath(lease.revision);
-
-        await options.storage.uploadJson({
-          body: built.bytes,
-          path: snapshotPath,
-          requestId: input.requestId,
-          timeoutMs: storageTimeoutMs,
-          upsert: false
+      for (let pass = 0; pass < maxCoalescedSyncPasses; pass += 1) {
+        const lease = await options.repository.acquireLease({
+          leaseId: createLeaseId(),
+          now: now(),
+          ttlMs: leaseTtlMs
         });
 
-        const fetchedSnapshot = await options.storage.fetchText({
-          cacheBust: false,
-          path: snapshotPath,
-          requestId: input.requestId,
-          timeoutMs: storageTimeoutMs
-        });
-
-        assertFetchedSnapshot(fetchedSnapshot, built.bytes, built.sha256);
-
-        const manifest = buildPublicCatalogManifest({
-          generatedAt: now(),
-          itemsCount: built.snapshot.itemsCount,
-          revision: built.snapshot.revision,
-          sha256: built.sha256,
-          snapshotPath,
-          snapshotUrl: options.storage.getPublicUrl(snapshotPath)
-        });
-        const manifestBytes = `${JSON.stringify(manifest)}\n`;
-
-        await options.storage.uploadJson({
-          body: manifestBytes,
-          path: PUBLIC_CATALOG_MANIFEST_PATH,
-          requestId: input.requestId,
-          timeoutMs: storageTimeoutMs,
-          upsert: true
-        });
-
-        const fetchedManifest = await options.storage.fetchText({
-          cacheBust: true,
-          path: PUBLIC_CATALOG_MANIFEST_PATH,
-          requestId: input.requestId,
-          timeoutMs: storageTimeoutMs
-        });
-        const verifiedManifest = validatePublicCatalogManifest(JSON.parse(fetchedManifest));
-
-        if (
-          verifiedManifest.revision !== built.snapshot.revision ||
-          verifiedManifest.sha256 !== built.sha256 ||
-          verifiedManifest.itemsCount !== built.snapshot.itemsCount ||
-          verifiedManifest.snapshotPath !== snapshotPath
-        ) {
-          throw snapshotInvalid();
+        if (lease === null) {
+          return {
+            desiredRevision: lastPending?.desiredRevision ?? 0,
+            publishedRevision: lastPending?.publishedRevision ?? 0,
+            requestId: input.requestId,
+            status: "pending"
+          };
         }
 
-        await options.repository.finalizeLease({
-          checksum: built.sha256,
-          itemsCount: built.snapshot.itemsCount,
-          leaseId: lease.leaseId,
-          publishedRevision: lease.revision,
-          requestId: input.requestId,
-          snapshotPath
-        });
+        try {
+          const settings = await options.repository.readSettings();
+          const records = await options.repository.listSnapshotSites();
+          const built = await buildPublicCatalogSnapshot({
+            generatedAt: now(),
+            items: records.map((record) => mapSiteToPublicCatalogItem(record)),
+            revision: lease.revision,
+            settings
+          });
+          const snapshotPath = buildPublicCatalogSnapshotPath(lease.revision);
 
-        await enqueuePublicCatalogRetentionCleanup({
-          cleanup: options.cleanup,
-          now: now(),
-          previousPublishedRevision: lease.state.publishedRevision,
-          publishedRevision: lease.revision,
-          timeoutMs: storageTimeoutMs
-        });
+          await options.storage.uploadJson({
+            body: built.bytes,
+            path: snapshotPath,
+            requestId: input.requestId,
+            timeoutMs: storageTimeoutMs,
+            upsert: false
+          });
 
-        return {
-          checksum: built.sha256,
-          itemsCount: built.snapshot.itemsCount,
-          publishedRevision: lease.revision,
-          requestId: input.requestId,
-          snapshotPath,
-          status: "ready"
-        };
-      } catch (error) {
-        const errorCode = toPublicCatalogSyncErrorCode(error);
-        const failed = await options.repository.failLease({
-          errorCode,
-          leaseId: lease.leaseId,
-          requestId: input.requestId
-        });
+          const fetchedSnapshot = await options.storage.fetchText({
+            cacheBust: false,
+            path: snapshotPath,
+            requestId: input.requestId,
+            timeoutMs: storageTimeoutMs
+          });
 
-        return {
-          errorCode,
-          publishedRevision: failed.publishedRevision,
-          requestId: input.requestId,
-          status: "failed"
-        };
+          assertFetchedSnapshot(fetchedSnapshot, built.bytes, built.sha256);
+
+          const manifest = buildPublicCatalogManifest({
+            generatedAt: now(),
+            itemsCount: built.snapshot.itemsCount,
+            revision: built.snapshot.revision,
+            sha256: built.sha256,
+            snapshotPath,
+            snapshotUrl: options.storage.getPublicUrl(snapshotPath)
+          });
+          const manifestBytes = `${JSON.stringify(manifest)}\n`;
+
+          await options.storage.uploadJson({
+            body: manifestBytes,
+            path: PUBLIC_CATALOG_MANIFEST_PATH,
+            requestId: input.requestId,
+            timeoutMs: storageTimeoutMs,
+            upsert: true
+          });
+
+          const fetchedManifest = await options.storage.fetchText({
+            cacheBust: true,
+            path: PUBLIC_CATALOG_MANIFEST_PATH,
+            requestId: input.requestId,
+            timeoutMs: storageTimeoutMs
+          });
+          const verifiedManifest = validatePublicCatalogManifest(JSON.parse(fetchedManifest));
+
+          if (
+            verifiedManifest.revision !== built.snapshot.revision ||
+            verifiedManifest.sha256 !== built.sha256 ||
+            verifiedManifest.itemsCount !== built.snapshot.itemsCount ||
+            verifiedManifest.snapshotPath !== snapshotPath
+          ) {
+            throw snapshotInvalid();
+          }
+
+          const finalized = await options.repository.finalizeLease({
+            checksum: built.sha256,
+            itemsCount: built.snapshot.itemsCount,
+            leaseId: lease.leaseId,
+            publishedRevision: lease.revision,
+            requestId: input.requestId,
+            snapshotPath
+          });
+
+          await enqueuePublicCatalogRetentionCleanup({
+            cleanup: options.cleanup,
+            now: now(),
+            previousPublishedRevision: lease.state.publishedRevision,
+            publishedRevision: lease.revision,
+            timeoutMs: storageTimeoutMs
+          });
+
+          if (finalized.syncStatus === "pending") {
+            lastPending = {
+              desiredRevision: finalized.desiredRevision,
+              publishedRevision: finalized.publishedRevision
+            };
+            continue;
+          }
+
+          return {
+            checksum: built.sha256,
+            itemsCount: built.snapshot.itemsCount,
+            publishedRevision: lease.revision,
+            requestId: input.requestId,
+            snapshotPath,
+            status: "ready"
+          };
+        } catch (error) {
+          const errorCode = toPublicCatalogSyncErrorCode(error);
+          const failed = await options.repository.failLease({
+            errorCode,
+            leaseId: lease.leaseId,
+            requestId: input.requestId
+          });
+
+          return {
+            errorCode,
+            publishedRevision: failed.publishedRevision,
+            requestId: input.requestId,
+            status: "failed"
+          };
+        }
       }
+
+      return {
+        desiredRevision: lastPending?.desiredRevision ?? 0,
+        publishedRevision: lastPending?.publishedRevision ?? 0,
+        requestId: input.requestId,
+        status: "pending"
+      };
     }
   };
 }

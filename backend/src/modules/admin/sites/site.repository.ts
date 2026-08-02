@@ -50,6 +50,29 @@ const CREATE_FINGERPRINT_FIELDS = [
   "title"
 ] as const satisfies readonly (keyof CreateAdminSiteInput)[];
 
+const PUBLIC_CATALOG_SITE_PROJECTION_FIELDS = [
+  "categoryId",
+  "deliveryLabel",
+  "demoMode",
+  "demoUrl",
+  "developmentDays",
+  "featured",
+  "features",
+  "fullDescription",
+  "galleryImages",
+  "previewImageUrl",
+  "previewType",
+  "priceAmountCents",
+  "priceLabel",
+  "publishedAt",
+  "shortDescription",
+  "siteUrl",
+  "slug",
+  "sortOrder",
+  "tags",
+  "title"
+] as const satisfies readonly (keyof AdminSiteRecord)[];
+
 export interface AdminSiteRepository {
   createDraft(input: CreateAdminSiteInput, context: AdminMutationContext): Promise<AdminSiteRecord>;
   getSite(id: string): Promise<AdminSiteRecord | null>;
@@ -394,7 +417,12 @@ export function createPrismaAdminSiteRepository(
             entityId: id
           });
 
-          if (hasPublicProjection(before as AdminSiteRecord) || hasPublicProjection(after as AdminSiteRecord)) {
+          if (
+            hasPublicCatalogProjectionChange(
+              before as AdminSiteRecord,
+              after as AdminSiteRecord
+            )
+          ) {
             await markPublicCatalogDirty(tx, "site.update", {
               actorUserId: context.actor.id,
               reasonContext: { siteId: id, slug: after.slug },
@@ -765,4 +793,23 @@ function changedSiteFields(from: AdminSiteRecord, to: AdminSiteRecord): Prisma.I
 
 function hasPublicProjection(site: Pick<AdminSiteRecord, "active" | "deletedAt" | "status">): boolean {
   return site.status === "published" && site.active && site.deletedAt === null;
+}
+
+function hasPublicCatalogProjectionChange(
+  before: AdminSiteRecord,
+  after: AdminSiteRecord
+): boolean {
+  const wasPublic = hasPublicProjection(before);
+  const isPublic = hasPublicProjection(after);
+
+  if (!wasPublic && !isPublic) {
+    return false;
+  }
+  if (wasPublic !== isPublic) {
+    return true;
+  }
+
+  return PUBLIC_CATALOG_SITE_PROJECTION_FIELDS.some(
+    (field) => JSON.stringify(before[field]) !== JSON.stringify(after[field])
+  );
 }
