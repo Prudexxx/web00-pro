@@ -71,6 +71,17 @@ function providerError(status: number, message = "raw provider body service-role
   return { message, status };
 }
 
+function storageApiError(input: {
+  code?: string;
+  status: number;
+  statusCode: string;
+}) {
+  return {
+    ...input,
+    message: "Bucket not found"
+  };
+}
+
 describe("public catalog storage bucket manager", () => {
   it("inspects a compatible public catalog bucket and ensureReady skips creation", async () => {
     const { calls, client } = createStorageClient([
@@ -110,6 +121,163 @@ describe("public catalog storage bucket manager", () => {
       id: "web00-public-catalog",
       public: true
     });
+    expect(calls).toEqual([
+      "getBucket:web00-public-catalog",
+      "createBucket:web00-public-catalog:application/json:2097152:true",
+      "getBucket:web00-public-catalog"
+    ]);
+  });
+
+  it("treats Supabase NoSuchBucket with HTTP 400 and statusCode 404 as absent", async () => {
+    const inspect = createStorageClient([
+      {
+        data: null,
+        error: storageApiError({
+          code: "NoSuchBucket",
+          status: 400,
+          statusCode: "404"
+        })
+      }
+    ]);
+    const inspectManager = createPublicCatalogStorageBucketManager(config, {
+      client: inspect.client
+    });
+
+    await expect(
+      inspectManager.inspect({ requestId: "req_supabase_missing_inspect" })
+    ).resolves.toEqual({
+      compatible: false,
+      exists: false
+    });
+
+    const ensure = createStorageClient([
+      {
+        data: null,
+        error: storageApiError({
+          code: "NoSuchBucket",
+          status: 400,
+          statusCode: "404"
+        })
+      },
+      { data: {}, error: null },
+      { data: compatibleBucket, error: null }
+    ]);
+    const ensureManager = createPublicCatalogStorageBucketManager(config, {
+      client: ensure.client
+    });
+
+    await expect(
+      ensureManager.ensureReady({ requestId: "req_supabase_missing_ensure" })
+    ).resolves.toEqual({ status: "created" });
+    expect(ensure.calls).toEqual([
+      "getBucket:web00-public-catalog",
+      "createBucket:web00-public-catalog:application/json:2097152:true",
+      "getBucket:web00-public-catalog"
+    ]);
+  });
+
+  it("treats legacy Supabase statusCode 404 without code as absent", async () => {
+    const { calls, client } = createStorageClient([
+      {
+        data: null,
+        error: storageApiError({
+          status: 400,
+          statusCode: "404"
+        })
+      },
+      { data: {}, error: null },
+      { data: compatibleBucket, error: null }
+    ]);
+    const manager = createPublicCatalogStorageBucketManager(config, { client });
+
+    await expect(
+      manager.ensureReady({ requestId: "req_legacy_missing_bucket" })
+    ).resolves.toEqual({ status: "created" });
+    expect(calls).toEqual([
+      "getBucket:web00-public-catalog",
+      "createBucket:web00-public-catalog:application/json:2097152:true",
+      "getBucket:web00-public-catalog"
+    ]);
+  });
+
+  it("does not treat invalid request status 400 as an absent bucket", async () => {
+    const { calls, client } = createStorageClient([
+      {
+        data: null,
+        error: storageApiError({
+          code: "InvalidRequest",
+          status: 400,
+          statusCode: "400"
+        })
+      }
+    ]);
+    const manager = createPublicCatalogStorageBucketManager(config, { client });
+
+    await expect(
+      manager.ensureReady({ requestId: "req_invalid_request" })
+    ).rejects.toMatchObject({
+      code: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+      message: "Public catalog storage is unavailable.",
+      statusCode: 503
+    });
+    expect(calls).toEqual(["getBucket:web00-public-catalog"]);
+  });
+
+  it.each([
+    {
+      code: "AccessDenied",
+      requestId: "req_access_denied",
+      status: 403,
+      statusCode: "403"
+    },
+    {
+      code: "InvalidJWT",
+      requestId: "req_invalid_jwt",
+      status: 401,
+      statusCode: "401"
+    }
+  ])(
+    "does not create the bucket for unauthorized provider code $code",
+    async ({ code, requestId, status, statusCode }) => {
+      const { calls, client } = createStorageClient([
+        {
+          data: null,
+          error: storageApiError({
+            code,
+            status,
+            statusCode
+          })
+        }
+      ]);
+      const manager = createPublicCatalogStorageBucketManager(config, { client });
+
+      await expect(manager.ensureReady({ requestId })).rejects.toMatchObject({
+        code: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+        message: "Public catalog storage is unavailable.",
+        statusCode: 503
+      });
+      expect(calls).toEqual(["getBucket:web00-public-catalog"]);
+    }
+  );
+
+  it("treats transport 404 NoSuchBucket as absent", async () => {
+    const { calls, client } = createStorageClient([
+      {
+        data: null,
+        error: storageApiError({
+          code: "NoSuchBucket",
+          status: 404,
+          statusCode: "404"
+        })
+      },
+      { data: {}, error: null },
+      { data: compatibleBucket, error: null }
+    ]);
+    const manager = createPublicCatalogStorageBucketManager(config, { client });
+
+    await expect(
+      manager.ensureReady({ requestId: "req_transport_404_missing" })
+    ).resolves.toEqual({ status: "created" });
     expect(calls).toEqual([
       "getBucket:web00-public-catalog",
       "createBucket:web00-public-catalog:application/json:2097152:true",

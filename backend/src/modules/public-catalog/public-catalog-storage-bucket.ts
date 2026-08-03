@@ -98,9 +98,7 @@ export function createPublicCatalogStorageBucketManager(
       assertProviderResult(result);
 
       if (result.error !== null) {
-        const status = readProviderStatus(result.error);
-
-        if (status === 404) {
+        if (isMissingBucketError(result.error)) {
           return {
             compatible: false,
             exists: false
@@ -113,7 +111,7 @@ export function createPublicCatalogStorageBucketManager(
           operation: input.operation,
           requestId: input.requestId,
           startedAt,
-          upstreamStatus: safeUpstreamStatus(status)
+          upstreamStatus: safeUpstreamStatus(readProviderHttpStatus(result.error))
         });
         throw storageUnavailable();
       }
@@ -176,7 +174,7 @@ export function createPublicCatalogStorageBucketManager(
         return {
           startedAt,
           status: "failed",
-          upstreamStatus: safeUpstreamStatus(readProviderStatus(result.error))
+          upstreamStatus: safeUpstreamStatus(readProviderHttpStatus(result.error))
         };
       }
 
@@ -311,13 +309,61 @@ function readNumber(value: unknown): number | null {
   return null;
 }
 
-function readProviderStatus(error: unknown): number | null {
+function isMissingBucketError(error: unknown): boolean {
+  const code = readProviderCode(error);
+  const statusCode = readProviderStatusCode(error);
+  const httpStatus = readProviderHttpStatus(error);
+
+  if (code === "NoSuchBucket") {
+    return true;
+  }
+
+  if (code !== null) {
+    return false;
+  }
+
+  if (statusCode !== null) {
+    return statusCode === "404";
+  }
+
+  return httpStatus === 404;
+}
+
+function readProviderCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+
+  const value = (error as Record<string, unknown>).code;
+
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function readProviderStatusCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+
+  const value = (error as Record<string, unknown>).statusCode;
+
+  if (typeof value === "string" && /^[0-9]{3}$/.test(value)) {
+    return value;
+  }
+
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return String(value);
+  }
+
+  return null;
+}
+
+function readProviderHttpStatus(error: unknown): number | null {
   if (typeof error !== "object" || error === null) {
     return null;
   }
 
   const record = error as Record<string, unknown>;
-  const rawStatus = record.status ?? record.statusCode;
+  const rawStatus = record.status;
 
   if (typeof rawStatus === "number" && Number.isInteger(rawStatus)) {
     return rawStatus;
