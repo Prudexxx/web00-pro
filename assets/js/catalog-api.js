@@ -281,88 +281,7 @@
     };
   }
 
-  function normalizeSettings(input) {
-    return {
-      showDemoInModal: Boolean(input && input.showDemoInModal),
-    };
-  }
-
-  function publicCatalogItemFromNormalized(item) {
-    return {
-      category: {
-        slug: item.categorySlug || "services",
-        title: item.category || "",
-      },
-      deliveryLabel: item.deliveryLabel || "",
-      demoMode: item.demoMode || "",
-      demoUrl: item.demoUrl || null,
-      features: Array.isArray(item.features) ? item.features : [],
-      galleryImages: Array.isArray(item.galleryImages) ? item.galleryImages : [],
-      previewImage: item.previewImage || null,
-      previewImageUrl: item.previewImageUrl || null,
-      priceLabel: item.priceLabel || "",
-      shortDescription: item.shortDescription || "",
-      siteUrl: item.siteUrl || null,
-      slug: item.slug,
-      tags: Array.isArray(item.tags) ? item.tags : [],
-      title: item.title,
-    };
-  }
-
-  function catalogStateFromItems(items, source, metadata = {}) {
-    return {
-      apiAvailable: false,
-      errorCode: "",
-      items,
-      lifecycle: items.length ? "ready" : "empty",
-      popularItems: metadata.popularItems || [],
-      revision: metadata.revision || 0,
-      settings: metadata.settings || { showDemoInModal: false },
-      source,
-      sourceState: metadata.sourceState || "",
-      staticFallbackActive: false,
-    };
-  }
-
-  function normalizePublicSnapshotItems(items, source) {
-    if (!Array.isArray(items) || items.length === 0 || items.length > MAX_CATALOG_ITEMS) return null;
-    const seen = new Set();
-    const normalized = [];
-    for (const item of items) {
-      const safeItem = normalizeApiSite(item, { source });
-      if (!safeItem || seen.has(safeItem.slug)) return null;
-      seen.add(safeItem.slug);
-      normalized.push(safeItem);
-    }
-    return normalized;
-  }
-
-  function normalizePublicCatalogSnapshot(snapshot, source) {
-    if (!snapshot || typeof snapshot !== "object" || snapshot.schemaVersion !== 1) return null;
-    const revision = Number(snapshot.revision);
-    if (!Number.isSafeInteger(revision) || revision < 0) return null;
-    const itemsCount = Number(snapshot.itemsCount);
-    if (!Number.isInteger(itemsCount) || !Array.isArray(snapshot.items) || snapshot.items.length !== itemsCount) return null;
-    const items = normalizePublicSnapshotItems(snapshot.items, source);
-    if (!items) return null;
-    const popularItems = normalizePublicSnapshotItems(snapshot.popular || [], source) || [];
-    return catalogStateFromItems(items, source, {
-      popularItems,
-      revision,
-      settings: normalizeSettings(snapshot.settings),
-      sourceState: source === "bundled" ? "BUNDLED_READY" : "",
-    });
-  }
-
-  function readBundledCatalog() {
-    try {
-      return normalizePublicCatalogSnapshot(window.WEB00_PUBLIC_CATALOG_BUNDLED_SNAPSHOT, "bundled");
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function normalizeCachedCatalogItem(input, source = "lkg") {
+  function normalizeCachedCatalogItem(input) {
     if (!input || typeof input !== "object") return null;
     const category = input.category && typeof input.category === "object"
       ? input.category
@@ -382,15 +301,15 @@
       previewImageUrl: input.previewImageUrl,
       previewImage: input.previewImage,
       galleryImages: input.galleryImages,
-    }, { source });
+    }, { source: "lkg" });
   }
 
-  function normalizeCachedCatalogItems(items, source = "lkg") {
+  function normalizeCachedCatalogItems(items) {
     if (!Array.isArray(items) || items.length === 0 || items.length > MAX_CATALOG_ITEMS) return null;
     const seen = new Set();
     const normalized = [];
     for (const item of items) {
-      const safeItem = normalizeCachedCatalogItem(item, source);
+      const safeItem = normalizeCachedCatalogItem(item);
       if (!safeItem || seen.has(safeItem.slug)) return null;
       seen.add(safeItem.slug);
       normalized.push(safeItem);
@@ -431,38 +350,19 @@
       const savedAt = new Date(payload.savedAt);
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.savedAt) || Number.isNaN(savedAt.getTime()) || savedAt.toISOString() !== payload.savedAt) return null;
       const items = normalizeCachedCatalogItems(payload.items);
-      const revision = Number(payload.revision);
-      const popularItems = normalizeCachedCatalogItems(payload.popular || [], "lkg") || [];
-      return items ? catalogStateFromItems(items, "lkg", {
-        popularItems,
-        revision: Number.isSafeInteger(revision) && revision >= 0 ? revision : 0,
-        settings: normalizeSettings(payload.settings),
-        sourceState: "LKG_READY",
-      }) : null;
+      return items ? { source: "lkg", lifecycle: "ready", items, errorCode: "" } : null;
     } catch (_) {
       return null;
     }
   }
 
-  function saveLastKnownGoodCatalog(input) {
-    const sourceItems = Array.isArray(input) ? input : input && input.items;
-    const safeItems = normalizeCachedCatalogItems(sourceItems);
+  function saveLastKnownGoodCatalog(items) {
+    const safeItems = normalizeCachedCatalogItems(items);
     if (!safeItems) return false;
-    const revision = Number(input && !Array.isArray(input) ? input.revision : 0);
-    const safeRevision = Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
-    const existing = readLastKnownGoodCatalog();
-    if (existing && Number(existing.revision || 0) > safeRevision) return false;
-    const popularItems = normalizeCachedCatalogItems(
-      input && !Array.isArray(input) && Array.isArray(input.popularItems) ? input.popularItems : [],
-      "lkg"
-    ) || [];
     const payload = {
       schemaVersion: LKG_SCHEMA_VERSION,
       savedAt: new Date().toISOString(),
-      revision: safeRevision,
-      settings: normalizeSettings(input && !Array.isArray(input) ? input.settings : null),
-      items: safeItems.map(publicCatalogItemFromNormalized),
-      popular: popularItems.map(publicCatalogItemFromNormalized),
+      items: safeItems,
     };
     try {
       const serialized = JSON.stringify(payload);
@@ -477,13 +377,10 @@
 
   function getInitialCatalog(options = {}) {
     const cached = readLastKnownGoodCatalog();
-    const initial = cached || readBundledCatalog() || getStaticCatalog();
+    const initial = cached || getStaticCatalog();
     const limit = Number(options.limit);
     if (!Number.isInteger(limit) || limit <= 0) return initial;
-    const sourceItems = Array.isArray(initial.popularItems) && initial.popularItems.length
-      ? initial.popularItems
-      : initial.items;
-    const items = sourceItems.slice(0, limit);
+    const items = initial.items.slice(0, limit);
     return { ...initial, lifecycle: items.length ? "ready" : "empty", items };
   }
 
@@ -662,15 +559,13 @@
 
   function withStateFlags(result, flags = {}) {
     return {
-      ...result,
       source: result.source,
       lifecycle: result.lifecycle,
       items: result.items || [],
       errorCode: result.errorCode || "",
       apiAvailable: flags.apiAvailable === true,
       staticFallbackActive: flags.staticFallbackActive === true,
-      degraded: flags.degraded === true || result.degraded === true,
-      unchanged: flags.unchanged === true || result.unchanged === true,
+      degraded: flags.degraded === true,
     };
   }
 
@@ -682,7 +577,7 @@
     const config = flags.config || getConfig();
     const fallback = hasCatalogItems(currentState)
       ? currentState
-      : readLastKnownGoodCatalog() || readBundledCatalog() || (config.staticFallbackEnabled ? getStaticCatalog() : null);
+      : readLastKnownGoodCatalog() || (config.staticFallbackEnabled ? getStaticCatalog() : null);
     if (hasCatalogItems(fallback)) {
       return withStateFlags({
         source: fallback.source,
@@ -715,25 +610,6 @@
 
   async function resolveCatalogForPage(options = {}) {
     const kind = options.kind || "solutions";
-    const snapshotClient = window.WEB00_PUBLIC_CATALOG_SNAPSHOT;
-    if (
-      snapshotClient &&
-      typeof snapshotClient.readConfig === "function" &&
-      typeof snapshotClient.resolveCatalogState === "function" &&
-      snapshotClient.readConfig().enabled
-    ) {
-      return snapshotClient.resolveCatalogState({
-        catalog: window.WEB00_CATALOG,
-        currentState: options.currentState,
-        kind,
-        limit: options.limit || 3,
-        preserveCatalogState: (errorCode) => preservedCatalogState(options.currentState, errorCode, {
-          apiAvailable: false,
-          config: getConfig(),
-        }),
-        saveLastKnownGoodCatalog: kind === "solutions" ? saveLastKnownGoodCatalog : null,
-      });
-    }
     const config = getConfig();
     const currentState = options.currentState;
     if (!config.apiEnabled) {

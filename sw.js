@@ -1,4 +1,4 @@
-const WEB00_CACHE = "web00-shell-v6-public-catalog-snapshot";
+const WEB00_CACHE = "web00-shell-v5-catalog-lkg";
 
 const SHELL_ASSETS = [
   "index.html",
@@ -11,8 +11,6 @@ const SHELL_ASSETS = [
   "assets/css/shell.css",
   "assets/css/components.css",
   "assets/js/data.js",
-  "assets/js/public-catalog-bundled-snapshot.js",
-  "assets/js/public-catalog-snapshot.js",
   "assets/js/catalog-api.js",
   "assets/js/main.js",
   "assets/icons/web00-icon-192.png",

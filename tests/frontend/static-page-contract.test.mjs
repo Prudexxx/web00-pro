@@ -49,13 +49,14 @@ test("solutions.html provides stable B8 catalog state nodes", async () => {
   assert.match(html, /data-demo-modal-content/);
 });
 
-test("main.js renders homepage popular cards from any validated ready catalog state", async () => {
+test("main.js replaces homepage popular cards only from successful API popular state", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
   assert.match(source, /async function initPopularCatalogState\(\)/);
   assert.match(source, /function renderPopularSolutions\(\)/);
   assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3, currentState: popularCatalogState \}\)/);
-  assert.match(source, /isRenderableCatalogState\(popularCatalogState\)/);
+  assert.match(source, /popularCatalogState\.source === "api"/);
+  assert.match(source, /popularCatalogState\.lifecycle === "ready"/);
 });
 
 test("index.html keeps hardcoded popular grid as initial fallback content", async () => {
@@ -81,12 +82,10 @@ test("brief and modal integration use normalized catalog lookup and gallery inde
 
 test("root pages use canonical B8 deferred script order", async () => {
   const expected = [
-    "assets/js/data.js?v=b10-public-catalog-snapshot-1",
-    "assets/js/runtime-config.js?v=b10-public-catalog-snapshot-1",
-    "assets/js/public-catalog-bundled-snapshot.js?v=b10-public-catalog-snapshot-1",
-    "assets/js/public-catalog-snapshot.js?v=b10-public-catalog-snapshot-1",
-    "assets/js/catalog-api.js?v=b10-public-catalog-snapshot-1",
-    "assets/js/main.js?v=b10-public-catalog-snapshot-1",
+    "assets/js/data.js?v=b9-catalog-lkg-1",
+    "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
+    "assets/js/catalog-api.js?v=b9-catalog-lkg-1",
+    "assets/js/main.js?v=b9-catalog-lkg-1",
   ];
 
   for (const page of ROOT_MAIN_PAGES) {
@@ -94,8 +93,8 @@ test("root pages use canonical B8 deferred script order", async () => {
     const scripts = [...html.matchAll(/<script\s+defer\s+src="([^"]+)"><\/script>/g)].map((match) => match[1]);
     const b8Start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
     assert.notEqual(b8Start, -1, `${page} should load data.js`);
-    assert.deepEqual(scripts.slice(b8Start, b8Start + 6), expected, `${page} script order`);
-    assert.equal(scripts.filter((src) => expected.includes(src)).length, 6, `${page} should not duplicate B10 scripts`);
+    assert.deepEqual(scripts.slice(b8Start, b8Start + 4), expected, `${page} script order`);
+    assert.equal(scripts.filter((src) => expected.includes(src)).length, 4, `${page} should not duplicate B8 scripts`);
     assert.doesNotMatch(html, /<script\s+async/i, `${page} should not async public scripts`);
     assert.doesNotMatch(html, /<base\s/i, `${page} should not use base href`);
   }

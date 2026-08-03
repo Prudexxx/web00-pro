@@ -115,10 +115,8 @@ test("a complete non-empty API catalog replaces the current catalog and becomes 
   assert.deepEqual(plain(result.items.map((item) => item.slug)), ["site-custom"]);
   assert.equal(result.source, "api");
   assert.equal(result.lifecycle, "ready");
-  assert.deepEqual(Object.keys(saved).sort(), ["items", "popular", "revision", "savedAt", "schemaVersion", "settings"]);
+  assert.deepEqual(Object.keys(saved).sort(), ["items", "savedAt", "schemaVersion"]);
   assert.equal(saved.schemaVersion, 1);
-  assert.equal(saved.revision, 0);
-  assert.deepEqual(saved.settings, { showDemoInModal: false });
   assert.deepEqual(saved.items.map((item) => item.slug), ["site-custom"]);
 });
 
