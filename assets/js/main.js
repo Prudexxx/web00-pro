@@ -4,6 +4,7 @@
   const CATALOG = window.WEB00_CATALOG || null;
   const CATALOG_MAX_ATTEMPTS = 3;
   const CATALOG_RETRY_DELAY_MS = window.WEB00_TEST_MODE === true ? 10 : 1500;
+  const CATALOG_IMAGE_PRELOAD_TIMEOUT_MS = window.WEB00_TEST_MODE === true ? 50 : 5000;
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -916,8 +917,76 @@
     return Boolean(state && Array.isArray(state.items) && state.items.length > 0);
   }
 
+  function isRenderableCatalogState(state) {
+    return hasCatalogItems(state) && state.lifecycle === "ready";
+  }
+
+  function collectCatalogImageUrls(state) {
+    const seen = new Set();
+    const urls = [];
+    const add = (value) => {
+      const url = imageUrl(value);
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      urls.push(url);
+    };
+    (Array.isArray(state?.items) ? state.items : []).forEach((item) => {
+      add(item.previewImage || item.previewImageUrl);
+      const variants = item.previewImage && Array.isArray(item.previewImage.variants)
+        ? item.previewImage.variants
+        : [];
+      variants.forEach((variant) => {
+        add(variant.avifUrl);
+        add(variant.webpUrl);
+      });
+    });
+    return urls;
+  }
+
+  async function preloadCatalogImages(state) {
+    if (!isRenderableCatalogState(state) || typeof window.Image !== "function") return true;
+    const urls = collectCatalogImageUrls(state);
+    if (!urls.length) return true;
+    await Promise.all(urls.map((url) => new Promise((resolve, reject) => {
+      const image = new window.Image();
+      const finish = (callback) => {
+        image.onload = null;
+        image.onerror = null;
+        window.clearTimeout(timer);
+        callback();
+      };
+      const timer = window.setTimeout(() => {
+        finish(() => reject(new Error("WEB00_CATALOG_IMAGE_PRELOAD_TIMEOUT")));
+      }, CATALOG_IMAGE_PRELOAD_TIMEOUT_MS);
+      image.onload = () => finish(() => resolve(true));
+      image.onerror = () => finish(() => reject(new Error("WEB00_CATALOG_IMAGE_PRELOAD_FAILED")));
+      image.src = url;
+    })));
+    return true;
+  }
+
   function applyCatalogState(nextCatalogState) {
     if (!nextCatalogState) return false;
+    if (nextCatalogState.unchanged === true && hasCatalogItems(catalogState)) {
+      catalogState = {
+        ...catalogState,
+        apiAvailable: nextCatalogState.apiAvailable === true,
+        degraded: nextCatalogState.degraded === true,
+        errorCode: nextCatalogState.errorCode || "",
+        staticFallbackActive: nextCatalogState.staticFallbackActive === true,
+      };
+      return "unchanged";
+    }
+    if (nextCatalogState.degraded === true && hasCatalogItems(catalogState)) {
+      catalogState = {
+        ...catalogState,
+        apiAvailable: nextCatalogState.apiAvailable === true,
+        degraded: true,
+        errorCode: nextCatalogState.errorCode || "WEB00_API_ERROR",
+        staticFallbackActive: true,
+      };
+      return "degraded";
+    }
     if (hasCatalogItems(catalogState) && (!hasCatalogItems(nextCatalogState) || nextCatalogState.lifecycle !== "ready")) {
       catalogState = {
         ...catalogState,
@@ -926,14 +995,14 @@
         degraded: true,
         errorCode: nextCatalogState.errorCode || "WEB00_API_ERROR",
       };
-      return false;
+      return "rejected";
     }
     catalogState = nextCatalogState;
-    if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready" && hasCatalogItems(nextCatalogState)) {
+    if (isRenderableCatalogState(nextCatalogState)) {
       renderSolutions();
-      return true;
+      return "rendered";
     }
-    return false;
+    return "updated";
   }
 
   function scheduleCatalogRetry() {
@@ -951,8 +1020,17 @@
     updateCatalogStateNodes(catalogState, { loading: true });
     try {
       const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions", currentState: catalogState });
-      const loaded = applyCatalogState(nextCatalogState);
-      if (!loaded) scheduleCatalogRetry();
+      if (
+        nextCatalogState &&
+        nextCatalogState.source === "snapshot" &&
+        nextCatalogState.unchanged !== true &&
+        nextCatalogState.degraded !== true &&
+        hasCatalogItems(catalogState)
+      ) {
+        await preloadCatalogImages(nextCatalogState);
+      }
+      const result = applyCatalogState(nextCatalogState);
+      if (result === "rejected" || result === "degraded" || result === false) scheduleCatalogRetry();
     } catch (_) {
       if (hasCatalogItems(catalogState)) {
         catalogState = { ...catalogState, staticFallbackActive: true, degraded: true, errorCode: "WEB00_API_ERROR" };
@@ -982,7 +1060,9 @@
     }
     popularCatalogState = CATALOG.getInitialCatalog({ limit: 3 });
     CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3, currentState: popularCatalogState }).then((nextPopularCatalogState) => {
-      if (nextPopularCatalogState && hasCatalogItems(nextPopularCatalogState)) popularCatalogState = nextPopularCatalogState;
+      if (!nextPopularCatalogState) return;
+      if (nextPopularCatalogState.unchanged === true && hasCatalogItems(popularCatalogState)) return;
+      if (hasCatalogItems(nextPopularCatalogState)) popularCatalogState = nextPopularCatalogState;
       renderPopularSolutions();
     }).catch(() => undefined);
     return popularCatalogState;
@@ -1218,7 +1298,7 @@
       `;
       return;
     }
-    if (!(popularCatalogState.source === "api" && popularCatalogState.lifecycle === "ready")) return;
+    if (!isRenderableCatalogState(popularCatalogState)) return;
 
     grid.innerHTML = popularCatalogState.items.slice(0, 3).map((solution, index) => {
       const identifier = solutionIdentifier(solution);
