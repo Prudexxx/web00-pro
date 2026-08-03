@@ -37,6 +37,12 @@ const testEnv: AppEnv = {
 };
 const fixturePrefix = `b5-${Date.now()}-`;
 const requestPrefix = "req_b5_admin_";
+const invalidOptionalUrls = [
+  ["malformed", "not a URL"],
+  ["javascript", "javascript:alert(1)"],
+  ["ftp", "ftp://example.test/file"],
+  ["credentials", "https://user:password@example.test/private"]
+] as const;
 let prisma: PrismaClient;
 let adminToken: string;
 let editorToken: string;
@@ -260,6 +266,51 @@ describe("admin sites API", () => {
 
     expect(dryRun.body.data).toMatchObject({ itemsCount: 1, status: "ready" });
   });
+
+  it.each(invalidOptionalUrls)(
+    "rejects invalid %s demo URL create before a site row persists",
+    async (label, demoUrl) => {
+      const category = await createCategory(`invalid-create-${label}`);
+      const slug = `${fixturePrefix}invalid-create-${label}`;
+      const response = await request(createAdminApp())
+        .post("/api/admin/sites")
+        .set("Authorization", `Bearer ${adminToken}`)
+        .set("X-Request-Id", `${requestPrefix}invalid_create_${label}`)
+        .send({
+          categoryId: category.id,
+          demoUrl,
+          shortDescription: "Short",
+          slug,
+          title: "Invalid Create"
+        })
+        .expect(400);
+
+      expect(response.body.error.code).toBe("VALIDATION_ERROR");
+      await expect(prisma.site.findUnique({ where: { slug } })).resolves.toBeNull();
+    }
+  );
+
+  it.each(invalidOptionalUrls)(
+    "rejects invalid %s demo URL patch before changing the persisted site",
+    async (label, demoUrl) => {
+      const category = await createCategory(`invalid-patch-${label}`);
+      const site = await createSite({ categoryId: category.id, slug: `invalid-patch-${label}` });
+      await prisma.site.update({
+        data: { demoUrl: "https://example.test/persisted-demo" },
+        where: { id: site.id }
+      });
+      const before = await prisma.site.findUniqueOrThrow({ where: { id: site.id } });
+      const response = await request(createAdminApp())
+        .patch(`/api/admin/sites/${site.id}`)
+        .set("Authorization", `Bearer ${adminToken}`)
+        .set("X-Request-Id", `${requestPrefix}invalid_patch_${label}`)
+        .send({ demoUrl })
+        .expect(400);
+
+      expect(response.body.error.code).toBe("VALIDATION_ERROR");
+      await expect(prisma.site.findUnique({ where: { id: site.id } })).resolves.toEqual(before);
+    }
+  );
 
   it("enforces PATCH permission semantics and explicit field mapping", async () => {
     const category = await createCategory("site-patch-category");

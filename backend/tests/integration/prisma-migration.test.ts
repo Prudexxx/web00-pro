@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Client } from "pg";
 import { describe, expect, it } from "vitest";
@@ -63,6 +63,26 @@ const normalizeOptionalSiteUrlsMigrationPath = join(
   "20260803000000_normalize_optional_site_urls",
   "migration.sql"
 );
+const migrationDirectory = join(process.cwd(), "prisma", "migrations");
+const expectedMigrationDirectories = [
+  "20260725061552_init",
+  "20260729120000_publish_canonical_catalog",
+  "20260801153000_public_catalog_control",
+  "20260802044500_public_catalog_audit_entity_type",
+  "20260803000000_normalize_optional_site_urls"
+];
+const expectedPriorMigrationHashes = {
+  "20260725061552_init/migration.sql":
+    "e7f267155abc92f8ed53bd85b000c948c0f039ef896f779bd7d55ea387535153",
+  "20260729120000_publish_canonical_catalog/migration.sql":
+    "192875399fcead0db06fc3ee406e344723979ee89a76ea50145888b78d34d8fa",
+  "20260801153000_public_catalog_control/migration.sql":
+    "8f5f48b6d55c443bf5fd18ed583bb538b349415630c069bbac6e5e063f3c1682",
+  "20260802044500_public_catalog_audit_entity_type/migration.sql":
+    "779540925f29f0e0d73bc7f8a98d84701ce31e5dc1c9e9eedf60107f35782698",
+  "migration_lock.toml":
+    "99836963713b4f5b269ad49af0ed3d7b0b2e336115c2f92dc9ac683d139d0900"
+} as const;
 const ownerCloneSlug = "drova-test-copy-20260729";
 
 type MigrationSiteRow = {
@@ -110,6 +130,18 @@ type MigrationSiteInput = {
 };
 
 describe("B2 PostgreSQL migration", () => {
+  it("keeps exactly one additive migration while all prior migration bytes remain unchanged", () => {
+    const directories = readdirSync(migrationDirectory, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+
+    expect(directories).toEqual([...expectedMigrationDirectories].sort());
+    for (const [relativePath, expectedHash] of Object.entries(expectedPriorMigrationHashes)) {
+      expect(sha256CanonicalFile(join(migrationDirectory, relativePath))).toBe(expectedHash);
+    }
+  });
+
   it("creates the six approved B0 tables", async () => {
     await withTestClient(async (client) => {
       const result = await client.query<{ tablename: string }>(
@@ -522,11 +554,18 @@ describe("B2 PostgreSQL migration", () => {
             original_demo_url
           ) VALUES (
             ' ',
-            'https://example.test/site',
             '   ',
             '',
             '    ',
-            '  '
+            '  ',
+            '     '
+          ), (
+            'https://example.test/demo',
+            'https://example.test/site',
+            'https://example.test/preview',
+            'https://example.test/local-demo',
+            'https://example.test/external-demo',
+            'https://example.test/original-demo'
           )
         `);
 
@@ -539,15 +578,23 @@ describe("B2 PostgreSQL migration", () => {
           demo_local_url: string | null;
           external_demo_url: string | null;
           original_demo_url: string | null;
-        }>("SELECT * FROM sites");
+        }>("SELECT * FROM sites ORDER BY demo_url NULLS FIRST");
         expect(result.rows).toEqual([
           {
             demo_url: null,
-            site_url: "https://example.test/site",
+            site_url: null,
             preview_image_url: null,
             demo_local_url: null,
             external_demo_url: null,
             original_demo_url: null
+          },
+          {
+            demo_url: "https://example.test/demo",
+            site_url: "https://example.test/site",
+            preview_image_url: "https://example.test/preview",
+            demo_local_url: "https://example.test/local-demo",
+            external_demo_url: "https://example.test/external-demo",
+            original_demo_url: "https://example.test/original-demo"
           }
         ]);
       } finally {
@@ -687,6 +734,12 @@ async function expectRejectedTransaction(
   } finally {
     await client.query("ROLLBACK").catch(() => undefined);
   }
+}
+
+function sha256CanonicalFile(path: string): string {
+  const canonicalBytes = readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+  return createHash("sha256").update(canonicalBytes, "utf8").digest("hex");
 }
 
 async function expectAllowedTransaction(client: Client, action: () => Promise<unknown>): Promise<void> {
