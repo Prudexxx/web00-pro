@@ -30,7 +30,7 @@ test("main.js consumes WEB00_CATALOG through narrow catalog seams", async () => 
   assert.match(source, /function catalogItemById\(/);
   assert.match(source, /const found = CATALOG\.findCatalogItem\(\[\.\.\.popularItems, \.\.\.catalogItems\(\)\], value\);/);
   assert.match(source, /if \(found\) return found;/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions", currentState: catalogState \}\)/);
 });
 
 test("solutions.html provides stable B8 catalog state nodes", async () => {
@@ -54,7 +54,7 @@ test("main.js replaces homepage popular cards only from successful API popular s
 
   assert.match(source, /async function initPopularCatalogState\(\)/);
   assert.match(source, /function renderPopularSolutions\(\)/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3, currentState: popularCatalogState \}\)/);
   assert.match(source, /popularCatalogState\.source === "api"/);
   assert.match(source, /popularCatalogState\.lifecycle === "ready"/);
 });
@@ -82,10 +82,10 @@ test("brief and modal integration use normalized catalog lookup and gallery inde
 
 test("root pages use canonical B8 deferred script order", async () => {
   const expected = [
-    "assets/js/data.js?v=b8-live-1",
-    "assets/js/runtime-config.js?v=b8-live-1",
-    "assets/js/catalog-api.js?v=b8-live-1",
-    "assets/js/main.js?v=b8-live-1",
+    "assets/js/data.js?v=b9-catalog-lkg-1",
+    "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
+    "assets/js/catalog-api.js?v=b9-catalog-lkg-1",
+    "assets/js/main.js?v=b9-catalog-lkg-1",
   ];
 
   for (const page of ROOT_MAIN_PAGES) {
@@ -113,7 +113,8 @@ test("frontend B8 uses one canonical live API config and avoids production secre
   assert.match(runtimeConfig, /apiBaseUrl: "https:\/\/web00-backend-production\.onrender\.com"/);
   assert.equal((combined.match(/https:\/\/web00-backend-production\.onrender\.com/g) || []).length, 1);
   assert.doesNotMatch(combined, /https:\/\/api\.|Authorization|credentials:\s*"include"|document\.cookie|\.env|TODO|TBD/i);
-  assert.doesNotMatch(catalogApi, /localStorage|sessionStorage|document\.querySelector/);
+  assert.match(catalogApi, /web00\.catalog\.api\.lkg\.v1/);
+  assert.doesNotMatch(catalogApi, /sessionStorage|document\.querySelector/);
   assert.doesNotMatch(main, /target="_blank" rel="noopener"(?! noreferrer)/);
 });
 
@@ -159,13 +160,14 @@ test("B8 preserves pre-existing support and bug-report controls", async () => {
   }
 });
 
-test("main.js ignores non-applyable stale catalog results", async () => {
+test("main.js preserves populated catalog state through finite background retries", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)\.then\(\(nextCatalogState\) => \{/);
-  assert.match(source, /if \(nextCatalogState\) catalogState = nextCatalogState;/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)\.then\(\(nextPopularCatalogState\) => \{/);
-  assert.match(source, /if \(nextPopularCatalogState\) popularCatalogState = nextPopularCatalogState;/);
+  assert.match(source, /const CATALOG_MAX_ATTEMPTS = 3;/);
+  assert.match(source, /function applyCatalogState\(nextCatalogState\)/);
+  assert.match(source, /function scheduleCatalogRetry\(\)/);
+  assert.match(source, /currentState: catalogState/);
+  assert.match(source, /CATALOG\.getInitialCatalog\(\)/);
 });
 
 test("B8 CSS supports catalog status and homepage API empty state without new global cards", async () => {

@@ -2,6 +2,8 @@
   const DATA = window.WEB00_DATA;
   if (!DATA) return;
   const CATALOG = window.WEB00_CATALOG || null;
+  const CATALOG_MAX_ATTEMPTS = 3;
+  const CATALOG_RETRY_DELAY_MS = window.WEB00_TEST_MODE === true ? 10 : 1500;
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -12,7 +14,9 @@
   let bugAttachment = null;
   let catalogState = null;
   let popularCatalogState = null;
-  let catalogRetryUsed = false;
+  let catalogAttemptCount = 0;
+  let catalogLoadInFlight = false;
+  let catalogRetryTimer = null;
   const TITLE_ALIASES = new Map([
     ["Каталог мебели", "Мебельный магазин"],
     ["Сайт для клининга", "Услуга клининга"],
@@ -904,8 +908,60 @@
     setCatalogStateNode("[data-catalog-empty]", !loading && state?.lifecycle === "empty");
     setCatalogStateNode("[data-catalog-fatal]", !loading && state?.lifecycle === "fatal");
     $$("[data-catalog-retry]").forEach((button) => {
-      button.disabled = loading || catalogRetryUsed;
+      button.disabled = loading || catalogRetryTimer !== null;
     });
+  }
+
+  function hasCatalogItems(state) {
+    return Boolean(state && Array.isArray(state.items) && state.items.length > 0);
+  }
+
+  function applyCatalogState(nextCatalogState) {
+    if (!nextCatalogState) return false;
+    if (hasCatalogItems(catalogState) && (!hasCatalogItems(nextCatalogState) || nextCatalogState.lifecycle !== "ready")) {
+      catalogState = {
+        ...catalogState,
+        apiAvailable: nextCatalogState.apiAvailable === true,
+        staticFallbackActive: true,
+        degraded: true,
+        errorCode: nextCatalogState.errorCode || "WEB00_API_ERROR",
+      };
+      return false;
+    }
+    catalogState = nextCatalogState;
+    if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready" && hasCatalogItems(nextCatalogState)) {
+      renderSolutions();
+      return true;
+    }
+    return false;
+  }
+
+  function scheduleCatalogRetry() {
+    if (catalogAttemptCount >= CATALOG_MAX_ATTEMPTS || catalogRetryTimer !== null) return;
+    catalogRetryTimer = window.setTimeout(() => {
+      catalogRetryTimer = null;
+      refreshCatalogInBackground();
+    }, CATALOG_RETRY_DELAY_MS);
+  }
+
+  async function refreshCatalogInBackground() {
+    if (!CATALOG || page !== "solutions" || catalogLoadInFlight || catalogAttemptCount >= CATALOG_MAX_ATTEMPTS) return;
+    catalogLoadInFlight = true;
+    catalogAttemptCount += 1;
+    updateCatalogStateNodes(catalogState, { loading: true });
+    try {
+      const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions", currentState: catalogState });
+      const loaded = applyCatalogState(nextCatalogState);
+      if (!loaded) scheduleCatalogRetry();
+    } catch (_) {
+      if (hasCatalogItems(catalogState)) {
+        catalogState = { ...catalogState, staticFallbackActive: true, degraded: true, errorCode: "WEB00_API_ERROR" };
+      }
+      scheduleCatalogRetry();
+    } finally {
+      catalogLoadInFlight = false;
+      updateCatalogStateNodes(catalogState);
+    }
   }
 
   async function initCatalogState() {
@@ -914,17 +970,8 @@
       updateCatalogStateNodes(null);
       return catalogState;
     }
-    catalogState = CATALOG.getStaticCatalog();
-    updateCatalogStateNodes(null, { loading: true });
-    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
-      if (nextCatalogState) {
-        catalogState = nextCatalogState;
-        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
-      }
-      updateCatalogStateNodes(catalogState);
-    }).catch(() => {
-      updateCatalogStateNodes(catalogState);
-    });
+    catalogState = CATALOG.getInitialCatalog();
+    refreshCatalogInBackground();
     return catalogState;
   }
 
@@ -933,8 +980,9 @@
       popularCatalogState = null;
       return popularCatalogState;
     }
-    CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3 }).then((nextPopularCatalogState) => {
-      if (nextPopularCatalogState) popularCatalogState = nextPopularCatalogState;
+    popularCatalogState = CATALOG.getInitialCatalog({ limit: 3 });
+    CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3, currentState: popularCatalogState }).then((nextPopularCatalogState) => {
+      if (nextPopularCatalogState && hasCatalogItems(nextPopularCatalogState)) popularCatalogState = nextPopularCatalogState;
       renderPopularSolutions();
     }).catch(() => undefined);
     return popularCatalogState;
@@ -942,29 +990,22 @@
 
   async function initBriefCatalogState() {
     if (!CATALOG || page !== "brief") return catalogState;
-    catalogState = CATALOG.getStaticCatalog();
-    CATALOG.resolveCatalogForPage({ kind: "solutions" }).then((nextCatalogState) => {
-      if (nextCatalogState) catalogState = nextCatalogState;
+    catalogState = CATALOG.getInitialCatalog();
+    CATALOG.resolveCatalogForPage({ kind: "solutions", currentState: catalogState }).then((nextCatalogState) => {
+      if (nextCatalogState && hasCatalogItems(nextCatalogState)) catalogState = nextCatalogState;
     }).catch(() => undefined);
     return catalogState;
   }
 
   async function retryCatalogLoad(button) {
-    if (!CATALOG || page !== "solutions" || catalogRetryUsed) return;
-    catalogRetryUsed = true;
-    if (button) button.disabled = true;
-    updateCatalogStateNodes(catalogState, { loading: true });
-    try {
-      const nextCatalogState = await CATALOG.resolveCatalogForPage({ kind: "solutions" });
-      if (nextCatalogState) {
-        catalogState = nextCatalogState;
-        if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready") renderSolutions();
-      }
-    } catch (_) {
-      // Keep the currently visible saved catalog if the retry cannot complete.
-    } finally {
-      updateCatalogStateNodes(catalogState);
+    if (!CATALOG || page !== "solutions" || catalogLoadInFlight) return;
+    if (catalogRetryTimer !== null) {
+      window.clearTimeout(catalogRetryTimer);
+      catalogRetryTimer = null;
     }
+    catalogAttemptCount = 0;
+    if (button) button.disabled = true;
+    await refreshCatalogInBackground();
   }
 
   function setModal(name, open) {

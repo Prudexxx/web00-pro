@@ -12,7 +12,7 @@ test("service worker keeps runtime config and API requests network-only", async 
   const firstCacheOpen = fetchHandler.indexOf("caches.open");
   const firstCachePut = fetchHandler.indexOf("cache.put");
 
-  assert.match(source, /const WEB00_CACHE = "web00-shell-v4-b8-live-api";/);
+  assert.match(source, /const WEB00_CACHE = "web00-shell-v5-catalog-lkg";/);
   assert.match(source, /function isRuntimeConfigRequest\(url\)/);
   assert.match(source, /function isApiRequest\(url\)/);
   assert.match(source, /if \(isRuntimeConfigRequest\(url\) \|\| isApiRequest\(url\)\) return;/);
@@ -23,6 +23,7 @@ test("service worker keeps runtime config and API requests network-only", async 
   assert.match(shellAssets, /"assets\/js\/data\.js"/);
   assert.match(shellAssets, /"assets\/js\/catalog-api\.js"/);
   assert.match(shellAssets, /"assets\/js\/main\.js"/);
+  assert.match(source, /caches\.match\(request, \{ ignoreSearch: true \}\)/);
   assert.match(source, /key\.startsWith\("web00-shell-"\) && key !== WEB00_CACHE/);
   assert.doesNotMatch(source, /caches\.delete\(WEB00_CACHE\)|caches\.delete\(key\)(?!\))/);
   assert.notEqual(runtimeConfigGuard, -1);

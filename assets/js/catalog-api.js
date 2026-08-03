@@ -4,9 +4,13 @@
   const CONFIG_DEFAULTS = Object.freeze({
     apiBaseUrl: "",
     requestTimeoutMs: 8000,
-    staticFallbackEnabled: false,
+    staticFallbackEnabled: true,
   });
 
+  const LKG_KEY = "web00.catalog.api.lkg.v1";
+  const LKG_SCHEMA_VERSION = 1;
+  const MAX_CATALOG_ITEMS = 1000;
+  const MAX_LKG_SERIALIZED_BYTES = 2 * 1024 * 1024;
   const SAFE_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
   const CONTROL_RE = /[\u0000-\u001f\u007f]/;
   const ENCODED_CONTROL_RE = /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i;
@@ -276,6 +280,108 @@
     };
   }
 
+  function normalizeCachedCatalogItem(input) {
+    if (!input || typeof input !== "object") return null;
+    const category = input.category && typeof input.category === "object"
+      ? input.category
+      : { slug: input.categorySlug, title: input.category };
+    return normalizeApiSite({
+      slug: input.slug,
+      title: input.title,
+      shortDescription: input.shortDescription,
+      category,
+      tags: input.tags,
+      features: input.features,
+      priceLabel: input.priceLabel,
+      deliveryLabel: input.deliveryLabel,
+      demoMode: input.demoMode,
+      demoUrl: input.demoUrl,
+      siteUrl: input.siteUrl,
+      previewImageUrl: input.previewImageUrl,
+      previewImage: input.previewImage,
+      galleryImages: input.galleryImages,
+    }, { source: "lkg" });
+  }
+
+  function normalizeCachedCatalogItems(items) {
+    if (!Array.isArray(items) || items.length === 0 || items.length > MAX_CATALOG_ITEMS) return null;
+    const seen = new Set();
+    const normalized = [];
+    for (const item of items) {
+      const safeItem = normalizeCachedCatalogItem(item);
+      if (!safeItem || seen.has(safeItem.slug)) return null;
+      seen.add(safeItem.slug);
+      normalized.push(safeItem);
+    }
+    return normalized;
+  }
+
+  function serializedByteLength(value) {
+    const source = String(value ?? "");
+    let size = 0;
+    for (let index = 0; index < source.length; index += 1) {
+      const code = source.charCodeAt(index);
+      if (code <= 0x7f) {
+        size += 1;
+      } else if (code <= 0x7ff) {
+        size += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < source.length) {
+        const next = source.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          size += 4;
+          index += 1;
+        } else {
+          size += 3;
+        }
+      } else {
+        size += 3;
+      }
+    }
+    return size;
+  }
+
+  function readLastKnownGoodCatalog() {
+    try {
+      const raw = window.localStorage && window.localStorage.getItem(LKG_KEY);
+      if (!raw || serializedByteLength(raw) > MAX_LKG_SERIALIZED_BYTES) return null;
+      const payload = JSON.parse(raw);
+      if (!payload || payload.schemaVersion !== LKG_SCHEMA_VERSION || typeof payload.savedAt !== "string") return null;
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.savedAt) || Number.isNaN(Date.parse(payload.savedAt))) return null;
+      const items = normalizeCachedCatalogItems(payload.items);
+      return items ? { source: "lkg", lifecycle: "ready", items, errorCode: "" } : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveLastKnownGoodCatalog(items) {
+    const safeItems = normalizeCachedCatalogItems(items);
+    if (!safeItems) return false;
+    const payload = {
+      schemaVersion: LKG_SCHEMA_VERSION,
+      savedAt: new Date().toISOString(),
+      items: safeItems,
+    };
+    try {
+      const serialized = JSON.stringify(payload);
+      if (serializedByteLength(serialized) > MAX_LKG_SERIALIZED_BYTES) return false;
+      if (!window.localStorage || typeof window.localStorage.setItem !== "function") return false;
+      window.localStorage.setItem(LKG_KEY, serialized);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getInitialCatalog(options = {}) {
+    const cached = readLastKnownGoodCatalog();
+    const initial = cached || getStaticCatalog();
+    const limit = Number(options.limit);
+    if (!Number.isInteger(limit) || limit <= 0) return initial;
+    const items = initial.items.slice(0, limit);
+    return { ...initial, lifecycle: items.length ? "ready" : "empty", items };
+  }
+
   function findCatalogItem(items, identifier) {
     const value = text(identifier);
     if (!value) return null;
@@ -357,7 +463,7 @@
       seen.add(item.slug);
       normalized.push(item);
     });
-    if (data.length > 0 && normalized.length === 0) {
+    if (normalized.length !== data.length) {
       throw createCatalogError("WEB00_API_NO_VALID_ITEMS");
     }
     return normalized;
@@ -375,6 +481,9 @@
       throw createCatalogError("WEB00_API_INVALID_META");
     }
     if (page !== expectedPage || limit !== expectedLimit || totalPages > 20) {
+      throw createCatalogError("WEB00_API_INVALID_META");
+    }
+    if ((total === 0 && totalPages !== 0) || (total > 0 && totalPages === 0)) {
       throw createCatalogError("WEB00_API_INVALID_META");
     }
     return { page, limit, total, totalPages };
@@ -454,7 +563,34 @@
       errorCode: result.errorCode || "",
       apiAvailable: flags.apiAvailable === true,
       staticFallbackActive: flags.staticFallbackActive === true,
+      degraded: flags.degraded === true,
     };
+  }
+
+  function hasCatalogItems(state) {
+    return Boolean(state && Array.isArray(state.items) && state.items.length > 0);
+  }
+
+  function preservedCatalogState(currentState, errorCode, flags = {}) {
+    const fallback = hasCatalogItems(currentState) ? currentState : getInitialCatalog();
+    if (hasCatalogItems(fallback)) {
+      return withStateFlags({
+        source: fallback.source,
+        lifecycle: "ready",
+        items: fallback.items,
+        errorCode,
+      }, {
+        apiAvailable: flags.apiAvailable === true,
+        staticFallbackActive: true,
+        degraded: true,
+      });
+    }
+    return withStateFlags({
+      source: "api",
+      lifecycle: "fatal",
+      items: [],
+      errorCode,
+    }, { apiAvailable: false, staticFallbackActive: false, degraded: true });
   }
 
   function getRequestChannel(name) {
@@ -466,8 +602,9 @@
   async function resolveCatalogForPage(options = {}) {
     const kind = options.kind || "solutions";
     const config = getConfig();
+    const currentState = options.currentState;
     if (!config.apiEnabled) {
-      return withStateFlags(getStaticCatalog(), {
+      return withStateFlags(getInitialCatalog({ limit: kind === "popular" ? options.limit : undefined }), {
         apiAvailable: false,
         staticFallbackActive: false,
       });
@@ -483,18 +620,17 @@
       if (channel.isStale(request.sequence)) {
         return null;
       }
+      if (!hasCatalogItems(result)) {
+        return preservedCatalogState(currentState, "WEB00_API_EMPTY", { apiAvailable: true });
+      }
+      if (kind === "solutions") saveLastKnownGoodCatalog(result.items);
       return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
     } catch (error) {
       const errorCode = error && error.code ? error.code : (request.signal.aborted ? "WEB00_API_ABORTED" : "WEB00_API_ERROR");
       if (channel.isStale(request.sequence)) {
         return null;
       }
-      return withStateFlags({
-        source: "api",
-        lifecycle: "fatal",
-        items: [],
-        errorCode,
-      }, { apiAvailable: false, staticFallbackActive: false });
+      return preservedCatalogState(currentState, errorCode);
     } finally {
       channel.finish(request.sequence);
     }
@@ -548,26 +684,33 @@
     const items = [];
     let page = 1;
     let totalPages = 1;
+    let expectedTotal = null;
 
-    while (page <= totalPages && page <= 20 && items.length < 1000) {
+    while (page <= totalPages && page <= 20 && items.length < MAX_CATALOG_ITEMS) {
       const params = { page, limit };
       if (options.sort) params.sort = options.sort;
       const envelope = await fetchJson(buildApiUrl(path, params, config), { signal: options.signal });
       const meta = validateMeta(envelope.meta, page, limit);
+      if (expectedTotal === null) expectedTotal = meta.total;
+      if (meta.total !== expectedTotal) throw createCatalogError("WEB00_API_INVALID_META");
       totalPages = meta.totalPages || 0;
       const pageItems = normalizeApiItems(envelope.data);
       items.push(...pageItems);
-      if (totalPages === 0 || page >= totalPages || envelope.data.length === 0) break;
+      if (items.length > MAX_CATALOG_ITEMS) throw createCatalogError("WEB00_API_ITEM_CAP");
+      if (pageItems.length > limit) throw createCatalogError("WEB00_API_INVALID_META");
+      if (page < totalPages && pageItems.length === 0) throw createCatalogError("WEB00_API_INVALID_META");
+      if (totalPages === 0 || page >= totalPages) break;
       page += 1;
     }
 
-    if (items.length > 1000) throw createCatalogError("WEB00_API_ITEM_CAP");
+    if (items.length > MAX_CATALOG_ITEMS) throw createCatalogError("WEB00_API_ITEM_CAP");
+    if (expectedTotal === null || items.length !== expectedTotal) throw createCatalogError("WEB00_API_INVALID_META");
     const seen = new Set();
     items.forEach((item) => {
       if (seen.has(item.slug)) throw createCatalogError("WEB00_API_DUPLICATE_SLUG");
       seen.add(item.slug);
     });
-    return items.slice(0, 1000);
+    return items.slice(0, MAX_CATALOG_ITEMS);
   }
 
   function createRequestChannel() {
@@ -610,6 +753,7 @@
   window.WEB00_CATALOG = Object.freeze({
     getConfig,
     getStaticCatalog,
+    getInitialCatalog,
     loadAllSites,
     loadPopularSites,
     loadSiteDetail,
@@ -635,6 +779,8 @@
       resolveCatalogState,
       normalizeImageVariants,
       buildSrcset,
+      readLastKnownGoodCatalog,
+      saveLastKnownGoodCatalog,
     });
   }
 })();

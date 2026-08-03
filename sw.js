@@ -1,4 +1,4 @@
-const WEB00_CACHE = "web00-shell-v4-b8-live-api";
+const WEB00_CACHE = "web00-shell-v5-catalog-lkg";
 
 const SHELL_ASSETS = [
   "index.html",
@@ -66,7 +66,7 @@ self.addEventListener("fetch", (event) => {
 
   if (url.pathname.endsWith(".css") || SHELL_ASSETS.some((asset) => url.pathname.endsWith(asset))) {
     event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request).then((response) => {
+      caches.match(request, { ignoreSearch: true }).then((cached) => cached || fetch(request).then((response) => {
         const copy = response.clone();
         caches.open(WEB00_CACHE).then((cache) => cache.put(request, copy));
         return response;
