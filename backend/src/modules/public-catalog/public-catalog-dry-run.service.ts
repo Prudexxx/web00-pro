@@ -1,4 +1,3 @@
-import type { ManagedImageUrlPolicy } from "../images/image.types.js";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 import { AppError, type ErrorCode } from "../../lib/errors.js";
 import type { AppLogger } from "../../lib/logger.js";
@@ -17,6 +16,7 @@ import type {
   PublicCatalogDryRunStage
 } from "./public-catalog-dry-run.types.js";
 import {
+  PublicCatalogSnapshotPreparationSystemError,
   preparePublicCatalogSnapshotCandidate
 } from "./public-catalog-snapshot-preparation.js";
 import {
@@ -28,7 +28,6 @@ export interface PublicCatalogDryRunService {
 }
 
 export interface PublicCatalogDryRunServiceOptions {
-  imageUrlPolicy?: ManagedImageUrlPolicy;
   logger?: Pick<AppLogger, "log">;
   now?: () => Date;
   prepareSnapshotCandidate?: typeof preparePublicCatalogSnapshotCandidate;
@@ -83,11 +82,7 @@ export function createPublicCatalogDryRunService(
             settings
           };
 
-          return prepareSnapshotCandidate(
-            options.imageUrlPolicy === undefined
-              ? preparationInput
-              : { ...preparationInput, imageUrlPolicy: options.imageUrlPolicy }
-          );
+          return prepareSnapshotCandidate(preparationInput);
         });
         const durationMs = Math.max(0, Date.now() - startedAt);
         const result: PublicCatalogDryRunResult =
@@ -130,7 +125,10 @@ export function createPublicCatalogDryRunService(
           logger: options.logger,
           requestId: input.requestId,
           revision,
-          stage
+          stage:
+            error instanceof PublicCatalogSnapshotPreparationSystemError
+              ? error.stage
+              : stage
         });
         throw appError;
       } finally {

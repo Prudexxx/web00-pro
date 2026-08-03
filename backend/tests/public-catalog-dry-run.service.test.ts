@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import type { PrismaClient } from "../src/generated/prisma/client.js";
-import type { BuiltPublicCatalogSnapshot } from "../src/modules/public-catalog/public-catalog.snapshot.js";
+import type { ManagedImageUrlPolicy } from "../src/modules/images/image.types.js";
+import { mapSiteToPublicCatalogItem } from "../src/modules/public-catalog/public-catalog.mapper.js";
+import {
+  buildPublicCatalogSnapshot,
+  type BuiltPublicCatalogSnapshot
+} from "../src/modules/public-catalog/public-catalog.snapshot.js";
 import {
   createDefaultPublicCatalogControlState,
   PUBLIC_CATALOG_CONTROL_ID,
@@ -15,8 +20,38 @@ import {
   type PublicCatalogDryRunServiceOptions
 } from "../src/modules/public-catalog/public-catalog-dry-run.service.js";
 import type { PublicCatalogReadOnlyTx } from "../src/modules/public-catalog/public-catalog-readonly-transaction.js";
+import {
+  PublicCatalogSnapshotPreparationSystemError
+} from "../src/modules/public-catalog/public-catalog-snapshot-preparation.js";
 import type { PublicSiteRecord } from "../src/modules/public-catalog/public-catalog.types.js";
-import { createProjectionRecord } from "./public-catalog-snapshot-preparation.test.js";
+
+function createProjectionRecord(
+  overrides: Partial<PublicSiteRecord> = {}
+): PublicSiteRecord {
+  return {
+    category: { slug: "business", title: "Business" },
+    deliveryLabel: "14 days",
+    demoMode: null,
+    demoUrl: null,
+    developmentDays: 14,
+    featured: false,
+    features: ["CRM"],
+    fullDescription: "Full description",
+    galleryImages: [],
+    id: "00000000-0000-4000-8000-000000000101",
+    previewImageUrl: null,
+    previewType: "image",
+    priceAmountCents: 120000,
+    priceLabel: "from 1200",
+    publishedAt: new Date("2026-08-02T04:00:00.000Z"),
+    shortDescription: "Short description",
+    siteUrl: null,
+    slug: "dom-dlya-busi",
+    tags: ["crm"],
+    title: "Дом для Буси",
+    ...overrides
+  } satisfies PublicSiteRecord;
+}
 
 const compileTimeStorageDependencyRejected = {
   logger: { log: vi.fn() },
@@ -188,6 +223,78 @@ describe("public catalog dry-run service", () => {
       "runReadOnlyTransaction"
     ]);
   });
+
+  it("preserves no-policy AP0 snapshot bytes even if a managed policy is present", async () => {
+    const generatedAt = new Date("2026-08-02T04:00:00.000Z");
+    const managedRecord = createManagedSiteRecord();
+    const expected = await buildPublicCatalogSnapshot({
+      generatedAt,
+      items: [mapSiteToPublicCatalogItem(managedRecord)],
+      revision: 1,
+      settings: { showDemoInModal: false }
+    });
+    const service = createPublicCatalogDryRunService({
+      imageUrlPolicy: createManagedImageUrlPolicyFixture(),
+      logger: { log: vi.fn() },
+      now: () => generatedAt,
+      prisma: {} as PrismaClient,
+      repositoryFactory: ({ tx }) => createPrismaPublicCatalogDryRunRepository({ tx }),
+      runReadOnlyTransaction: async (_prisma, operation) =>
+        operation(createReadOnlyTxFixture({ records: [managedRecord] }))
+    } as PublicCatalogDryRunServiceOptions & { imageUrlPolicy: ManagedImageUrlPolicy });
+
+    const result = await service.dryRun({ requestId: "req_no_policy_dry_run" });
+
+    expect(result).toMatchObject({
+      byteLength: Buffer.byteLength(expected.bytes, "utf8"),
+      itemsCount: expected.snapshot.itemsCount,
+      revision: expected.snapshot.revision,
+      sha256: expected.sha256,
+      status: "ready"
+    });
+  });
+
+  it.each([
+    "item_map",
+    "item_validate",
+    "catalog_validate",
+    "serialize",
+    "size_validate",
+    "hash",
+    "final_parse_validate"
+  ] as const)("logs exact %s stage for typed preparation system failures", async (stage) => {
+    const logger = { log: vi.fn() };
+    const service = createPublicCatalogDryRunService({
+      logger,
+      now: () => new Date("2026-08-02T04:00:00.000Z"),
+      prepareSnapshotCandidate: vi.fn(async () => {
+        throw new PublicCatalogSnapshotPreparationSystemError({
+          cause: new Error(`provider response token=secret at ${stage}`),
+          stage
+        });
+      }),
+      prisma: {} as PrismaClient,
+      repositoryFactory: ({ tx }) => createPrismaPublicCatalogDryRunRepository({ tx }),
+      runReadOnlyTransaction: async (_prisma, operation) => operation(createReadOnlyTxFixture())
+    });
+
+    await expect(service.dryRun({ requestId: `req_stage_${stage}` })).rejects.toMatchObject({
+      code: "PUBLIC_CATALOG_DRY_RUN_FAILED",
+      statusCode: 500
+    });
+
+    expect(logger.log).toHaveBeenCalledWith(expect.objectContaining({
+      errorClass: "PublicCatalogSnapshotPreparationSystemError",
+      errorCode: "PUBLIC_CATALOG_DRY_RUN_FAILED",
+      event: "public_catalog_dry_run_failed",
+      requestId: `req_stage_${stage}`,
+      revision: 1,
+      stage
+    }));
+    expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
+      /provider response|token=secret|postgres:\/\/|password/i
+    );
+  });
 });
 
 function createDeferredValue<T>() {
@@ -235,6 +342,64 @@ function createBuiltSnapshotFixture(): BuiltPublicCatalogSnapshot {
       schemaVersion: 1,
       settings: { showDemoInModal: false }
     }
+  };
+}
+
+function createManagedSiteRecord(): PublicSiteRecord {
+  return {
+    ...createProjectionRecord(),
+    galleryImages: [
+      {
+        alt: "",
+        assetId: "00000000-0000-4000-8000-000000000902",
+        sortOrder: 0,
+        storagePath:
+          "sites/00000000-0000-4000-8000-000000000101/gallery/00000000-0000-4000-8000-000000000902.webp",
+        url:
+          "https://cdn.example.test/sites/00000000-0000-4000-8000-000000000101/gallery/00000000-0000-4000-8000-000000000902.webp"
+      }
+    ],
+    previewImageUrl:
+      "https://cdn.example.test/sites/00000000-0000-4000-8000-000000000101/preview/00000000-0000-4000-8000-000000000901.webp"
+  };
+}
+
+function createManagedImageUrlPolicyFixture(): ManagedImageUrlPolicy {
+  return {
+    buildVariants: (input) =>
+      input.widths.map((width) => ({
+        avifUrl: `https://cdn.example.test/variants/${input.assetId}-${width}.avif`,
+        webpUrl: `https://cdn.example.test/variants/${input.assetId}-${width}.webp`,
+        width
+      })),
+    parseManagedGallery: (siteId, url) =>
+      siteId === "00000000-0000-4000-8000-000000000101" &&
+      url ===
+        "https://cdn.example.test/sites/00000000-0000-4000-8000-000000000101/gallery/00000000-0000-4000-8000-000000000902.webp"
+        ? {
+            assetId: "00000000-0000-4000-8000-000000000902",
+            siteId,
+            slot: "gallery",
+            storagePath:
+              "sites/00000000-0000-4000-8000-000000000101/gallery/00000000-0000-4000-8000-000000000902.webp",
+            url,
+            widths: [320, 640]
+          }
+        : null,
+    parseManagedPreview: (siteId, url) =>
+      siteId === "00000000-0000-4000-8000-000000000101" &&
+      url ===
+        "https://cdn.example.test/sites/00000000-0000-4000-8000-000000000101/preview/00000000-0000-4000-8000-000000000901.webp"
+        ? {
+            assetId: "00000000-0000-4000-8000-000000000901",
+            siteId,
+            slot: "preview",
+            storagePath:
+              "sites/00000000-0000-4000-8000-000000000101/preview/00000000-0000-4000-8000-000000000901.webp",
+            url,
+            widths: [320, 640]
+          }
+        : null
   };
 }
 

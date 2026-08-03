@@ -55,8 +55,26 @@ export async function buildPublicCatalogSnapshot(
   options: BuildPublicCatalogSnapshotOptions
 ): Promise<BuiltPublicCatalogSnapshot> {
   const byteLimit = options.byteLimit ?? PUBLIC_CATALOG_MAX_BYTES;
+  const snapshot = validatePublicCatalogSnapshot(createPublicCatalogSnapshot(options));
+  const bytes = serializePublicCatalogSnapshot(snapshot);
+
+  if (Buffer.byteLength(bytes, "utf8") > byteLimit) {
+    throw new Error("Public catalog snapshot bytes exceed limit.");
+  }
+
+  return {
+    bytes,
+    sha256: hashPublicCatalogSnapshotBytes(bytes),
+    snapshot
+  };
+}
+
+export function createPublicCatalogSnapshot(
+  options: Omit<BuildPublicCatalogSnapshotOptions, "byteLimit">
+): PublicCatalogSnapshot {
   const items = [...options.items].sort((left, right) => left.slug.localeCompare(right.slug));
-  const snapshot: PublicCatalogSnapshot = {
+
+  return {
     generatedAt: options.generatedAt.toISOString(),
     items,
     itemsCount: items.length,
@@ -66,19 +84,14 @@ export async function buildPublicCatalogSnapshot(
       showDemoInModal: options.settings.showDemoInModal
     }
   };
+}
 
-  validatePublicCatalogSnapshot(snapshot);
-  const bytes = `${stableStringify(snapshot)}\n`;
+export function serializePublicCatalogSnapshot(snapshot: PublicCatalogSnapshot): string {
+  return `${stableStringify(snapshot)}\n`;
+}
 
-  if (Buffer.byteLength(bytes, "utf8") > byteLimit) {
-    throw new Error("Public catalog snapshot bytes exceed limit.");
-  }
-
-  return {
-    bytes,
-    sha256: sha256Hex(bytes),
-    snapshot
-  };
+export function hashPublicCatalogSnapshotBytes(bytes: string): string {
+  return sha256Hex(bytes);
 }
 
 export function buildPublicCatalogManifest(

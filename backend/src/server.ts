@@ -131,14 +131,12 @@ export function startServer(options: StartServerOptions): StartedServer {
   });
   const publicCatalogSyncService = createPublicCatalogSyncService({
     cleanup: storageCleanupRepository,
-    imageUrlPolicy,
     logger,
     now: options.now ?? (() => new Date()),
     repository: createPrismaPublicCatalogSyncRepository({ prisma }),
     storage: publicCatalogSnapshotStorage
   });
   const publicCatalogDryRunService = createPublicCatalogDryRunService({
-    imageUrlPolicy,
     logger,
     now: options.now ?? (() => new Date()),
     prisma

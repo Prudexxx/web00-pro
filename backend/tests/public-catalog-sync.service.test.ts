@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import type { ManagedImageUrlPolicy } from "../src/modules/images/image.types.js";
+import { mapSiteToPublicCatalogItem } from "../src/modules/public-catalog/public-catalog.mapper.js";
+import {
+  buildPublicCatalogSnapshot
+} from "../src/modules/public-catalog/public-catalog.snapshot.js";
 import {
   createPublicCatalogSyncService,
-  type PublicCatalogSyncRepository
+  type PublicCatalogSyncRepository,
+  type PublicCatalogSyncServiceOptions
 } from "../src/modules/public-catalog/public-catalog-sync.service.js";
 import {
   preparePublicCatalogSnapshotCandidate
@@ -266,23 +271,15 @@ describe("public catalog sync service", () => {
     });
   });
 
-  it("uses the same managed image policy as dry-run during shared snapshot preparation", async () => {
+  it("preserves pre-AP0 no-policy snapshot bytes even if a managed policy is present", async () => {
     const imageUrlPolicy = createManagedImageUrlPolicyFixture();
     const managedRecord = createManagedSiteRecord();
-    const direct = await preparePublicCatalogSnapshotCandidate({
+    const direct = await buildPublicCatalogSnapshot({
       generatedAt: now,
-      imageUrlPolicy,
-      records: [managedRecord],
+      items: [mapSiteToPublicCatalogItem(managedRecord)],
       revision: 1,
       settings: { showDemoInModal: true }
     });
-
-    expect(direct.status).toBe("ready");
-    if (direct.status !== "ready") {
-      throw new Error("Expected managed preparation to be ready.");
-    }
-    expect(direct.built.snapshot.items[0]?.previewImage?.variants).toHaveLength(2);
-    expect(direct.built.snapshot.items[0]?.galleryImages[0]?.variants).toHaveLength(2);
 
     const repository = createRepository();
     vi.mocked(repository.listSnapshotSites).mockResolvedValue([managedRecord]);
@@ -293,15 +290,21 @@ describe("public catalog sync service", () => {
       now: () => now,
       repository,
       storage
-    });
+    } as PublicCatalogSyncServiceOptions & { imageUrlPolicy: ManagedImageUrlPolicy });
 
     const result = await service.syncOnce({ requestId: "req_managed_preparation" });
+    const snapshotUpload = vi.mocked(storage.uploadJson).mock.calls.find(
+      ([input]) => input.path === "public-catalog/v1/snapshots/revision-1.json"
+    )?.[0];
 
     expect(result).toMatchObject({
-      checksum: direct.built.sha256,
-      itemsCount: direct.itemsCount,
+      checksum: direct.sha256,
+      itemsCount: direct.snapshot.itemsCount,
       status: "ready"
     });
+    expect(snapshotUpload?.body).toBe(direct.bytes);
+    expect(snapshotUpload?.body).not.toContain("\"variants\"");
+    expect(snapshotUpload?.body).not.toContain("\"previewImage\":{\"assetId\"");
   });
 
   it("runs one bounded second pass when dirty state remains pending after finalize", async () => {
