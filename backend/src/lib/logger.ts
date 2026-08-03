@@ -76,6 +76,7 @@ export interface GalleryImageFileLogEntry {
 }
 
 export type PublicCatalogSyncFailedStage =
+  | "bucket_ensure"
   | "db_finalize"
   | "lease"
   | "manifest_upload"
@@ -93,6 +94,25 @@ export interface PublicCatalogSyncFailedStageLogEntry {
   requestId: string;
   revision: number | null;
   stage: PublicCatalogSyncFailedStage;
+}
+
+export type PublicCatalogSnapshotStorageOperation =
+  | "bucket_create"
+  | "bucket_inspect"
+  | "bucket_verify"
+  | "manifest_fetch"
+  | "manifest_upload"
+  | "snapshot_fetch"
+  | "snapshot_upload";
+
+export type PublicCatalogSnapshotStoragePathKind = "bucket" | "manifest" | "snapshot";
+
+export interface PublicCatalogSnapshotStorageFailedLogEntry {
+  durationMs: number;
+  operation: PublicCatalogSnapshotStorageOperation;
+  pathKind: PublicCatalogSnapshotStoragePathKind;
+  requestId: string;
+  upstreamStatus: number | null;
 }
 
 export interface PublicCatalogDryRunCompletedLogEntry {
@@ -123,6 +143,7 @@ export type AppLogEntry =
   | LifecycleLogEntry
   | PublicCatalogDryRunCompletedLogEntry
   | PublicCatalogDryRunFailedLogEntry
+  | PublicCatalogSnapshotStorageFailedLogEntry
   | PublicCatalogSyncFailedStageLogEntry
   | RequestLogEntry
   | SiteCreateDraftFailedLogEntry;

@@ -12,6 +12,7 @@
     "admin:bootstrap": "node dist/cli/admin-bootstrap.command.js",
     "catalog:reconcile-legacy-assets": "node dist/cli/reconcile-canonical-legacy-assets.js",
     "storage:bootstrap": "node dist/cli/storage-bootstrap.command.js",
+    "storage:bootstrap-public-catalog": "node dist/cli/public-catalog-storage-bootstrap.command.js",
     "storage:cleanup": "node dist/cli/storage-cleanup.command.js",
     "user:create": "node dist/cli/user-create.command.js",
     "user:set-password": "node dist/cli/user-set-password.command.js",

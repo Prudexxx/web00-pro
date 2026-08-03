@@ -19,6 +19,9 @@ import {
   buildPublicCatalogSnapshotPath,
   type PublicCatalogSnapshotStorage
 } from "./public-catalog-snapshot-storage.js";
+import type {
+  PublicCatalogStorageBucketManager
+} from "./public-catalog-storage-bucket.js";
 import type { PublicSiteRecord } from "./public-catalog.types.js";
 import type {
   CreateStorageCleanupJobInput,
@@ -77,6 +80,7 @@ export type PublicCatalogSyncResult =
 
 export interface PublicCatalogSyncServiceOptions {
   cleanup?: Pick<StorageCleanupRepository, "createJobs">;
+  bucketManager: Pick<PublicCatalogStorageBucketManager, "ensureReady">;
   createLeaseId?: () => string;
   leaseTtlMs?: number;
   logger?: Pick<AppLogger, "log">;
@@ -172,6 +176,16 @@ export function createPublicCatalogSyncService(
                 snapshotPath: buildPublicCatalogSnapshotPath(lease.revision)
               };
             }
+          );
+
+          await runPublicCatalogSyncStage(
+            {
+              logger: options.logger,
+              requestId: input.requestId,
+              revision: lease.revision,
+              stage: "bucket_ensure"
+            },
+            () => options.bucketManager.ensureReady({ requestId: input.requestId })
           );
 
           await runPublicCatalogSyncStage(

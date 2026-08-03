@@ -14,8 +14,16 @@ describe("production CLI scripts", () => {
     expect(pkg.scripts?.["user:set-password"]).toBe(
       "node dist/cli/user-set-password.command.js"
     );
+    expect(pkg.scripts?.["storage:bootstrap-public-catalog"]).toBe(
+      "node dist/cli/public-catalog-storage-bootstrap.command.js"
+    );
 
-    for (const name of ["admin:bootstrap", "user:create", "user:set-password"]) {
+    for (const name of [
+      "admin:bootstrap",
+      "storage:bootstrap-public-catalog",
+      "user:create",
+      "user:set-password"
+    ]) {
       const script = pkg.scripts?.[name] ?? "";
 
       expect(script).not.toContain("tsx");
@@ -34,6 +42,7 @@ describe("production CLI scripts", () => {
     expect(start).toBe("node dist/server.js");
     expect(start).not.toContain("migrate");
     expect(start).not.toContain("seed");
+    expect(start).not.toContain("storage:bootstrap-public-catalog");
     expect(start).not.toContain("storage:bootstrap");
     expect(start).not.toContain("admin:bootstrap");
   });

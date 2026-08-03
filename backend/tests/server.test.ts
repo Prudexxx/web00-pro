@@ -214,6 +214,26 @@ describe("app/server auth integration boundary", () => {
     expect(serverSource).toContain("createPrismaReadinessProbe");
   });
 
+  it("wires public catalog bucket self-healing only into sync composition", () => {
+    const serverSource = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+    const syncBlock =
+      serverSource.match(
+        /const publicCatalogSyncService = createPublicCatalogSyncService\(\{[\s\S]*?\n  \}\);/
+      )?.[0] ?? "";
+    const dryRunBlock =
+      serverSource.match(
+        /const publicCatalogDryRunService = createPublicCatalogDryRunService\(\{[\s\S]*?\n  \}\);/
+      )?.[0] ?? "";
+
+    expect(serverSource).toContain("createPublicCatalogStorageBucketManager");
+    expect(serverSource).toContain("const publicCatalogStorageBucket");
+    expect(syncBlock).toContain("bucketManager: publicCatalogStorageBucket");
+    expect(syncBlock).not.toContain("imageUrlPolicy");
+    expect(serverSource).not.toContain(".ensureReady(");
+    expect(dryRunBlock).not.toContain("storage");
+    expect(dryRunBlock).not.toContain("Bucket");
+  });
+
   it("uses numeric trust proxy hops and never boolean true", () => {
     const app = createApp({ env: testEnv, trustProxyHops: 2 });
 

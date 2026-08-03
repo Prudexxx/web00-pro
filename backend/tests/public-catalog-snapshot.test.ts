@@ -225,7 +225,7 @@ describe("public catalog snapshot", () => {
       sha256: snapshot.sha256,
       snapshotPath: "public-catalog/v1/snapshots/revision-9.json",
       snapshotUrl:
-        "https://storage.example.test/storage/v1/object/public/web00-catalog-images/public-catalog/v1/snapshots/revision-9.json"
+        "https://storage.example.test/storage/v1/object/public/web00-public-catalog/public-catalog/v1/snapshots/revision-9.json"
     });
 
     expect(validatePublicCatalogManifest(manifest)).toEqual(manifest);
@@ -233,7 +233,7 @@ describe("public catalog snapshot", () => {
       validatePublicCatalogManifest({
         ...manifest,
         snapshotUrl:
-          "https://storage.example.test/storage/v1/object/public/web00-catalog-images/public-catalog/v1/snapshots/revision-9.json?token=leak"
+          "https://storage.example.test/storage/v1/object/public/web00-public-catalog/public-catalog/v1/snapshots/revision-9.json?token=leak"
       })
     ).toThrow(/snapshotUrl/i);
   });

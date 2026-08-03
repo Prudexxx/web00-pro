@@ -64,6 +64,7 @@ import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/pu
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
 import { createPrismaPublicCatalogSyncRepository } from "./modules/public-catalog/public-catalog-control.repository.js";
 import { createPublicCatalogDryRunService } from "./modules/public-catalog/public-catalog-dry-run.service.js";
+import { createPublicCatalogStorageBucketManager } from "./modules/public-catalog/public-catalog-storage-bucket.js";
 import { createPublicCatalogSnapshotStorage } from "./modules/public-catalog/public-catalog-snapshot-storage.js";
 import { createPublicCatalogSyncService } from "./modules/public-catalog/public-catalog-sync.service.js";
 import {
@@ -116,7 +117,12 @@ export function startServer(options: StartServerOptions): StartedServer {
   });
   const imageStorage = createSupabaseImageStorage(options.storageConfig);
   const publicCatalogSnapshotStorage = createPublicCatalogSnapshotStorage(
-    options.storageConfig
+    options.storageConfig,
+    { logger }
+  );
+  const publicCatalogStorageBucket = createPublicCatalogStorageBucketManager(
+    options.storageConfig,
+    { logger }
   );
   const storageCleanupRepository = createPrismaStorageCleanupRepository({ prisma });
   const storageCleanupWorker = createStorageCleanupWorker({
@@ -130,6 +136,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     repository
   });
   const publicCatalogSyncService = createPublicCatalogSyncService({
+    bucketManager: publicCatalogStorageBucket,
     cleanup: storageCleanupRepository,
     logger,
     now: options.now ?? (() => new Date()),

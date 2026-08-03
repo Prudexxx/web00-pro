@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import {
   PUBLIC_CATALOG_MANIFEST_PATH,
+  PUBLIC_CATALOG_STORAGE_BUCKET,
   buildPublicCatalogSnapshotPath,
   createPublicCatalogSnapshotStorage
 } from "../src/modules/public-catalog/public-catalog-snapshot-storage.js";
@@ -38,24 +39,25 @@ describe("public catalog snapshot storage", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(PUBLIC_CATALOG_STORAGE_BUCKET).toBe("web00-public-catalog");
     expect(fetchImpl.mock.calls[0]![0].toString()).toBe(
-      "https://storage.example.test/storage/v1/object/web00-catalog-images/public-catalog/v1/snapshots/revision-7.json"
+      "https://storage.example.test/storage/v1/object/web00-public-catalog/public-catalog/v1/snapshots/revision-7.json"
     );
     expect(fetchImpl.mock.calls[0]![1]).toMatchObject({
       method: "POST",
       headers: expect.objectContaining({
-        "content-type": "application/json; charset=utf-8",
+        "content-type": "application/json",
         "x-upsert": "false"
       })
     });
     expect(fetchImpl.mock.calls[1]![0].toString()).toBe(
-      "https://storage.example.test/storage/v1/object/web00-catalog-images/public-catalog/v1/manifest.json"
+      "https://storage.example.test/storage/v1/object/web00-public-catalog/public-catalog/v1/manifest.json"
     );
     expect(fetchImpl.mock.calls[1]![1]).toMatchObject({
       method: "POST",
       headers: expect.objectContaining({
         "cache-control": "no-cache",
-        "content-type": "application/json; charset=utf-8",
+        "content-type": "application/json",
         "x-upsert": "true"
       })
     });
@@ -81,7 +83,7 @@ describe("public catalog snapshot storage", () => {
     expect(text).toBe("{\"schemaVersion\":1}\n");
     expect(url.origin).toBe("https://storage.example.test");
     expect(url.pathname).toBe(
-      "/storage/v1/object/public/web00-catalog-images/public-catalog/v1/manifest.json"
+      "/storage/v1/object/public/web00-public-catalog/public-catalog/v1/manifest.json"
     );
     expect(url.searchParams.get("v")).toMatch(/^req_fetch-/);
     expect(fetchImpl.mock.calls[0]![1]).toMatchObject({
@@ -138,5 +140,136 @@ describe("public catalog snapshot storage", () => {
       expect(JSON.stringify(error)).not.toContain("raw provider body");
       expect(JSON.stringify(error)).not.toContain("service_role_value_must_not_leak");
     }
+  });
+
+  it.each([400, 401, 403, 404, 409, 500])(
+    "logs only safe upstream snapshot upload status %i",
+    async (status) => {
+      let cancelled = false;
+      const body = new ReadableStream({
+        cancel() {
+          cancelled = true;
+        },
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              "raw provider body token=secret service_role_value_must_not_leak storage/v1/object"
+            )
+          );
+        }
+      });
+      const fetchImpl = vi.fn().mockResolvedValue(new Response(body, { status }));
+      const logger = { log: vi.fn() };
+      const ticks = [100, 137];
+      const storage = createPublicCatalogSnapshotStorage(config, {
+        fetchImpl,
+        logger,
+        now: () => ticks.shift() ?? 137
+      });
+
+      await expect(
+        storage.uploadJson({
+          body: "{\"schemaVersion\":1}\n",
+          path: buildPublicCatalogSnapshotPath(9),
+          requestId: "req_diag_upload",
+          timeoutMs: 1_000,
+          upsert: false
+        })
+      ).rejects.toMatchObject({
+        code: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+        statusCode: 503
+      });
+
+      expect(cancelled).toBe(true);
+      expect(logger.log).toHaveBeenCalledWith({
+        durationMs: 37,
+        operation: "snapshot_upload",
+        pathKind: "snapshot",
+        requestId: "req_diag_upload",
+        upstreamStatus: status
+      });
+      expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
+        /token=|service_role_value_must_not_leak|authorization|apikey|storage\/v1\/object|raw provider body/i
+      );
+    }
+  );
+
+  it("logs manifest fetch failures without leaking provider body or URL details", async () => {
+    let cancelled = false;
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode("provider says service_role_value_must_not_leak")
+            );
+          }
+        }),
+        { status: 403 }
+      )
+    );
+    const logger = { log: vi.fn() };
+    const ticks = [5, 13];
+    const storage = createPublicCatalogSnapshotStorage(config, {
+      fetchImpl,
+      logger,
+      now: () => ticks.shift() ?? 13
+    });
+
+    await expect(
+      storage.fetchText({
+        cacheBust: false,
+        path: PUBLIC_CATALOG_MANIFEST_PATH,
+        requestId: "req_manifest_diag",
+        timeoutMs: 1_000
+      })
+    ).rejects.toMatchObject({
+      code: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+      statusCode: 503
+    });
+
+    expect(cancelled).toBe(true);
+    expect(logger.log).toHaveBeenCalledWith({
+      durationMs: 8,
+      operation: "manifest_fetch",
+      pathKind: "manifest",
+      requestId: "req_manifest_diag",
+      upstreamStatus: 403
+    });
+    expect(JSON.stringify(logger.log.mock.calls)).not.toMatch(
+      /service_role_value_must_not_leak|storage\/v1\/object|provider says/i
+    );
+  });
+
+  it("does not let diagnostic logger failures replace storage provider errors", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response("", { status: 500 }));
+    const logger = {
+      log: vi.fn(() => {
+        throw new Error("logger failed with token=secret");
+      })
+    };
+    const storage = createPublicCatalogSnapshotStorage(config, {
+      fetchImpl,
+      logger
+    });
+
+    await expect(
+      storage.uploadJson({
+        body: "{\"schemaVersion\":1}\n",
+        path: buildPublicCatalogSnapshotPath(10),
+        requestId: "req_logger_failed",
+        timeoutMs: 1_000,
+        upsert: false
+      })
+    ).rejects.toMatchObject({
+      code: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+      message: "Public catalog storage is unavailable.",
+      statusCode: 503
+    });
+
+    expect(logger.log).toHaveBeenCalledTimes(1);
   });
 });

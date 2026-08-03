@@ -6,7 +6,7 @@ import {
   buildPublicCatalogSnapshot
 } from "../src/modules/public-catalog/public-catalog.snapshot.js";
 import {
-  createPublicCatalogSyncService,
+  createPublicCatalogSyncService as createPublicCatalogSyncServiceBase,
   type PublicCatalogSyncRepository,
   type PublicCatalogSyncServiceOptions
 } from "../src/modules/public-catalog/public-catalog-sync.service.js";
@@ -17,6 +17,9 @@ import {
   PUBLIC_CATALOG_CONTROL_ID,
   type PublicCatalogControlState
 } from "../src/modules/public-catalog/public-catalog-control.repository.js";
+import type {
+  PublicCatalogStorageBucketManager
+} from "../src/modules/public-catalog/public-catalog-storage-bucket.js";
 import type { PublicCatalogSnapshotStorage } from "../src/modules/public-catalog/public-catalog-snapshot-storage.js";
 import type { PublicSiteRecord } from "../src/modules/public-catalog/public-catalog.types.js";
 
@@ -104,7 +107,7 @@ function createStorage(): PublicCatalogSnapshotStorage & { operations: string[] 
       return text;
     }),
     getPublicUrl: vi.fn((path) => {
-      return `https://storage.example.test/storage/v1/object/public/web00-catalog-images/${path}`;
+      return `https://storage.example.test/storage/v1/object/public/web00-public-catalog/${path}`;
     }),
     uploadJson: vi.fn(async (input) => {
       operations.push(`upload:${input.path}:${input.upsert}`);
@@ -113,7 +116,35 @@ function createStorage(): PublicCatalogSnapshotStorage & { operations: string[] 
   };
 }
 
+function createStorageBucket(
+  operations: string[] = []
+): Pick<PublicCatalogStorageBucketManager, "ensureReady"> {
+  return {
+    ensureReady: vi.fn(async () => {
+      operations.push("bucket_ensure");
+      return { status: "ready" as const };
+    })
+  };
+}
+
+type PublicCatalogSyncServiceOptionsForTest =
+  Omit<PublicCatalogSyncServiceOptions, "bucketManager"> & {
+    bucketManager?: Pick<PublicCatalogStorageBucketManager, "ensureReady">;
+    imageUrlPolicy?: ManagedImageUrlPolicy;
+    storage: PublicCatalogSnapshotStorage & { operations?: string[] };
+  };
+
+function createPublicCatalogSyncService(options: PublicCatalogSyncServiceOptionsForTest) {
+  const { bucketManager, imageUrlPolicy: _imageUrlPolicy, ...serviceOptions } = options;
+
+  return createPublicCatalogSyncServiceBase({
+    ...serviceOptions,
+    bucketManager: bucketManager ?? createStorageBucket(options.storage.operations)
+  });
+}
+
 type FailedSyncStage =
+  | "bucket_ensure"
   | "lease"
   | "settings"
   | "projection"
@@ -187,7 +218,9 @@ describe("public catalog sync service", () => {
   it("publishes version then manifest and finalizes only after verification", async () => {
     const repository = createRepository();
     const storage = createStorage();
+    const bucketManager = createStorageBucket(storage.operations);
     const service = createPublicCatalogSyncService({
+      bucketManager,
       createLeaseId: () => "lease_test",
       now: () => now,
       repository,
@@ -202,11 +235,14 @@ describe("public catalog sync service", () => {
       status: "ready"
     });
     expect(storage.operations).toEqual([
+      "bucket_ensure",
       "upload:public-catalog/v1/snapshots/revision-1.json:false",
       "fetch:public-catalog/v1/snapshots/revision-1.json:false",
       "upload:public-catalog/v1/manifest.json:true",
       "fetch:public-catalog/v1/manifest.json:true"
     ]);
+    expect(bucketManager.ensureReady).toHaveBeenCalledTimes(1);
+    expect(bucketManager.ensureReady).toHaveBeenCalledWith({ requestId: "req_sync" });
     expect(repository.finalizeLease).toHaveBeenCalledWith(
       expect.objectContaining({
         checksum: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -217,6 +253,41 @@ describe("public catalog sync service", () => {
         snapshotPath: "public-catalog/v1/snapshots/revision-1.json"
       })
     );
+    expect(repository.failLease).not.toHaveBeenCalled();
+  });
+
+  it("continues publication when bucket ensure creates the bucket", async () => {
+    const repository = createRepository();
+    const storage = createStorage();
+    const bucketManager = {
+      ensureReady: vi.fn(async () => {
+        storage.operations.push("bucket_ensure:created");
+        return { status: "created" as const };
+      })
+    };
+    const service = createPublicCatalogSyncService({
+      bucketManager,
+      createLeaseId: () => "lease_bucket_created",
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_bucket_created" });
+
+    expect(result).toMatchObject({
+      itemsCount: 1,
+      publishedRevision: 1,
+      status: "ready"
+    });
+    expect(bucketManager.ensureReady).toHaveBeenCalledTimes(1);
+    expect(storage.operations).toEqual([
+      "bucket_ensure:created",
+      "upload:public-catalog/v1/snapshots/revision-1.json:false",
+      "fetch:public-catalog/v1/snapshots/revision-1.json:false",
+      "upload:public-catalog/v1/manifest.json:true",
+      "fetch:public-catalog/v1/manifest.json:true"
+    ]);
     expect(repository.failLease).not.toHaveBeenCalled();
   });
 
@@ -290,7 +361,7 @@ describe("public catalog sync service", () => {
       now: () => now,
       repository,
       storage
-    } as PublicCatalogSyncServiceOptions & { imageUrlPolicy: ManagedImageUrlPolicy });
+    });
 
     const result = await service.syncOnce({ requestId: "req_managed_preparation" });
     const snapshotUpload = vi.mocked(storage.uploadJson).mock.calls.find(
@@ -305,6 +376,34 @@ describe("public catalog sync service", () => {
     expect(snapshotUpload?.body).toBe(direct.bytes);
     expect(snapshotUpload?.body).not.toContain("\"variants\"");
     expect(snapshotUpload?.body).not.toContain("\"previewImage\":{\"assetId\"");
+  });
+
+  it("does not ensure the bucket when snapshot build is blocked", async () => {
+    const repository = createRepository();
+    vi.mocked(repository.listSnapshotSites).mockResolvedValueOnce([
+      { ...siteRecord, slug: "" }
+    ]);
+    const storage = createStorage();
+    const bucketManager = createStorageBucket(storage.operations);
+    const service = createPublicCatalogSyncService({
+      bucketManager,
+      createLeaseId: () => "lease_build_blocked",
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_build_blocked" });
+
+    expect(result).toMatchObject({
+      errorCode: "PUBLIC_CATALOG_SYNC_FAILED",
+      publishedRevision: 0,
+      status: "failed"
+    });
+    expect(bucketManager.ensureReady).not.toHaveBeenCalled();
+    expect(storage.operations).toEqual([]);
+    expect(storage.uploadJson).not.toHaveBeenCalled();
+    expect(repository.finalizeLease).not.toHaveBeenCalled();
   });
 
   it("runs one bounded second pass when dirty state remains pending after finalize", async () => {
@@ -366,10 +465,12 @@ describe("public catalog sync service", () => {
     });
     expect(repository.acquireLease).toHaveBeenCalledTimes(2);
     expect(storage.operations).toEqual([
+      "bucket_ensure",
       "upload:public-catalog/v1/snapshots/revision-1.json:false",
       "fetch:public-catalog/v1/snapshots/revision-1.json:false",
       "upload:public-catalog/v1/manifest.json:true",
       "fetch:public-catalog/v1/manifest.json:true",
+      "bucket_ensure",
       "upload:public-catalog/v1/snapshots/revision-2.json:false",
       "fetch:public-catalog/v1/snapshots/revision-2.json:false",
       "upload:public-catalog/v1/manifest.json:true",
@@ -464,6 +565,104 @@ describe("public catalog sync service", () => {
     });
   });
 
+  it("stops before snapshot upload when bucket ensure reports storage unavailable", async () => {
+    const repository = createRepository();
+    const storage = createStorage();
+    const logger = { log: vi.fn() };
+    const bucketManager = {
+      ensureReady: vi.fn(async () => {
+        throw new AppError({
+          code: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+          message: "Public catalog storage is unavailable.",
+          statusCode: 503
+        });
+      })
+    };
+    const service = createPublicCatalogSyncService({
+      bucketManager,
+      createLeaseId: () => "lease_bucket_unavailable",
+      logger,
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_bucket_unavailable" });
+
+    expect(result).toMatchObject({
+      errorCode: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+      publishedRevision: 0,
+      requestId: "req_bucket_unavailable",
+      status: "failed"
+    });
+    expect(storage.uploadJson).not.toHaveBeenCalled();
+    expect(storage.fetchText).not.toHaveBeenCalled();
+    expect(repository.finalizeLease).not.toHaveBeenCalled();
+    expect(repository.failLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorCode: "PUBLIC_CATALOG_STORAGE_UNAVAILABLE",
+        requestId: "req_bucket_unavailable"
+      })
+    );
+    expectSafeStageLog({
+      logger,
+      requestId: "req_bucket_unavailable",
+      revision: 1,
+      stage: "bucket_ensure"
+    });
+  });
+
+  it("stops before snapshot upload when bucket ensure reports configuration invalid", async () => {
+    const repository = createRepository();
+    const storage = createStorage();
+    const logger = { log: vi.fn() };
+    const storageBucket = {
+      ensureReady: vi.fn(async () => {
+        throw new AppError({
+          code: "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID",
+          message: "Public catalog storage configuration is invalid.",
+          statusCode: 503
+        });
+      })
+    };
+    const service = createPublicCatalogSyncService({
+      bucketManager: storageBucket,
+      createLeaseId: () => "lease_bucket_invalid",
+      logger,
+      now: () => now,
+      repository,
+      storage
+    });
+
+    const result = await service.syncOnce({ requestId: "req_bucket_invalid" });
+
+    expect(result).toMatchObject({
+      errorCode: "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID",
+      publishedRevision: 0,
+      requestId: "req_bucket_invalid",
+      status: "failed"
+    });
+    expect(storageBucket.ensureReady).toHaveBeenCalledWith({
+      requestId: "req_bucket_invalid"
+    });
+    expect(storage.uploadJson).not.toHaveBeenCalled();
+    expect(storage.fetchText).not.toHaveBeenCalled();
+    expect(repository.finalizeLease).not.toHaveBeenCalled();
+    expect(repository.failLease).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorCode: "PUBLIC_CATALOG_STORAGE_CONFIGURATION_INVALID",
+        leaseId: "lease_test",
+        requestId: "req_bucket_invalid"
+      })
+    );
+    expectSafeStageLog({
+      logger,
+      requestId: "req_bucket_invalid",
+      revision: 1,
+      stage: "bucket_ensure"
+    });
+  });
+
   it("keeps unknown provider errors generic and excludes secrets from diagnostics", async () => {
     const repository = createRepository();
     vi.mocked(repository.acquireLease).mockResolvedValueOnce({
@@ -523,6 +722,7 @@ describe("public catalog sync service", () => {
     "settings",
     "projection",
     "snapshot_build",
+    "bucket_ensure",
     "snapshot_upload",
     "snapshot_verify",
     "manifest_upload",
@@ -531,6 +731,7 @@ describe("public catalog sync service", () => {
   ] as const)("logs a safe diagnostic event when %s fails", async (stage) => {
     const repository = createRepository();
     const storage = createStorage();
+    const storageBucket = createStorageBucket(storage.operations);
     const logger = { log: vi.fn() };
     const requestId = `req_stage_${stage}`;
     const failure = secretBearingError();
@@ -557,6 +758,8 @@ describe("public catalog sync service", () => {
       vi.mocked(repository.listSnapshotSites).mockResolvedValueOnce([
         { ...siteRecord, slug: "" }
       ]);
+    } else if (stage === "bucket_ensure") {
+      vi.mocked(storageBucket.ensureReady).mockRejectedValueOnce(failure);
     } else if (stage === "snapshot_upload") {
       storage.uploadJson = vi.fn(async (input) => {
         if (input.path.endsWith("/revision-1.json")) {
@@ -591,6 +794,7 @@ describe("public catalog sync service", () => {
     }
 
     const service = createPublicCatalogSyncService({
+      bucketManager: storageBucket,
       createLeaseId: () => "lease_stage",
       logger,
       now: () => now,
