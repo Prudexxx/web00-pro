@@ -1663,11 +1663,11 @@
           : context.solution
             ? "Запуск готового сайта"
             : "Сайт под заказ";
-    const introComment = context.solution
+    const introComment = esc(context.solution
       ? `Интересует решение: ${context.solution.title}`
       : context.tariff
         ? `Интересует тариф: ${context.tariff.title}`
-        : "";
+        : "");
     const selectedSiteLabel = context.solution?.title || context.service || "Подберём по анкете";
     const selectedTariffLabel = context.tariff?.title || (context.solution ? "Подберём после анкеты" : "Не выбран");
     const selectedPriceLabel = context.tariff?.price || (context.solution ? solutionPrice(context.solution) : context.estimate || "после анкеты");

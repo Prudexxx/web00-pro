@@ -41,14 +41,14 @@ function apiResponse(items) {
   });
 }
 
-async function loadCatalog({ fetch, storage = createStorage(), data = staticData() } = {}) {
+async function loadCatalog({ fetch, storage = createStorage(), data = staticData(), config } = {}) {
   const browser = createFakeBrowser();
   browser.window.WEB00_TEST_MODE = true;
   browser.window.WEB00_DATA = data;
   browser.window.localStorage = storage;
   browser.window.fetch = fetch;
   await loadClassicScript("assets/js/runtime-config.js", browser);
-  browser.window.WEB00_CONFIG = Object.freeze({
+  browser.window.WEB00_CONFIG = Object.freeze(config || {
     apiBaseUrl: "https://api.example.test",
     requestTimeoutMs: 1000,
     staticFallbackEnabled: true,
@@ -190,4 +190,95 @@ test("last-known-good persistence rejects a serialized catalog over two MiB in b
 
   assert.equal(saved, false);
   assert.equal(storage.snapshot()[LKG_KEY], undefined);
+});
+
+test("API and last-known-good catalog URLs reject backslash authority forms", async () => {
+  const unsafeUrl = "/\\evil.example/demo";
+  const { catalog } = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([])) });
+  const apiItem = catalog.normalizeApiSite({
+    ...apiSite("api-safe"),
+    demoUrl: unsafeUrl,
+    previewImageUrl: unsafeUrl,
+    previewImage: { url: "assets/img/previews/safe.png", variants: [{ avifUrl: unsafeUrl, webpUrl: unsafeUrl, width: 640 }] },
+    galleryImages: [unsafeUrl],
+  });
+
+  assert.equal(apiItem.demoUrl, "");
+  assert.equal(apiItem.previewImageUrl, "");
+  assert.deepEqual(plain(apiItem.previewImage.variants), []);
+  assert.deepEqual(plain(apiItem.galleryImages), []);
+
+  const storage = createStorage({
+    [LKG_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      savedAt: "2026-08-03T00:00:00.000Z",
+      items: [{
+        slug: "lkg-safe",
+        title: "Cached safe title",
+        category: "Goods",
+        categorySlug: "goods",
+        demoUrl: unsafeUrl,
+        previewImage: { url: "assets/img/previews/safe.png", variants: [{ avifUrl: unsafeUrl, webpUrl: unsafeUrl, width: 640 }] },
+        galleryImages: [unsafeUrl],
+      }],
+    }),
+  });
+  const cached = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([])), storage });
+  const [lkgItem] = cached.catalog.getInitialCatalog().items;
+
+  assert.equal(lkgItem.demoUrl, "");
+  assert.deepEqual(plain(lkgItem.previewImage.variants), []);
+  assert.deepEqual(plain(lkgItem.galleryImages), []);
+});
+
+test("fallback flag controls empty initial failure states without clearing populated state", async () => {
+  const disabledConfig = {
+    apiBaseUrl: "https://api.example.test",
+    requestTimeoutMs: 1000,
+    staticFallbackEnabled: false,
+  };
+  const emptyFailure = await loadCatalog({
+    fetch: createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 })),
+    config: disabledConfig,
+    data: { SOLUTIONS: [] },
+  });
+  const fatal = await emptyFailure.catalog.resolveCatalogForPage({ kind: "solutions" });
+
+  assert.equal(fatal.lifecycle, "fatal");
+  assert.equal(fatal.items.length, 0);
+  assert.equal(fatal.staticFallbackActive, false);
+
+  const noCurrent = await loadCatalog({
+    fetch: createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 })),
+    config: disabledConfig,
+  });
+  const noCurrentResult = await noCurrent.catalog.resolveCatalogForPage({ kind: "solutions" });
+
+  assert.equal(noCurrentResult.lifecycle, "fatal");
+  assert.equal(noCurrentResult.items.length, 0);
+  assert.equal(noCurrentResult.staticFallbackActive, false);
+
+  const populatedFailure = await loadCatalog({
+    fetch: createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 })),
+    config: disabledConfig,
+  });
+  const current = populatedFailure.catalog.getInitialCatalog();
+  const preserved = await populatedFailure.catalog.resolveCatalogForPage({ kind: "solutions", currentState: current });
+
+  assert.equal(preserved.lifecycle, "ready");
+  assert.deepEqual(plain(preserved.items.map((item) => item.slug)), ["static-site"]);
+  assert.equal(preserved.staticFallbackActive, true);
+});
+
+test("non-canonical last-known-good timestamp falls back to bundled static data", async () => {
+  const storage = createStorage({
+    [LKG_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      savedAt: "2026-02-30T00:00:00.000Z",
+      items: [{ slug: "lkg-site", title: "Cached title", category: "Goods", categorySlug: "goods" }],
+    }),
+  });
+  const { catalog } = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([])), storage });
+
+  assert.equal(catalog.getInitialCatalog().source, "static");
 });

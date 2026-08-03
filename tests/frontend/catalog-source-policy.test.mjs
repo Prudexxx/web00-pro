@@ -82,7 +82,7 @@ async function loadCatalog(options = {}) {
   return { calls, catalog: browser.window.WEB00_CATALOG };
 }
 
-test("configured API empty result preserves the bundled static catalog", async () => {
+test("configured API empty result remains empty when fallback is disabled and no state exists", async () => {
   const { catalog } = await loadCatalog({
     config: {
       apiBaseUrl: "https://api.example.test",
@@ -98,13 +98,13 @@ test("configured API empty result preserves the bundled static catalog", async (
 
   const result = await catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(result.source, "static");
-  assert.equal(result.lifecycle, "ready");
-  assert.equal(result.staticFallbackActive, true);
-  assert.deepEqual(plain(result.items.map((item) => item.slug)), ["static-site"]);
+  assert.equal(result.source, "api");
+  assert.equal(result.lifecycle, "empty");
+  assert.equal(result.staticFallbackActive, false);
+  assert.deepEqual(plain(result.items), []);
 });
 
-test("configured API error preserves the current bundled catalog", async () => {
+test("configured API error remains fatal when fallback is disabled and no state exists", async () => {
   const { catalog } = await loadCatalog({
     config: {
       apiBaseUrl: "https://api.example.test",
@@ -117,10 +117,10 @@ test("configured API error preserves the current bundled catalog", async () => {
 
   const result = await catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(result.source, "static");
-  assert.equal(result.lifecycle, "ready");
-  assert.equal(result.staticFallbackActive, true);
-  assert.deepEqual(plain(result.items.map((item) => item.slug)), ["deleted-static-card"]);
+  assert.equal(result.source, "api");
+  assert.equal(result.lifecycle, "fatal");
+  assert.equal(result.staticFallbackActive, false);
+  assert.deepEqual(plain(result.items), []);
 });
 
 test("empty API config keeps local static preview mode", async () => {
@@ -170,7 +170,7 @@ test("configured API performs a fresh fetch on repeated catalog resolution", asy
   assert.equal(calls.length, 2);
 });
 
-test("popular catalog preserves its populated initial state when the API fails", async () => {
+test("popular catalog returns fatal when fallback is disabled and no state exists", async () => {
   const { catalog } = await loadCatalog({
     config: {
       apiBaseUrl: "https://api.example.test",
@@ -183,8 +183,8 @@ test("popular catalog preserves its populated initial state when the API fails",
 
   const result = await catalog.resolveCatalogForPage({ kind: "popular", limit: 3 });
 
-  assert.equal(result.source, "static");
-  assert.equal(result.lifecycle, "ready");
-  assert.equal(result.staticFallbackActive, true);
-  assert.equal(result.items.length, 1);
+  assert.equal(result.source, "api");
+  assert.equal(result.lifecycle, "fatal");
+  assert.equal(result.staticFallbackActive, false);
+  assert.equal(result.items.length, 0);
 });

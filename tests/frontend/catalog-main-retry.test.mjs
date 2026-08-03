@@ -9,9 +9,41 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function createSolutionsPage(fetch) {
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function classList() {
+  return { add: () => undefined, remove: () => undefined, toggle: () => undefined };
+}
+
+function createSolutionsPage(fetch, options = {}) {
   const browser = createFakeBrowser({ page: "solutions" });
   const history = [];
+  const statusNodes = {
+    "[data-catalog-loading]": { hidden: true },
+    "[data-catalog-fallback]": { hidden: true },
+    "[data-catalog-empty]": { hidden: true },
+    "[data-catalog-fatal]": { hidden: true },
+  };
+  const leadForm = { addEventListener: () => undefined, elements: {} };
+  const leadContent = {
+    querySelector(selector) {
+      return selector === "[data-lead-form]" ? leadForm : null;
+    },
+    set innerHTML(value) {
+      this.html = String(value);
+    },
+    html: "",
+  };
+  const leadModal = { classList: classList(), setAttribute: () => undefined };
+  let gridHtml = "";
   const grid = {
     querySelector() {
       return null;
@@ -19,31 +51,41 @@ function createSolutionsPage(fetch) {
     querySelectorAll() {
       return [];
     },
+    get innerHTML() {
+      return gridHtml;
+    },
     set innerHTML(value) {
-      history.push(String(value));
+      gridHtml = String(value);
+      history.push(gridHtml);
     },
   };
   browser.window.fetch = fetch;
   browser.window.addEventListener = () => undefined;
   browser.window.navigator = {};
-  browser.window.localStorage = { getItem: () => null, setItem: () => undefined };
-  browser.document.body.classList = { toggle: () => undefined };
-  browser.document.documentElement = { classList: { toggle: () => undefined } };
-  browser.document.querySelector = (selector) => selector === "[data-solutions-grid]" ? grid : null;
+  browser.window.localStorage = options.storage || { getItem: () => null, setItem: () => undefined };
+  browser.document.body.classList = classList();
+  browser.document.documentElement = { classList: classList() };
+  browser.document.querySelector = (selector) => {
+    if (selector === "[data-solutions-grid]") return grid;
+    if (selector === "[data-lead-modal-content]") return leadContent;
+    if (selector === "[data-modal=\"lead\"]") return leadModal;
+    return statusNodes[selector] || null;
+  };
   browser.document.querySelectorAll = () => [];
-  browser.window.WEB00_DATA = {
+  browser.window.WEB00_DATA = options.data || {
     SOLUTIONS: [{ id: "static-site", title: "Static site", active: true }],
     SERVICES: [],
     PRICING: [],
   };
   browser.window.WEB00_TEST_MODE = true;
-  return { browser, history };
+  return { browser, grid, history, leadContent, statusNodes };
 }
 
-async function bootSolutionsPage(fetch) {
-  const { browser, history } = createSolutionsPage(fetch);
+async function bootSolutionsPage(fetch, options = {}) {
+  const page = createSolutionsPage(fetch, options);
+  const { browser } = page;
   await loadClassicScript("assets/js/runtime-config.js", browser);
-  browser.window.WEB00_CONFIG = Object.freeze({
+  browser.window.WEB00_CONFIG = Object.freeze(options.config || {
     apiBaseUrl: "https://api.example.test",
     requestTimeoutMs: 1000,
     staticFallbackEnabled: true,
@@ -52,7 +94,7 @@ async function bootSolutionsPage(fetch) {
   await loadClassicScript("assets/js/main.js", browser);
   const [onReady] = browser.listeners.get("DOMContentLoaded");
   await onReady();
-  return { browser, history };
+  return page;
 }
 
 function apiSuccess(slug) {
@@ -85,4 +127,59 @@ test("background catalog retries stop after three total attempts", async () => {
 
   assert.equal(fetch.calls.length, 3);
   assert.match(history.at(-1), /Static site/);
+});
+
+test("static cards remain visible while the initial API request is loading", async () => {
+  const pending = createDeferred();
+  const { grid, history, statusNodes } = await bootSolutionsPage(createFakeFetch(() => pending.promise));
+
+  assert.match(history.at(-1), /Static site/);
+  assert.equal(statusNodes["[data-catalog-loading]"].hidden, false);
+  assert.match(grid.innerHTML, /Static site/);
+
+  pending.resolve(apiSuccess("site-custom"));
+  await delay(20);
+});
+
+test("last-known-good cards paint before a sleeping API responds", async () => {
+  const pending = createDeferred();
+  const storage = {
+    getItem() {
+      return JSON.stringify({
+        schemaVersion: 1,
+        savedAt: "2026-08-03T00:00:00.000Z",
+        items: [{ slug: "site-lkg", title: "LKG site", category: "Goods", categorySlug: "goods" }],
+      });
+    },
+    setItem: () => undefined,
+  };
+  const { history, statusNodes } = await bootSolutionsPage(createFakeFetch(() => pending.promise), { storage });
+
+  assert.match(history.at(-1), /LKG site/);
+  assert.equal(statusNodes["[data-catalog-loading]"].hidden, false);
+
+  pending.resolve(apiSuccess("site-custom"));
+  await delay(20);
+});
+
+test("catalog API title cannot escape the rendered lead-form textarea", async () => {
+  const payload = "</textarea><img src=x onerror=alert(1)>";
+  const { browser, leadContent } = await bootSolutionsPage(createFakeFetch(() => jsonResponse({
+    data: [{ slug: "xss-site", title: payload, category: { slug: "goods", title: "Goods" } }],
+    meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
+  })));
+  await delay(20);
+  const clickHandler = browser.listeners.get("click")[0];
+
+  clickHandler({
+    preventDefault: () => undefined,
+    target: {
+      closest(selector) {
+        return selector === "[data-open-lead]" ? { dataset: { solutionId: "xss-site" } } : null;
+      },
+    },
+  });
+
+  assert.doesNotMatch(leadContent.html, /<\/textarea><img src=x onerror=alert\(1\)>/);
+  assert.match(leadContent.html, /&lt;\/textarea&gt;&lt;img src=x onerror=alert\(1\)&gt;/);
 });

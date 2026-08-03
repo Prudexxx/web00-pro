@@ -72,6 +72,7 @@
 
   function isSafeRelativePath(value) {
     if (!value || CONTROL_RE.test(value) || hasUnsafePercentEncoding(value)) return false;
+    if (value.includes("\\")) return false;
     if (value.startsWith("//")) return false;
     if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return false;
     if (value.startsWith("/api") || value === "/api") return false;
@@ -82,7 +83,7 @@
 
   function sanitizePublicUrl(value, options = {}) {
     const raw = text(value);
-    if (!raw || CONTROL_RE.test(raw) || hasUnsafePercentEncoding(raw)) return "";
+    if (!raw || raw.includes("\\") || CONTROL_RE.test(raw) || hasUnsafePercentEncoding(raw)) return "";
     if (raw.startsWith("//")) return "";
 
     const purpose = options.purpose || "destination";
@@ -346,7 +347,8 @@
       if (!raw || serializedByteLength(raw) > MAX_LKG_SERIALIZED_BYTES) return null;
       const payload = JSON.parse(raw);
       if (!payload || payload.schemaVersion !== LKG_SCHEMA_VERSION || typeof payload.savedAt !== "string") return null;
-      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.savedAt) || Number.isNaN(Date.parse(payload.savedAt))) return null;
+      const savedAt = new Date(payload.savedAt);
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.savedAt) || Number.isNaN(savedAt.getTime()) || savedAt.toISOString() !== payload.savedAt) return null;
       const items = normalizeCachedCatalogItems(payload.items);
       return items ? { source: "lkg", lifecycle: "ready", items, errorCode: "" } : null;
     } catch (_) {
@@ -572,7 +574,10 @@
   }
 
   function preservedCatalogState(currentState, errorCode, flags = {}) {
-    const fallback = hasCatalogItems(currentState) ? currentState : getInitialCatalog();
+    const config = flags.config || getConfig();
+    const fallback = hasCatalogItems(currentState)
+      ? currentState
+      : readLastKnownGoodCatalog() || (config.staticFallbackEnabled ? getStaticCatalog() : null);
     if (hasCatalogItems(fallback)) {
       return withStateFlags({
         source: fallback.source,
@@ -587,10 +592,14 @@
     }
     return withStateFlags({
       source: "api",
-      lifecycle: "fatal",
+      lifecycle: errorCode === "WEB00_API_EMPTY" ? "empty" : "fatal",
       items: [],
       errorCode,
-    }, { apiAvailable: false, staticFallbackActive: false, degraded: true });
+    }, {
+      apiAvailable: flags.apiAvailable === true,
+      staticFallbackActive: false,
+      degraded: true,
+    });
   }
 
   function getRequestChannel(name) {
@@ -621,7 +630,7 @@
         return null;
       }
       if (!hasCatalogItems(result)) {
-        return preservedCatalogState(currentState, "WEB00_API_EMPTY", { apiAvailable: true });
+        return preservedCatalogState(currentState, "WEB00_API_EMPTY", { apiAvailable: true, config });
       }
       if (kind === "solutions") saveLastKnownGoodCatalog(result.items);
       return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
@@ -630,7 +639,7 @@
       if (channel.isStale(request.sequence)) {
         return null;
       }
-      return preservedCatalogState(currentState, errorCode);
+      return preservedCatalogState(currentState, errorCode, { config });
     } finally {
       channel.finish(request.sequence);
     }

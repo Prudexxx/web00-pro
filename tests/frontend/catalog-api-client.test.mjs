@@ -168,7 +168,7 @@ test("invalid runtime config disables API and keeps static mode safe", async () 
   assert.equal(fetch.calls.length, 0);
 });
 
-test("configured API failure preserves static data regardless of legacy fallback flags", async () => {
+test("configured API failure uses the fallback flag only when no current state exists", async () => {
   const failingFetch = createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 }));
   const enabled = await loadCatalog({
     fetch: failingFetch,
@@ -189,12 +189,12 @@ test("configured API failure preserves static data regardless of legacy fallback
     data: { SOLUTIONS: [{ id: "static-site", title: "Static", active: true }] },
   });
 
-  const preserved = await disabled.catalog.resolveCatalogForPage({ kind: "solutions" });
+  const fatal = await disabled.catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(preserved.source, "static");
-  assert.equal(preserved.lifecycle, "ready");
-  assert.equal(preserved.staticFallbackActive, true);
-  assert.equal(preserved.items.length, 1);
+  assert.equal(fatal.source, "api");
+  assert.equal(fatal.lifecycle, "fatal");
+  assert.equal(fatal.staticFallbackActive, false);
+  assert.equal(fatal.items.length, 0);
 });
 
 test("successful API page result is fetched fresh on repeated resolution", async () => {
