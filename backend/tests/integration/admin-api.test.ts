@@ -205,6 +205,62 @@ describe("admin sites API", () => {
     expect(rejected.body.error.code).toBe("VALIDATION_ERROR");
   });
 
+  it("normalizes a blank demo URL through publication, public listing, AP0 readiness, and snapshot preparation", async () => {
+    const category = await createCategory("null-demo-catalog-category");
+    const slug = `${fixturePrefix}null-demo-catalog`;
+    const app = createAdminApp();
+    const created = await request(app)
+      .post("/api/admin/sites")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .set("X-Request-Id", `${requestPrefix}null_demo_create`)
+      .send({
+        categoryId: category.id,
+        demoUrl: "",
+        shortDescription: "Short",
+        slug,
+        title: "Null Demo Catalog"
+      })
+      .expect(201);
+
+    expect(created.body.data.demoUrl).toBeNull();
+    const siteId = created.body.data.id as string;
+    await expect(prisma.site.findUnique({ where: { id: siteId } })).resolves.toMatchObject({
+      demoUrl: null
+    });
+
+    await prisma.site.update({
+      data: { previewImageUrl: "assets/img/previews/null-demo-catalog.png" },
+      where: { id: siteId }
+    });
+    const patched = await request(app)
+      .patch(`/api/admin/sites/${siteId}`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .set("X-Request-Id", `${requestPrefix}null_demo_patch`)
+      .send({ demoUrl: "   " })
+      .expect(200);
+
+    expect(patched.body.data.demoUrl).toBeNull();
+    await request(app)
+      .post(`/api/admin/sites/${siteId}/publish`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .set("X-Request-Id", `${requestPrefix}null_demo_publish`)
+      .expect(200);
+
+    const listed = await request(app).get("/api/sites").expect(200);
+    expect(listed.body.data).toEqual([
+      expect.objectContaining({ demoUrl: null, slug, title: "Null Demo Catalog" })
+    ]);
+
+    const dryRun = await request(app)
+      .post("/api/admin/public-catalog/dry-run")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .set("X-Request-Id", `${requestPrefix}null_demo_dry_run`)
+      .send({ confirmation: "WEB00-PUBLIC-CATALOG-DRY-RUN-V1" })
+      .expect(200);
+
+    expect(dryRun.body.data).toMatchObject({ itemsCount: 1, status: "ready" });
+  });
+
   it("enforces PATCH permission semantics and explicit field mapping", async () => {
     const category = await createCategory("site-patch-category");
     const draft = await createSite({ categoryId: category.id, slug: "draft-patch" });

@@ -22,6 +22,12 @@ const requiredCheckConstraints = [
   "sites_price_positive_check",
   "sites_development_days_positive_check",
   "sites_demo_mode_check",
+  "sites_demo_url_not_blank_check",
+  "sites_site_url_not_blank_check",
+  "sites_preview_image_url_not_blank_check",
+  "sites_demo_local_url_not_blank_check",
+  "sites_external_demo_url_not_blank_check",
+  "sites_original_demo_url_not_blank_check",
   "storage_cleanup_jobs_status_check",
   "storage_cleanup_jobs_attempts_non_negative_check",
   "audit_logs_entity_type_check"
@@ -48,6 +54,13 @@ const publishCanonicalMigrationPath = join(
   "prisma",
   "migrations",
   "20260729120000_publish_canonical_catalog",
+  "migration.sql"
+);
+const normalizeOptionalSiteUrlsMigrationPath = join(
+  process.cwd(),
+  "prisma",
+  "migrations",
+  "20260803000000_normalize_optional_site_urls",
   "migration.sql"
 );
 const ownerCloneSlug = "drova-test-copy-20260729";
@@ -466,6 +479,115 @@ describe("B2 PostgreSQL migration", () => {
       }
     });
   });
+
+  it("normalizes only whitespace-only optional site URL values and adds stable blank guards", async () => {
+    const migrationSql = readFileSync(normalizeOptionalSiteUrlsMigrationPath, "utf8");
+
+    for (const column of [
+      "demo_url",
+      "site_url",
+      "preview_image_url",
+      "demo_local_url",
+      "external_demo_url",
+      "original_demo_url"
+    ]) {
+      expect(migrationSql).toContain(
+        `WHERE ${column} IS NOT NULL AND btrim(${column}) = ''`
+      );
+      expect(migrationSql).toContain(`CHECK (${column} IS NULL OR btrim(${column}) <> '')`);
+    }
+    expect(migrationSql).not.toContain("site-custom");
+
+    await withTestClient(async (client) => {
+      await client.query("BEGIN");
+
+      try {
+        await client.query(`
+          CREATE TEMP TABLE sites (
+            demo_url text,
+            site_url text,
+            preview_image_url text,
+            demo_local_url text,
+            external_demo_url text,
+            original_demo_url text
+          )
+        `);
+        await client.query(`
+          INSERT INTO sites (
+            demo_url,
+            site_url,
+            preview_image_url,
+            demo_local_url,
+            external_demo_url,
+            original_demo_url
+          ) VALUES (
+            ' ',
+            'https://example.test/site',
+            '   ',
+            '',
+            '    ',
+            '  '
+          )
+        `);
+
+        await client.query(migrationSql);
+
+        const result = await client.query<{
+          demo_url: string | null;
+          site_url: string | null;
+          preview_image_url: string | null;
+          demo_local_url: string | null;
+          external_demo_url: string | null;
+          original_demo_url: string | null;
+        }>("SELECT * FROM sites");
+        expect(result.rows).toEqual([
+          {
+            demo_url: null,
+            site_url: "https://example.test/site",
+            preview_image_url: null,
+            demo_local_url: null,
+            external_demo_url: null,
+            original_demo_url: null
+          }
+        ]);
+      } finally {
+        await client.query("ROLLBACK").catch(() => undefined);
+      }
+    });
+  });
+
+  it("enforces optional URL blank guards while allowing null and non-empty values", async () => {
+    await withTestClient(async (client) => {
+      const suffix = randomUUID();
+      const columns = [
+        "demo_url",
+        "site_url",
+        "preview_image_url",
+        "demo_local_url",
+        "external_demo_url",
+        "original_demo_url"
+      ] as const;
+
+      for (const column of columns) {
+        await expectRejectedTransaction(
+          client,
+          async () => undefined,
+          async () => insertOptionalUrlSite(client, `${column}-blank-${suffix}`, column, "   ")
+        );
+        await expectAllowedTransaction(client, async () =>
+          insertOptionalUrlSite(client, `${column}-null-${suffix}`, column, null)
+        );
+        await expectAllowedTransaction(client, async () =>
+          insertOptionalUrlSite(
+            client,
+            `${column}-valid-${suffix}`,
+            column,
+            `https://example.test/${column}/${suffix}`
+          )
+        );
+      }
+    });
+  });
 });
 
 describe("canonical catalog publish migration", () => {
@@ -565,6 +687,39 @@ async function expectRejectedTransaction(
   } finally {
     await client.query("ROLLBACK").catch(() => undefined);
   }
+}
+
+async function expectAllowedTransaction(client: Client, action: () => Promise<unknown>): Promise<void> {
+  await client.query("BEGIN");
+
+  try {
+    await action();
+  } finally {
+    await client.query("ROLLBACK").catch(() => undefined);
+  }
+}
+
+async function insertOptionalUrlSite(
+  client: Client,
+  slug: string,
+  column:
+    | "demo_url"
+    | "site_url"
+    | "preview_image_url"
+    | "demo_local_url"
+    | "external_demo_url"
+    | "original_demo_url",
+  value: string | null
+): Promise<void> {
+  const categoryId = await createCategory(client, `category-${slug}`);
+
+  await client.query(
+    `
+      INSERT INTO sites (slug, title, category_id, short_description, ${column}, updated_at)
+      VALUES ($1, $2, $3, $4, $5, now())
+    `,
+    [slug, "Site", categoryId, "Description", value]
+  );
 }
 
 async function createCategory(client: Client, slug: string): Promise<string> {

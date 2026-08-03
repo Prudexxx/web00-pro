@@ -15,13 +15,16 @@ const slugSchema = z.string().trim().toLowerCase().min(1).max(120).regex(slugPat
 const uuidSchema = z.string().uuid();
 const nullableText = (max: number) =>
   z.string().trim().max(max).transform(emptyToNull).nullable();
-const optionalUrl = z
-  .string()
-  .trim()
-  .url()
-  .max(2048)
-  .refine(isAllowedAdminUrl, "Введите ссылку с протоколом http или https.")
-  .nullable();
+const optionalUrl = z.preprocess(
+  emptyUrlToNull,
+  z
+    .string()
+    .trim()
+    .url()
+    .max(2048)
+    .refine(isAllowedAdminUrl, "Введите ссылку с протоколом http или https.")
+    .nullable()
+);
 const stringArraySchema = (maxItems: number, maxLength: number) =>
   z.array(z.string().trim().min(1).max(maxLength)).max(maxItems);
 const demoModeSchema = z.preprocess(
@@ -79,7 +82,11 @@ function isAllowedAdminUrl(value: string): boolean {
   try {
     const url = new URL(value);
 
-    return url.protocol === "http:" || url.protocol === "https:";
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.username === "" &&
+      url.password === ""
+    );
   } catch {
     return false;
   }
@@ -361,4 +368,8 @@ function validationError(details: readonly ErrorDetail[]): AppError {
 
 function emptyToNull(value: string): string | null {
   return value.length === 0 ? null : value;
+}
+
+function emptyUrlToNull(value: unknown): unknown {
+  return typeof value === "string" && value.trim().length === 0 ? null : value;
 }

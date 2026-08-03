@@ -72,6 +72,28 @@ describe("public catalog snapshot preparation", () => {
     });
   });
 
+  it("prepares a catalog card with a normalized null demo URL", async () => {
+    const record = createProjectionRecord({
+      demoUrl: null,
+      slug: "null-demo-url",
+      title: "Null demo URL"
+    });
+    const result = await preparePublicCatalogSnapshotCandidate({
+      generatedAt: new Date("2026-08-02T04:00:00.000Z"),
+      records: [record],
+      revision: 22,
+      settings: { showDemoInModal: false }
+    });
+
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") {
+      throw new Error("Expected normalized null demo URL to prepare a card.");
+    }
+    expect(result.built.snapshot.items).toEqual([
+      expect.objectContaining({ demoUrl: null, slug: "null-demo-url", title: "Null demo URL" })
+    ]);
+  });
+
   it("returns safe duplicate slug blockers for each conflicting card", async () => {
     const result = await preparePublicCatalogSnapshotCandidate({
       generatedAt: new Date("2026-08-02T04:00:00.000Z"),

@@ -128,6 +128,37 @@ describe("admin site validation", () => {
       "Invalid request."
     );
   });
+
+  it.each(["demoUrl", "siteUrl", "demoLocalUrl", "externalDemoUrl", "originalDemoUrl"] as const)(
+    "normalizes blank %s input to null while preserving absent patch fields",
+    (field) => {
+      expect(parseCreateAdminSiteInput({ ...baseCreate, [field]: "" })).toMatchObject({
+        [field]: null
+      });
+      expect(parseUpdateAdminSiteInput({ [field]: "   " }, "admin")).toEqual({ [field]: null });
+      expect(parseUpdateAdminSiteInput({ title: "Updated" }, "admin")).not.toHaveProperty(field);
+    }
+  );
+
+  it.each(["demoUrl", "siteUrl", "demoLocalUrl", "externalDemoUrl", "originalDemoUrl"] as const)(
+    "preserves valid https %s input",
+    (field) => {
+      const value = `https://example.test/${field}`;
+
+      expect(parseCreateAdminSiteInput({ ...baseCreate, [field]: value })).toMatchObject({
+        [field]: value
+      });
+    }
+  );
+
+  it.each([
+    "javascript:alert(1)",
+    "ftp://example.test/file",
+    "not a URL",
+    "https://user:password@example.test/private"
+  ])("rejects unsafe non-empty optional URLs with VALIDATION_ERROR", (value) => {
+    expectValidationError(() => parseCreateAdminSiteInput({ ...baseCreate, demoUrl: value }));
+  });
 });
 
 function expectValidationDetail(
@@ -146,4 +177,18 @@ function expectValidationDetail(
   }
 
   throw new Error(`Expected validation error for ${expected.path}.`);
+}
+
+function expectValidationError(action: () => unknown): void {
+  try {
+    action();
+  } catch (error) {
+    expect(error).toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "Invalid request."
+    });
+    return;
+  }
+
+  throw new Error("Expected validation error.");
 }

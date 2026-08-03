@@ -76,24 +76,29 @@ describe("admin site route validation", () => {
     }
   });
 
-  it("returns field validation before create service for invalid URLs", async () => {
+  it.each([
+    "javascript:alert(1)",
+    "ftp://example.test/file",
+    "not a URL",
+    "https://user:password@example.test/private"
+  ])("returns validation before create service for invalid URLs", async (demoUrl) => {
     const service = createSiteService();
     const response = await request(createApp(service))
       .post("/api/admin/sites")
       .send({
         ...validCreatePayload(),
-        demoUrl: "javascript:alert(1)"
+        demoUrl
       })
       .expect(400);
 
-    expect(response.body.error).toMatchObject({
-      code: "VALIDATION_ERROR",
-      details: [
-        {
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(response.body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
           path: "demoUrl"
-        }
-      ]
-    });
+        })
+      ])
+    );
     expect(service.createDraft).not.toHaveBeenCalled();
   });
 

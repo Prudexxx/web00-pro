@@ -72,7 +72,7 @@ describe("WEB00 canonical catalog safety", () => {
       deliveryLabel: "от 2 дней",
       demoLocalUrl: null,
       demoMode: "none",
-      demoUrl: "",
+      demoUrl: null,
       externalDemoUrl: null,
       originalDemoUrl: null,
       previewImageUrl: "assets/img/previews/drova-home.png",
