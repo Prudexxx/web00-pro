@@ -60,38 +60,42 @@ model Category {
 }
 
 model Site {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug             String    @unique(map: "sites_slug_key") @db.Text
-  title            String    @db.Text
-  categoryId       String    @map("category_id") @db.Uuid
-  legacyTitle      String?   @map("legacy_title") @db.Text
-  shortDescription String    @map("short_description") @db.Text
-  fullDescription  String?   @map("full_description") @db.Text
-  features         String[]  @default([])
-  tags             String[]  @default([])
-  demoUrl          String?   @map("demo_url") @db.Text
-  siteUrl          String?   @map("site_url") @db.Text
-  previewImageUrl  String?   @map("preview_image_url") @db.Text
-  galleryImages    Json      @default("[]") @map("gallery_images") @db.JsonB
-  previewType      String?   @map("preview_type") @db.Text
-  demoMode         String?   @map("demo_mode") @db.Text
-  demoLocalUrl     String?   @map("demo_local_url") @db.Text
-  externalDemoUrl  String?   @map("external_demo_url") @db.Text
-  originalDemoUrl  String?   @map("original_demo_url") @db.Text
-  priceAmountCents Int?      @map("price_amount_cents")
-  priceLabel       String?   @map("price_label") @db.Text
-  developmentDays  Int?      @map("development_days")
-  deliveryLabel    String?   @map("delivery_label") @db.Text
-  status           String    @default("draft") @db.Text
-  active           Boolean   @default(true)
-  featured         Boolean   @default(false)
-  views            Int       @default(0)
-  sortOrder        Int       @default(0) @map("sort_order")
-  publishedAt      DateTime? @map("published_at") @db.Timestamptz(6)
-  deletedAt        DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-  category         Category  @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug               String             @unique(map: "sites_slug_key") @db.Text
+  title              String             @db.Text
+  categoryId         String             @map("category_id") @db.Uuid
+  legacyTitle        String?            @map("legacy_title") @db.Text
+  shortDescription   String             @map("short_description") @db.Text
+  fullDescription    String?            @map("full_description") @db.Text
+  features           String[]           @default([])
+  tags               String[]           @default([])
+  demoUrl            String?            @map("demo_url") @db.Text
+  siteUrl            String?            @map("site_url") @db.Text
+  previewImageUrl    String?            @map("preview_image_url") @db.Text
+  previewAssetId     String?            @map("preview_asset_id") @db.Uuid
+  galleryImages      Json               @default("[]") @map("gallery_images") @db.JsonB
+  previewType        String?            @map("preview_type") @db.Text
+  demoMode           String?            @map("demo_mode") @db.Text
+  demoLocalUrl       String?            @map("demo_local_url") @db.Text
+  externalDemoUrl    String?            @map("external_demo_url") @db.Text
+  originalDemoUrl    String?            @map("original_demo_url") @db.Text
+  priceAmountCents   Int?               @map("price_amount_cents")
+  priceLabel         String?            @map("price_label") @db.Text
+  developmentDays    Int?               @map("development_days")
+  deliveryLabel      String?            @map("delivery_label") @db.Text
+  status             String             @default("draft") @db.Text
+  active             Boolean            @default(true)
+  featured           Boolean            @default(false)
+  views              Int                @default(0)
+  sortOrder          Int                @default(0) @map("sort_order")
+  publishedAt        DateTime?          @map("published_at") @db.Timestamptz(6)
+  deletedAt          DateTime?          @map("deleted_at") @db.Timestamptz(6)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  category           Category           @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  imageAssets        SiteImageAsset[]
+  previewImage       SitePreviewImage?
+  galleryImageAssets SiteGalleryImage[]
 
   @@index([status, active, deletedAt], map: "idx_sites_status_active_deleted")
   @@index([categoryId, status, active, deletedAt], map: "idx_sites_category_public")
@@ -160,4 +164,133 @@ model PublicCatalogControl {
   @@index([syncStatus], map: "idx_public_catalog_control_sync_status")
   @@index([syncLeaseExpiresAt], map: "idx_public_catalog_control_sync_lease_expires_at")
   @@map("public_catalog_control")
+}
+
+model PublicCatalogSetting {
+  id              String   @id @db.Text
+  showDemoInModal Boolean  @default(true) @map("show_demo_in_modal")
+  autoPublish     Boolean  @default(true) @map("auto_publish")
+  desiredRevision Int      @default(1) @map("desired_revision")
+  activeRevision  Int      @default(0) @map("active_revision")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("public_catalog_settings")
+}
+
+model SiteImageAsset {
+  assetId            String             @id @map("asset_id") @db.Uuid
+  siteId             String             @map("site_id") @db.Uuid
+  slot               String             @db.Text
+  sourceSha256       String             @map("source_sha256") @db.Char(64)
+  sourceMime         String             @map("source_mime") @db.Text
+  decodedFormat      String             @map("decoded_format") @db.Text
+  width              Int
+  height             Int
+  storagePath        String             @map("storage_path") @db.Text
+  variants           Json               @db.JsonB
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  site               Site               @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  previewAssignments SitePreviewImage[] @relation("SitePreviewImageAsset")
+  galleryAssignments SiteGalleryImage[] @relation("SiteGalleryImageAsset")
+
+  @@unique([siteId, assetId, slot], map: "site_image_assets_site_asset_slot_key")
+  @@map("site_image_assets")
+}
+
+model SitePreviewImage {
+  siteId    String         @id @map("site_id") @db.Uuid
+  assetId   String         @map("asset_id") @db.Uuid
+  slot      String         @default("preview") @db.Text
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  site      Site           @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  asset     SiteImageAsset @relation("SitePreviewImageAsset", fields: [siteId, assetId, slot], references: [siteId, assetId, slot], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("site_preview_images")
+}
+
+model SiteGalleryImage {
+  siteId    String         @map("site_id") @db.Uuid
+  assetId   String         @map("asset_id") @db.Uuid
+  slot      String         @default("gallery") @db.Text
+  sortOrder Int            @map("sort_order")
+  alt       String         @default("") @db.Text
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  site      Site           @relation(fields: [siteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  asset     SiteImageAsset @relation("SiteGalleryImageAsset", fields: [siteId, assetId, slot], references: [siteId, assetId, slot], onDelete: Cascade, onUpdate: Cascade)
+
+  @@id([siteId, assetId], map: "site_gallery_images_pkey")
+  @@unique([siteId, sortOrder], map: "site_gallery_images_site_sort_order_key")
+  @@map("site_gallery_images")
+}
+
+model PublicCatalogPublicationOperation {
+  id                 String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  idempotencyKey     String                        @unique(map: "public_catalog_publication_operations_idempotency_key_key") @map("idempotency_key") @db.Text
+  action             String                        @db.Text
+  requestFingerprint String                        @map("request_fingerprint") @db.Char(64)
+  projectionHash     String?                       @map("projection_hash") @db.Char(64)
+  operationScope     String                        @map("operation_scope") @db.Text
+  operationGroupKey  String                        @map("operation_group_key") @db.Text
+  trigger            String                        @db.Text
+  actorUserId        String?                       @map("actor_user_id") @db.Uuid
+  siteId             String?                       @map("site_id") @db.Uuid
+  targetRevision     Int                           @map("target_revision")
+  status             String                        @db.Text
+  stage              String                        @db.Text
+  retryCount         Int                           @default(0) @map("retry_count")
+  leaseId            String?                       @map("lease_id") @db.Text
+  lockedAt           DateTime?                     @map("locked_at") @db.Timestamptz(6)
+  lockedBy           String?                       @map("locked_by") @db.Text
+  lastCheckpoint     Json                          @default("{}") @map("last_checkpoint") @db.JsonB
+  lastErrorCode      String?                       @map("last_error_code") @db.Text
+  requestId          String                        @map("request_id") @db.Text
+  createdAt          DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime                      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  completedAt        DateTime?                     @map("completed_at") @db.Timestamptz(6)
+  activationEvent    PublicCatalogActivationEvent?
+
+  @@map("public_catalog_publication_operations")
+}
+
+model PublicCatalogRelease {
+  revision                 Int                            @id
+  status                   String                         @db.Text
+  itemsCount               Int                            @map("items_count")
+  chunksCount              Int                            @map("chunks_count")
+  popularCount             Int                            @map("popular_count")
+  manifestPath             String                         @map("manifest_path") @db.Text
+  manifestSha256           String                         @map("manifest_sha256") @db.Char(64)
+  indexPath                String                         @map("index_path") @db.Text
+  indexSha256              String                         @map("index_sha256") @db.Char(64)
+  popularPath              String                         @map("popular_path") @db.Text
+  popularSha256            String                         @map("popular_sha256") @db.Char(64)
+  categoriesPath           String                         @map("categories_path") @db.Text
+  categoriesSha256         String                         @map("categories_sha256") @db.Char(64)
+  activePointerSha256      String?                        @map("active_pointer_sha256") @db.Char(64)
+  generatedAt              DateTime                       @map("generated_at") @db.Timestamptz(6)
+  activatedAt              DateTime?                      @map("activated_at") @db.Timestamptz(6)
+  activationEvents         PublicCatalogActivationEvent[] @relation("ActivationEventRevision")
+  previousActivationEvents PublicCatalogActivationEvent[] @relation("ActivationEventPreviousRevision")
+
+  @@map("public_catalog_releases")
+}
+
+model PublicCatalogActivationEvent {
+  id                  String                             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  operationId         String?                            @unique(map: "public_catalog_activation_events_operation_id_key") @map("operation_id") @db.Uuid
+  eventType           String                             @map("event_type") @db.Text
+  revision            Int
+  previousRevision    Int?                               @map("previous_revision")
+  activePointerSha256 String                             @map("active_pointer_sha256") @db.Char(64)
+  requestId           String                             @map("request_id") @db.Text
+  createdAt           DateTime                           @default(now()) @map("created_at") @db.Timestamptz(6)
+  operation           PublicCatalogPublicationOperation? @relation(fields: [operationId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  release             PublicCatalogRelease               @relation("ActivationEventRevision", fields: [revision], references: [revision], onDelete: Restrict, onUpdate: Cascade)
+  previousRelease     PublicCatalogRelease?              @relation("ActivationEventPreviousRevision", fields: [previousRevision], references: [revision], onDelete: Restrict, onUpdate: Cascade)
+
+  @@map("public_catalog_activation_events")
 }
