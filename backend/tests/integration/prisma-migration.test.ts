@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -72,16 +73,16 @@ const expectedMigrationDirectories = [
   "20260803000000_normalize_optional_site_urls"
 ];
 const expectedPriorMigrationHashes = {
-  "20260725061552_init/migration.sql":
-    "07fb016bf3c14a5bda6f5dad230c7df12f6d9f96499792e295fd859cb50382d6",
-  "20260729120000_publish_canonical_catalog/migration.sql":
-    "ddb80caad5a0014b4b249d233ddaf49ed49d28b94d63165dcf53d6dc7b76ec30",
-  "20260801153000_public_catalog_control/migration.sql":
-    "d8a730567e69a64755b862eaa3ba999e3a70fee7d544d6da41354b8e494e647e",
-  "20260802044500_public_catalog_audit_entity_type/migration.sql":
-    "4eaf9ce351b1afd4fd6acbff21f704d02741efe654f216f6966c9b703061c5a8",
-  "migration_lock.toml":
-    "bc487c02c71ad9cae8694647129e3ea7f32b1fe7007d0a6ced064e51022cd3fb"
+  "backend/prisma/migrations/20260725061552_init/migration.sql":
+    "e7f267155abc92f8ed53bd85b000c948c0f039ef896f779bd7d55ea387535153",
+  "backend/prisma/migrations/20260729120000_publish_canonical_catalog/migration.sql":
+    "192875399fcead0db06fc3ee406e344723979ee89a76ea50145888b78d34d8fa",
+  "backend/prisma/migrations/20260801153000_public_catalog_control/migration.sql":
+    "8f5f48b6d55c443bf5fd18ed583bb538b349415630c069bbac6e5e063f3c1682",
+  "backend/prisma/migrations/20260802044500_public_catalog_audit_entity_type/migration.sql":
+    "779540925f29f0e0d73bc7f8a98d84701ce31e5dc1c9e9eedf60107f35782698",
+  "backend/prisma/migrations/migration_lock.toml":
+    "99836963713b4f5b269ad49af0ed3d7b0b2e336115c2f92dc9ac683d139d0900"
 } as const;
 const ownerCloneSlug = "drova-test-copy-20260729";
 
@@ -138,7 +139,7 @@ describe("B2 PostgreSQL migration", () => {
 
     expect(directories).toEqual([...expectedMigrationDirectories].sort());
     for (const [relativePath, expectedHash] of Object.entries(expectedPriorMigrationHashes)) {
-      expect(sha256File(join(migrationDirectory, relativePath))).toBe(expectedHash);
+      expect(sha256CommittedBlob(relativePath)).toBe(expectedHash);
     }
   });
 
@@ -736,8 +737,10 @@ async function expectRejectedTransaction(
   }
 }
 
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+function sha256CommittedBlob(repoRelativePath: string): string {
+  const blob = execFileSync("git", ["cat-file", "blob", `HEAD:${repoRelativePath}`]);
+
+  return createHash("sha256").update(blob).digest("hex");
 }
 
 async function expectAllowedTransaction(client: Client, action: () => Promise<unknown>): Promise<void> {
