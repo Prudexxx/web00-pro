@@ -1039,6 +1039,7 @@ Expected: PASS.
 
 - Create: `backend/src/modules/public-catalog-v2/public-catalog-v2.orchestrator.ts`
 - Create: `backend/src/modules/public-catalog-v2/public-catalog-v2.reconciler.ts`
+- Create: `backend/src/modules/public-catalog-v2/public-catalog-v2.publication.ts`
 - Create: `backend/src/modules/admin/publication/publication.service.ts`
 - Create: `backend/src/modules/admin/publication/publication.repository.ts`
 - Create: `backend/src/modules/admin/publication/publication.controller.ts`
@@ -1064,9 +1065,9 @@ it("starts one publish operation and returns no false success before activation"
     .send({ action: "publish", idempotencyKey: "synthetic-key" })
     .expect(202);
 
-  expect(response.body.data.status).toBe("running");
-  expect(response.body.data.stableStatus).toBe("Черновик");
-  expect(response.body.data.buttonLabel).toBe("Публикуем...");
+  expect(response.body.data.status).toBe("queued");
+  expect(response.body.data.stableStatus).toBe("Публикуется");
+  expect(response.body.data.buttonLabel).toBe("Публикуется…");
   expect(response.body.data.label).toBeUndefined();
 });
 ```

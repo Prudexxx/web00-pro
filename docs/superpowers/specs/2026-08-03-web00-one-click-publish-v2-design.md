@@ -264,6 +264,8 @@ No HTTP success body says `Опубликовано` until the active V2 pointer
 
 `GET /api/admin/public-catalog/operations/:id`
 
+The initial `POST /api/admin/sites/:id/publication` transaction enqueues a newly-created durable operation as `queued`. Only a successful worker lease claim may transition it to `running`; replay returns the operation's current persisted status.
+
 Duplicate button clicks reuse the same idempotency key while the current submit is in flight. If the same key is replayed with the same action, site, request fingerprint and operation scope, the operation row is returned. If reused for different input, backend returns `IDEMPOTENCY_KEY_REUSED`.
 
 Two administrators pressing publish close together coalesce into one target revision. The transaction locks `public_catalog_settings` with row locking or serializable retry, allocates or updates `desiredRevision`, and creates or reuses the single nonterminal operation for the catalog `operationGroupKey`. The orchestrator builds the latest desired revision and finalizes pending when all queued public changes are included.
@@ -275,8 +277,8 @@ Response DTO:
   "data": {
     "operationId": "55555555-5555-4555-8555-555555555555",
     "status": "queued",
-    "stableStatus": "Черновик",
-    "buttonLabel": "Публикуем...",
+    "stableStatus": "Публикуется",
+    "buttonLabel": "Публикуется…",
     "retryable": false
   }
 }
