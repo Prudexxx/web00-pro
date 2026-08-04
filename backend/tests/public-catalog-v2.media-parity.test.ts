@@ -12,6 +12,7 @@ import { createAdminSiteService } from "../src/modules/admin/sites/site.service.
 import type { AdminSiteRepository } from "../src/modules/admin/sites/site.repository.js";
 import type { AdminSiteRecord } from "../src/modules/admin/sites/site.types.js";
 import type { AuthenticatedPrincipal } from "../src/modules/auth/auth.types.js";
+import type { PublicationOperationRecord } from "../src/modules/public-catalog-v2/public-catalog-v2.types.js";
 import {
   syntheticGalleryAssets,
   syntheticPreviewAsset
@@ -346,13 +347,14 @@ describe("One-Click Publish V2 publication and media contracts", () => {
       .expect(409);
 
     expect(first.body.data).toMatchObject({
-      buttonLabel: "Публикуется",
-      id: "00000000-0000-4000-8000-00000000feed",
-      stableStatus: "publishing",
-      statusUrl: "/api/admin/public-catalog/operations/00000000-0000-4000-8000-00000000feed"
+      buttonLabel: "Публикуется…",
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      retryable: false,
+      stableStatus: "Публикуется",
+      status: "queued"
     });
     expect(first.body.data.buttonLabel).not.toBe("Опубликовано");
-    expect(replay.body.data.id).toBe(first.body.data.id);
+    expect(replay.body.data.operationId).toBe(first.body.data.operationId);
     expect(conflict.body.error.code).toBe("IDEMPOTENCY_KEY_REUSED");
     expect(service.startPublication).toHaveBeenCalledTimes(3);
     expect(service.startPublication).toHaveBeenCalledWith(
@@ -401,15 +403,26 @@ describe("One-Click Publish V2 publication and media contracts", () => {
       code: "IDEMPOTENCY_KEY_REUSED"
     });
 
-    expect(first).toMatchObject({ id: "00000000-0000-4000-8000-00000000feed", replayed: false });
-    expect(replay).toMatchObject({ id: "00000000-0000-4000-8000-00000000feed", replayed: true });
-    expect(repository.createOrReplayPublicationOperation).toHaveBeenCalledTimes(3);
-    expect(repository.createOrReplayPublicationOperation).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(first).toMatchObject({
+      buttonLabel: "Публикуется…",
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      stableStatus: "Публикуется",
+      status: "queued"
+    });
+    expect(replay).toMatchObject({
+      buttonLabel: "Публикуется…",
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      stableStatus: "Публикуется",
+      status: "queued"
+    });
+    expect(repository.createOrCoalescePublicationOperation).toHaveBeenCalledTimes(3);
+    expect(repository.createOrCoalescePublicationOperation).toHaveBeenNthCalledWith(1, expect.objectContaining({
       idempotencyKey: "one-click-publish-key",
-      operationGroupKey: "public_catalog:00000000-0000-4000-8000-000000000101",
+      operationGroupKey: "public-catalog",
+      operationScope: "site:00000000-0000-4000-8000-000000000101",
       requestFingerprint: "a".repeat(64),
-      status: "queued",
-      targetRevision: expect.any(Number)
+      stage: "content_transaction",
+      targetRevision: 7
     }));
   });
 
@@ -442,38 +455,56 @@ describe("One-Click Publish V2 publication and media contracts", () => {
 
     const module = await importContractModule(publicationContractModulePath, "publication success finalizer");
     const finalizePublicationSuccess = readFunction(module, "finalizePublicationSuccess") as (
-      input: { requestedRevision: number; requestId: string; siteId: string },
-      dependencies: ReturnType<typeof createPublicationSuccessDependenciesFake>
+      input: {
+        activePointer: Record<string, unknown>;
+        dependencies: ReturnType<typeof createPublicationSuccessDependenciesFake>;
+        leaseId: string;
+        now: () => Date;
+        operation: PublicationOperationRecord;
+        release: Record<string, unknown>;
+      }
     ) => Promise<Record<string, unknown>>;
     const dependencies = createPublicationSuccessDependenciesFake();
 
     const result = await finalizePublicationSuccess({
-      requestedRevision: 7,
-      requestId: "req_finalize_success",
-      siteId: "00000000-0000-4000-8000-000000000101"
-    }, dependencies);
+      activePointer: activePointerFixture(),
+      dependencies,
+      leaseId: "synthetic-lease",
+      now: fixedNow,
+      operation: publicationOperationRecord(),
+      release: releaseFixture()
+    });
 
     expect(result).toMatchObject({
       activePointerReadBack: "verified",
       buttonLabel: "Опубликовано",
       dbFinalized: true,
       immutableReleaseVerified: true,
+      operationId: "00000000-0000-4000-8000-00000000feed",
       publicCardParity: "verified",
-      stableStatus: "published"
+      stableStatus: "Опубликовано",
+      status: "succeeded"
     });
-    expect(dependencies.readDbContentState).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000101");
-    expect(dependencies.readActivePointer).toHaveBeenCalledWith(7);
+    expect(dependencies.readDbContentState).toHaveBeenCalledWith(expect.objectContaining({
+      siteId: "00000000-0000-4000-8000-000000000101"
+    }));
+    expect(dependencies.readActivePointer).toHaveBeenCalledWith(expect.objectContaining({
+      expectedRevision: 7
+    }));
     expect(dependencies.readImmutableRelease).toHaveBeenCalledWith(expect.objectContaining({
       manifestPath: "public-catalog/v2/releases/revision-7/manifest.json",
       revision: 7
     }));
     expect(dependencies.assertPublicCardParity).toHaveBeenCalledWith(expect.objectContaining({
-      siteId: "00000000-0000-4000-8000-000000000101"
-    }), expect.objectContaining({
-      revision: 7
+      operation: expect.objectContaining({
+        siteId: "00000000-0000-4000-8000-000000000101"
+      })
     }));
-    expect(dependencies.finalizeDbPublication).toHaveBeenCalledWith(expect.objectContaining({
-      activeRevision: 7,
+    expect(dependencies.finalizePublicationTransaction).toHaveBeenCalledWith(expect.objectContaining({
+      activePointerSha256: "e".repeat(64),
+      eventType: "activate",
+      expectedPublicState: "published",
+      revision: 7,
       siteId: "00000000-0000-4000-8000-000000000101"
     }));
     expect(dependencies.callOrder).toEqual([
@@ -481,7 +512,7 @@ describe("One-Click Publish V2 publication and media contracts", () => {
       "active_pointer_read_back",
       "immutable_release_read_back",
       "public_card_parity",
-      "db_finalize"
+      "finalize_transaction"
     ]);
   });
 
@@ -502,26 +533,35 @@ describe("One-Click Publish V2 publication and media contracts", () => {
       })
     }],
     ["DB finalization cannot be persisted", {
-      finalizeDbPublication: vi.fn(async () => {
+      finalizePublicationTransaction: vi.fn(async () => {
         throw new Error("Synthetic DB finalization failure.");
       })
     }]
   ])("does not report Опубликовано when %s", async (_caseName, overrides) => {
     const module = await importContractModule(publicationContractModulePath, "publication success finalizer");
     const finalizePublicationSuccess = readFunction(module, "finalizePublicationSuccess") as (
-      input: { requestedRevision: number; requestId: string; siteId: string },
-      dependencies: ReturnType<typeof createPublicationSuccessDependenciesFake>
+      input: {
+        activePointer: Record<string, unknown>;
+        dependencies: ReturnType<typeof createPublicationSuccessDependenciesFake>;
+        leaseId: string;
+        now: () => Date;
+        operation: PublicationOperationRecord;
+        release: Record<string, unknown>;
+      }
     ) => Promise<Record<string, unknown>>;
     const dependencies = createPublicationSuccessDependenciesFake(overrides);
 
     await expect(finalizePublicationSuccess({
-      requestedRevision: 7,
-      requestId: "req_finalize_negative",
-      siteId: "00000000-0000-4000-8000-000000000101"
-    }, dependencies)).rejects.toBeDefined();
+      activePointer: activePointerFixture(),
+      dependencies,
+      leaseId: "synthetic-lease",
+      now: fixedNow,
+      operation: publicationOperationRecord(),
+      release: releaseFixture()
+    })).rejects.toBeDefined();
 
     if (_caseName !== "DB finalization cannot be persisted") {
-      expect(dependencies.finalizeDbPublication).not.toHaveBeenCalled();
+      expect(dependencies.finalizePublicationTransaction).not.toHaveBeenCalled();
     }
   });
 
@@ -571,12 +611,13 @@ interface PublicCatalogParityFixture {
 }
 
 interface DurablePublicationInput {
-  action: string;
+  action: "publish" | "unpublish";
   actor: AuthenticatedPrincipal;
   idempotencyKey: string;
   requestFingerprint: string;
   requestId: string;
   siteId: string;
+  targetRevision: number;
 }
 
 function fixedNow(): Date {
@@ -751,10 +792,11 @@ function createPublicationRouteApp(publicationRouter: Router) {
 function createPublicationServiceFake() {
   return {
     getOperation: vi.fn(async (id: string) => ({
-      buttonLabel: "Публикуется",
-      id,
-      stableStatus: "publishing",
-      statusUrl: `/api/admin/public-catalog/operations/${id}`
+      buttonLabel: "Публикуется…",
+      operationId: id,
+      retryable: false,
+      stableStatus: "Публикуется",
+      status: "queued"
     })),
     startPublication: vi.fn(async (input: {
       action: string;
@@ -770,19 +812,20 @@ function createPublicationServiceFake() {
       }
 
       return {
-        buttonLabel: "Публикуется",
-        id: "00000000-0000-4000-8000-00000000feed",
-        stableStatus: "publishing",
-        statusUrl: "/api/admin/public-catalog/operations/00000000-0000-4000-8000-00000000feed"
+        buttonLabel: "Публикуется…",
+        operationId: "00000000-0000-4000-8000-00000000feed",
+        retryable: false,
+        stableStatus: "Публикуется",
+        status: "queued"
       };
     })
   };
 }
 
 function createDurableOperationRepositoryFake() {
-  const rows = new Map<string, { operation: Record<string, unknown>; requestFingerprint: string }>();
+  const rows = new Map<string, { operation: PublicationOperationRecord; requestFingerprint: string }>();
   return {
-    createOrReplayPublicationOperation: vi.fn(async (input: {
+    createOrCoalescePublicationOperation: vi.fn(async (input: {
       idempotencyKey: string;
       requestFingerprint: string;
     }) => {
@@ -795,15 +838,15 @@ function createDurableOperationRepositoryFake() {
             statusCode: 409
           });
         }
-        return { ...existing.operation, replayed: true };
+        return existing.operation;
       }
 
-      const operation = {
-        id: "00000000-0000-4000-8000-00000000feed",
-        replayed: false,
-        stage: "queued",
+      const operation = publicationOperationRecord({
+        action: "publish",
+        idempotencyKey: input.idempotencyKey,
+        requestFingerprint: input.requestFingerprint,
         status: "queued"
-      };
+      });
       rows.set(input.idempotencyKey, { operation, requestFingerprint: input.requestFingerprint });
       return operation;
     })
@@ -818,16 +861,17 @@ function createPublicationSuccessDependenciesFake(overrides: Record<string, unkn
       callOrder.push("public_card_parity");
       return { matched: true };
     }),
-    finalizeDbPublication: vi.fn(async () => {
-      callOrder.push("db_finalize");
-      return { status: "published" };
+    finalizePublicationTransaction: vi.fn(async () => {
+      callOrder.push("finalize_transaction");
+      return { status: "succeeded" };
     }),
     readActivePointer: vi.fn(async () => {
       callOrder.push("active_pointer_read_back");
       return {
       manifestPath: "public-catalog/v2/releases/revision-7/manifest.json",
       manifestSha256: "a".repeat(64),
-      revision: 7
+      revision: 7,
+      sha256: "e".repeat(64)
       };
     }),
     readDbContentState: vi.fn(async () => {
@@ -840,9 +884,24 @@ function createPublicationSuccessDependenciesFake(overrides: Record<string, unkn
     readImmutableRelease: vi.fn(async () => {
       callOrder.push("immutable_release_read_back");
       return {
-      itemCount: 1,
+      artifacts: [{
+        kind: "index",
+        path: "public-catalog/v2/releases/revision-7/index.json",
+        sha256: "b".repeat(64)
+      }],
+      chunks: [{
+        path: "public-catalog/v2/releases/revision-7/chunks/chunk-000001.json",
+        sha256: "d".repeat(64)
+      }],
+      index: {
+        path: "public-catalog/v2/releases/revision-7/index.json",
+        sha256: "b".repeat(64)
+      },
+      itemsCount: 1,
+      manifestPath: "public-catalog/v2/releases/revision-7/manifest.json",
+      manifestSha256: "a".repeat(64),
       revision: 7,
-      sha256: "b".repeat(64)
+      sha256: "a".repeat(64)
       };
     }),
     ...overrides
@@ -857,7 +916,78 @@ function durablePublicationInput(overrides: Partial<DurablePublicationInput> = {
     requestFingerprint: "c".repeat(64),
     requestId: "req_durable_publish",
     siteId: "00000000-0000-4000-8000-000000000101",
+    targetRevision: 7,
     ...overrides
+  };
+}
+
+function publicationOperationRecord(overrides: Partial<PublicationOperationRecord> = {}): PublicationOperationRecord {
+  const now = fixedNow();
+
+  return {
+    action: "publish",
+    actorUserId: adminPrincipal().id,
+    completedAt: null,
+    createdAt: now,
+    id: "00000000-0000-4000-8000-00000000feed",
+    idempotencyKey: "00000000-0000-4000-8000-0000000000a7",
+    lastCheckpoint: {},
+    lastErrorCode: null,
+    leaseId: "synthetic-lease",
+    lockedAt: now,
+    lockedBy: "synthetic-worker",
+    nextRetryAt: null,
+    operationGroupKey: "public-catalog",
+    operationScope: "site:00000000-0000-4000-8000-000000000101",
+    projectionHash: null,
+    requestFingerprint: "a".repeat(64),
+    requestId: "req_finalize_success",
+    retryCount: 0,
+    siteId: "00000000-0000-4000-8000-000000000101",
+    stage: "active_verify",
+    status: "running",
+    targetRevision: 7,
+    trigger: "site_publication",
+    updatedAt: now,
+    ...overrides
+  };
+}
+
+function releaseFixture(): Record<string, unknown> {
+  return {
+    activationInput: {
+      manifestPath: "public-catalog/v2/releases/revision-7/manifest.json",
+      manifestSha256: "a".repeat(64),
+      revision: 7
+    },
+    manifest: {
+      artifacts: [{
+        kind: "index",
+        path: "public-catalog/v2/releases/revision-7/index.json",
+        sha256: "b".repeat(64)
+      }],
+      chunks: [{
+        path: "public-catalog/v2/releases/revision-7/chunks/chunk-000001.json",
+        sha256: "d".repeat(64)
+      }],
+      index: {
+        path: "public-catalog/v2/releases/revision-7/index.json",
+        sha256: "b".repeat(64)
+      },
+      itemsCount: 1,
+      revision: 7,
+      sha256: "a".repeat(64)
+    }
+  };
+}
+
+function activePointerFixture(): Record<string, unknown> {
+  return {
+    manifestPath: "public-catalog/v2/releases/revision-7/manifest.json",
+    manifestSha256: "a".repeat(64),
+    path: "public-catalog/v2/active.json",
+    revision: 7,
+    sha256: "e".repeat(64)
   };
 }
 

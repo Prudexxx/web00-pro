@@ -70,7 +70,8 @@ const expectedMigrationDirectories = [
   "20260729120000_publish_canonical_catalog",
   "20260801153000_public_catalog_control",
   "20260802044500_public_catalog_audit_entity_type",
-  "20260803000000_normalize_optional_site_urls"
+  "20260803000000_normalize_optional_site_urls",
+  "20260803170000_public_catalog_v2_publication"
 ];
 const expectedPriorMigrationHashes = {
   "backend/prisma/migrations/20260725061552_init/migration.sql":
@@ -81,6 +82,8 @@ const expectedPriorMigrationHashes = {
     "8f5f48b6d55c443bf5fd18ed583bb538b349415630c069bbac6e5e063f3c1682",
   "backend/prisma/migrations/20260802044500_public_catalog_audit_entity_type/migration.sql":
     "779540925f29f0e0d73bc7f8a98d84701ce31e5dc1c9e9eedf60107f35782698",
+  "backend/prisma/migrations/20260803170000_public_catalog_v2_publication/migration.sql":
+    "4645305b54102f5c8e36f98e73d76b437f6c9b2171f3aca1b9766265f223dc09",
   "backend/prisma/migrations/migration_lock.toml":
     "99836963713b4f5b269ad49af0ed3d7b0b2e336115c2f92dc9ac683d139d0900"
 } as const;

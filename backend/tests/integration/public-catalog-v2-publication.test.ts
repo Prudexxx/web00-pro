@@ -230,6 +230,39 @@ describe("Public Catalog V2 publication schema", () => {
     expect(typesModule.PUBLIC_CATALOG_V2_OPERATION_STAGES).toEqual(operationStages);
   });
 
+  it("applies one-click publish and unpublish intent before building the public projection", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const prismaFake = createProjectionIntentPrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake) as {
+      iteratePublicCatalogV2ProjectionPages(input: Record<string, unknown>): AsyncIterable<{ items: Array<{ slug: string }> }>;
+    };
+
+    await expect(
+      readProjectionSlugs(repository.iteratePublicCatalogV2ProjectionPages({
+        afterCursor: null,
+        operation: {
+          action: "publish",
+          siteId: "00000000-0000-4000-8000-0000000000d1"
+        },
+        take: 100
+      }))
+    ).resolves.toEqual([
+      "already-public",
+      "published-target",
+      "draft-target"
+    ]);
+    await expect(
+      readProjectionSlugs(repository.iteratePublicCatalogV2ProjectionPages({
+        afterCursor: null,
+        operation: {
+          action: "unpublish",
+          siteId: "00000000-0000-4000-8000-0000000000p1"
+        },
+        take: 100
+      }))
+    ).resolves.toEqual(["already-public"]);
+  });
+
   it("does not claim a publication operation that is no longer claimable after selection", async () => {
     const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
     const prismaFake = createConcurrentClaimPrismaFake();
@@ -333,6 +366,41 @@ describe("Public Catalog V2 publication schema", () => {
           lockedBy: null,
           nextRetryAt,
           status: "retry_wait"
+        }),
+        where: {
+          id: "00000000-0000-4000-8000-000000000001",
+          leaseId: "current-lease",
+          status: "running"
+        }
+      })
+    ]);
+  });
+
+  it("renews the running lease timestamp on every successful checkpoint", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const renewedAt = new Date("2026-08-03T17:07:30.000Z");
+    const prismaFake = createRetrySchedulePrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    await expect(
+      repository.recordPublicationCheckpoint({
+        lastCheckpoint: { chunk: 3 },
+        leaseId: "current-lease",
+        now: renewedAt,
+        operationId: "00000000-0000-4000-8000-000000000001",
+        stage: "chunk_upload"
+      })
+    ).resolves.toMatchObject({
+      lockedAt: renewedAt,
+      status: "running"
+    });
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lockedAt: renewedAt,
+          nextRetryAt: null,
+          stage: "chunk_upload",
+          status: "running"
         }),
         where: {
           id: "00000000-0000-4000-8000-000000000001",
@@ -561,6 +629,120 @@ function createRepositoryPrismaFake() {
       findMany: async () => []
     }
   };
+}
+
+function createProjectionIntentPrismaFake() {
+  const rows = [
+    syntheticProjectionSite({
+      id: "00000000-0000-4000-8000-0000000000p2",
+      slug: "already-public",
+      status: "published"
+    }),
+    syntheticProjectionSite({
+      id: "00000000-0000-4000-8000-0000000000p1",
+      slug: "published-target",
+      status: "published"
+    }),
+    syntheticProjectionSite({
+      id: "00000000-0000-4000-8000-0000000000d1",
+      slug: "draft-target",
+      status: "draft"
+    })
+  ];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async () => null,
+      findUnique: async () => null,
+      updateMany: async () => ({ count: 0 }),
+      update: async () => syntheticOperationRecord()
+    },
+    site: {
+      findMany: async (args: { take?: number; where?: Record<string, unknown> }) =>
+        rows.filter((row) => projectionRowMatchesWhere(row, args.where ?? {})).slice(0, args.take ?? rows.length)
+    }
+  };
+}
+
+async function readProjectionSlugs(pages: AsyncIterable<{ items: Array<{ slug: string }> }>): Promise<string[]> {
+  const slugs: string[] = [];
+
+  for await (const page of pages) {
+    slugs.push(...page.items.map((item) => item.slug));
+  }
+
+  return slugs;
+}
+
+function projectionRowMatchesWhere(row: ReturnType<typeof syntheticProjectionSite>, where: Record<string, unknown>): boolean {
+  if (where.active !== undefined && row.active !== where.active) {
+    return false;
+  }
+  if (where.deletedAt === null && row.deletedAt !== null) {
+    return false;
+  }
+  if (typeof where.status === "string" && row.status !== where.status) {
+    return false;
+  }
+  if (typeof where.id === "string" && row.id !== where.id) {
+    return false;
+  }
+  if (isRecord(where.id) && typeof where.id.not === "string" && row.id === where.id.not) {
+    return false;
+  }
+  if (Array.isArray(where.OR) && !where.OR.some((branch) => isRecord(branch) && projectionRowMatchesWhere(row, branch))) {
+    return false;
+  }
+  if (Array.isArray(where.AND) && !where.AND.every((branch) => isRecord(branch) && projectionRowMatchesWhere(row, branch))) {
+    return false;
+  }
+
+  return true;
+}
+
+function syntheticProjectionSite(overrides: { id: string; slug: string; status: string }) {
+  return {
+    active: true,
+    category: {
+      description: "Synthetic category",
+      slug: "synthetic-category",
+      sortOrder: 1,
+      title: "Synthetic category"
+    },
+    categoryId: "00000000-0000-4000-8000-00000000ca00",
+    createdAt: overrides.slug === "already-public"
+      ? new Date("2026-08-03T17:00:02.000Z")
+      : new Date("2026-08-03T17:00:01.000Z"),
+    deletedAt: null,
+    deliveryLabel: "Ready",
+    demoMode: "modal",
+    demoUrl: "https://example.test/demo",
+    featured: false,
+    features: ["Synthetic"],
+    fullDescription: "Synthetic projection fixture",
+    galleryImageAssets: [],
+    id: overrides.id,
+    previewImage: null,
+    priceLabel: "Synthetic price",
+    publishedAt: overrides.status === "published" ? new Date("2026-08-03T17:00:00.000Z") : null,
+    shortDescription: "Synthetic short description",
+    siteUrl: "https://example.test/site",
+    slug: overrides.slug,
+    sortOrder: overrides.slug === "already-public" ? 1 : 2,
+    status: overrides.status,
+    tags: ["synthetic"],
+    title: overrides.slug,
+    updatedAt: new Date("2026-08-03T17:00:00.000Z"),
+    views: 0
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createConcurrentClaimPrismaFake() {

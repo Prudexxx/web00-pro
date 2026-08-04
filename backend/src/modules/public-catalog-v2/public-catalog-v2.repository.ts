@@ -3,20 +3,24 @@ import {
   PUBLIC_CATALOG_V2_TERMINAL_OPERATION_STATUSES,
   type ClaimPublicationOperationInput,
   type CreatePublicationOperationInput,
+  type FinalizePublicationTransactionInput,
   type FinalizePublicationOperationInput,
   type PublicationCheckpointInput,
   type PublicationOperationRecord,
   type PublicCatalogV2ProjectionCursor,
   type PublicCatalogV2MediaAsset,
+  type PublicCatalogV2ProjectionOperationIntent,
   type PublicCatalogV2ProjectionPage,
   type PublicCatalogV2ProjectionRecord,
   type PublicCatalogV2Repository,
   type RecordActivationEventInput
 } from "./public-catalog-v2.types.js";
 import { publicCategoryVisibilityWhere } from "../public-catalog/public-catalog.visibility.js";
+import { buildPublicCatalogV2ActivePath } from "./public-catalog-v2.paths.js";
 
 const DEFAULT_OPERATION_STAGE = "content_transaction";
 const DEFAULT_OPERATION_STATUS = "queued";
+const PUBLIC_CATALOG_SETTING_ID = "public-catalog";
 
 type ClaimQuery = {
   orderBy: Array<Record<string, "asc" | "desc">>;
@@ -24,19 +28,49 @@ type ClaimQuery = {
 };
 
 export interface PublicCatalogV2PrismaClient {
+  $transaction?<T>(callback: (client: PublicCatalogV2PrismaClient) => Promise<T>): Promise<T>;
   publicCatalogActivationEvent: {
     create(args: unknown): Promise<unknown>;
+    findUnique?(args: unknown): Promise<unknown | null>;
   };
   publicCatalogPublicationOperation: {
     create(args: unknown): Promise<PublicationOperationRecord>;
+    findMany?(args: unknown): Promise<PublicationOperationRecord[]>;
     findFirst(args: unknown): Promise<PublicationOperationRecord | null>;
     findUnique(args: unknown): Promise<PublicationOperationRecord | null>;
     update(args: unknown): Promise<PublicationOperationRecord>;
     updateMany(args: unknown): Promise<{ count: number }>;
   };
+  publicCatalogRelease?: {
+    findUnique(args: unknown): Promise<PublicCatalogV2ReleaseRecord | null>;
+    update(args: unknown): Promise<unknown>;
+  };
+  publicCatalogSetting?: {
+    update(args: unknown): Promise<unknown>;
+  };
   site: {
     findMany(args: unknown): Promise<PublicCatalogV2PrismaProjectionSite[]>;
+    updateMany?(args: unknown): Promise<{ count: number }>;
   };
+}
+
+interface PublicCatalogV2ReleaseRecord {
+  activePointerSha256: string | null;
+  activatedAt: Date | null;
+  categoriesPath: string;
+  categoriesSha256: string;
+  chunksCount: number;
+  generatedAt: Date;
+  indexPath: string;
+  indexSha256: string;
+  itemsCount: number;
+  manifestPath: string;
+  manifestSha256: string;
+  popularCount: number;
+  popularPath: string;
+  popularSha256: string;
+  revision: number;
+  status: string;
 }
 
 interface PublicCatalogV2PrismaProjectionSite {
@@ -91,6 +125,7 @@ export class PublicCatalogV2RepositoryError extends Error {
   constructor(
     readonly code:
       | "IDEMPOTENCY_KEY_REUSED"
+      | "PUBLIC_CATALOG_V2_DB_FINALIZATION_FAILED"
       | "PUBLIC_CATALOG_V2_INVALID_TERMINAL_STATUS"
       | "PUBLIC_CATALOG_V2_LEASE_NOT_HELD"
       | "PUBLIC_CATALOG_V2_INVALID_RETRY_SCHEDULE"
@@ -104,7 +139,9 @@ export function createPublicCatalogV2Repository(prisma: PublicCatalogV2PrismaCli
   return {
     claimNextPublicationOperation: (input) => claimNextPublicationOperation(prisma, input),
     createOrCoalescePublicationOperation: (input) => createOrCoalescePublicationOperation(prisma, input),
+    finalizePublicationTransaction: (input) => finalizePublicationTransaction(prisma, input),
     finalizePublicationOperation: (input) => finalizePublicationOperation(prisma, input),
+    findPostActivationFinalizationGaps: (input) => findPostActivationFinalizationGaps(prisma, input),
     iteratePublicCatalogV2ProjectionPages: (input) => iteratePublicCatalogV2ProjectionPages(prisma, input),
     recordActivationEvent: (input) => recordActivationEvent(prisma, input),
     recordPublicationCheckpoint: (input) => recordPublicationCheckpoint(prisma, input)
@@ -226,7 +263,11 @@ async function recordPublicationCheckpoint(
             nextRetryAt: input.nextRetryAt,
             status
           }
-        : { status }),
+        : {
+            lockedAt: input.now ?? new Date(),
+            nextRetryAt: null,
+            status
+          }),
       ...(input.retryCount === undefined ? {} : { retryCount: input.retryCount }),
       stage: input.stage
     },
@@ -293,6 +334,107 @@ async function finalizePublicationOperation(
   return finalized;
 }
 
+async function finalizePublicationTransaction(
+  prisma: PublicCatalogV2PrismaClient,
+  input: FinalizePublicationTransactionInput
+): Promise<PublicationOperationRecord> {
+  if (prisma.$transaction !== undefined) {
+    return prisma.$transaction((tx) => finalizePublicationTransactionBody(tx, input));
+  }
+
+  return finalizePublicationTransactionBody(prisma, input);
+}
+
+async function finalizePublicationTransactionBody(
+  prisma: PublicCatalogV2PrismaClient,
+  input: FinalizePublicationTransactionInput
+): Promise<PublicationOperationRecord> {
+  const releaseModel = requirePublicCatalogRelease(prisma);
+  const settingModel = requirePublicCatalogSetting(prisma);
+
+  await releaseModel.update({
+    data: {
+      activatedAt: input.completedAt,
+      activePointerSha256: input.activePointerSha256,
+      status: "active"
+    },
+    where: { revision: input.revision }
+  });
+  await settingModel.update({
+    data: {
+      activeRevision: input.revision
+    },
+    where: { id: PUBLIC_CATALOG_SETTING_ID }
+  });
+  if (input.siteId !== undefined && input.siteId !== null) {
+    await finalizeSitePublicState(prisma, input);
+  }
+  await recordOrVerifyActivationEvent(prisma, input);
+
+  return finalizePublicationOperation(prisma, {
+    completedAt: input.completedAt,
+    lastCheckpoint: {
+      activePointerSha256: input.activePointerSha256,
+      revision: input.revision
+    },
+    leaseId: input.leaseId,
+    operationId: input.operationId,
+    stage: "db_finalize",
+    status: "succeeded"
+  });
+}
+
+async function findPostActivationFinalizationGaps(
+  prisma: PublicCatalogV2PrismaClient,
+  input: {
+    now: Date;
+    staleLockedBefore: Date;
+    workerId: string;
+  }
+): Promise<Array<{
+  activePointer: Record<string, unknown>;
+  leaseId: string | null;
+  operation: PublicationOperationRecord;
+  release: Record<string, unknown>;
+}>> {
+  const findMany = prisma.publicCatalogPublicationOperation.findMany;
+  if (findMany === undefined || prisma.publicCatalogRelease === undefined) {
+    return [];
+  }
+
+  const operations = await findMany({
+    orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+    where: {
+      lockedAt: { lte: input.staleLockedBefore },
+      stage: { in: ["active_verify", "db_finalize"] },
+      status: "running"
+    }
+  });
+  const gaps: Array<{
+    activePointer: Record<string, unknown>;
+    leaseId: string | null;
+    operation: PublicationOperationRecord;
+    release: Record<string, unknown>;
+  }> = [];
+
+  for (const operation of operations) {
+    const release = await prisma.publicCatalogRelease.findUnique({
+      where: { revision: operation.targetRevision }
+    });
+    if (release === null || release.activePointerSha256 === null || release.status !== "active") {
+      continue;
+    }
+    gaps.push({
+      activePointer: toActivePointerReadBack(release),
+      leaseId: operation.leaseId,
+      operation: { ...operation },
+      release: toReleaseFinalizationEvidence(release)
+    });
+  }
+
+  return gaps;
+}
+
 async function recordActivationEvent(
   prisma: PublicCatalogV2PrismaClient,
   input: RecordActivationEventInput
@@ -309,10 +451,108 @@ async function recordActivationEvent(
   });
 }
 
+async function recordOrVerifyActivationEvent(
+  prisma: PublicCatalogV2PrismaClient,
+  input: FinalizePublicationTransactionInput
+): Promise<void> {
+  const eventInput: RecordActivationEventInput = {
+    activePointerSha256: input.activePointerSha256,
+    eventType: input.eventType,
+    operationId: input.operationId,
+    previousRevision: input.previousRevision ?? null,
+    requestId: input.requestId,
+    revision: input.revision
+  };
+
+  try {
+    await recordActivationEvent(prisma, eventInput);
+    return;
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+  }
+
+  const findUnique = prisma.publicCatalogActivationEvent.findUnique;
+  if (findUnique === undefined) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  const existingEvent = await findUnique({
+    where: { operationId: input.operationId }
+  });
+  if (!activationEventMatches(existingEvent, eventInput)) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+}
+
+async function finalizeSitePublicState(
+  prisma: PublicCatalogV2PrismaClient,
+  input: FinalizePublicationTransactionInput
+): Promise<void> {
+  const updateMany = prisma.site.updateMany;
+  if (updateMany === undefined) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_DB_FINALIZATION_FAILED");
+  }
+
+  if (input.expectedPublicState === "published") {
+    const result = await updateMany({
+      data: {
+        active: true,
+        deletedAt: null,
+        publishedAt: input.completedAt,
+        status: "published"
+      },
+      where: {
+        deletedAt: null,
+        id: input.siteId
+      }
+    });
+    assertSingleSiteFinalized(result);
+    return;
+  }
+
+  const result = await updateMany({
+    data: {
+      active: true,
+      publishedAt: null,
+      status: "draft"
+    },
+    where: {
+      deletedAt: null,
+      id: input.siteId
+    }
+  });
+  assertSingleSiteFinalized(result);
+}
+
+function activationEventMatches(event: unknown, input: RecordActivationEventInput): boolean {
+  if (typeof event !== "object" || event === null || Array.isArray(event)) {
+    return false;
+  }
+
+  const record = event as Record<string, unknown>;
+  return (
+    record.activePointerSha256 === input.activePointerSha256 &&
+    record.eventType === input.eventType &&
+    record.operationId === input.operationId &&
+    record.previousRevision === (input.previousRevision ?? null) &&
+    record.requestId === input.requestId &&
+    record.revision === input.revision
+  );
+}
+
+function assertSingleSiteFinalized(result: { count: number }): void {
+  if (result.count !== 1) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_DB_FINALIZATION_FAILED");
+  }
+}
+
 async function* iteratePublicCatalogV2ProjectionPages(
   prisma: PublicCatalogV2PrismaClient,
   input: {
     afterCursor: PublicCatalogV2ProjectionCursor | null;
+    operation?: PublicCatalogV2ProjectionOperationIntent;
     take: 100;
   }
 ): AsyncIterable<PublicCatalogV2ProjectionPage> {
@@ -393,13 +633,7 @@ async function* iteratePublicCatalogV2ProjectionPages(
         views: true
       },
       take: input.take,
-      where: {
-        active: true,
-        category: publicCategoryVisibilityWhere(),
-        deletedAt: null,
-        status: "published",
-        ...buildProjectionCursorWhere(afterCursor)
-      }
+      where: buildProjectionWhere(input.operation, afterCursor)
     });
     const items = rows.map(toProjectionRecord);
 
@@ -507,6 +741,46 @@ function buildClaimQueries(input: ClaimPublicationOperationInput): ClaimQuery[] 
   return queries;
 }
 
+function buildProjectionWhere(
+  operation: PublicCatalogV2ProjectionOperationIntent | undefined,
+  afterCursor: PublicCatalogV2ProjectionCursor | null
+): Record<string, unknown> {
+  const and = [buildProjectionPublicationIntentWhere(operation)];
+  const cursorWhere = buildProjectionCursorWhere(afterCursor);
+  if (Object.keys(cursorWhere).length > 0) {
+    and.push(cursorWhere);
+  }
+
+  return {
+    active: true,
+    AND: and,
+    category: publicCategoryVisibilityWhere(),
+    deletedAt: null
+  };
+}
+
+function buildProjectionPublicationIntentWhere(
+  operation: PublicCatalogV2ProjectionOperationIntent | undefined
+): Record<string, unknown> {
+  if (operation?.action === "publish" && isNonEmptyString(operation.siteId)) {
+    return {
+      OR: [
+        { status: "published" },
+        { id: operation.siteId }
+      ]
+    };
+  }
+
+  if (operation?.action === "unpublish" && isNonEmptyString(operation.siteId)) {
+    return {
+      id: { not: operation.siteId },
+      status: "published"
+    };
+  }
+
+  return { status: "published" };
+}
+
 function buildProjectionCursorWhere(afterCursor: PublicCatalogV2ProjectionCursor | null): Record<string, unknown> {
   if (afterCursor === null) {
     return {};
@@ -531,6 +805,65 @@ function buildProjectionCursorWhere(afterCursor: PublicCatalogV2ProjectionCursor
         sortOrder: afterCursor.sortOrder
       }
     ]
+  };
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function requirePublicCatalogRelease(prisma: PublicCatalogV2PrismaClient): NonNullable<PublicCatalogV2PrismaClient["publicCatalogRelease"]> {
+  if (prisma.publicCatalogRelease === undefined) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  return prisma.publicCatalogRelease;
+}
+
+function requirePublicCatalogSetting(prisma: PublicCatalogV2PrismaClient): NonNullable<PublicCatalogV2PrismaClient["publicCatalogSetting"]> {
+  if (prisma.publicCatalogSetting === undefined) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  return prisma.publicCatalogSetting;
+}
+
+function toActivePointerReadBack(release: PublicCatalogV2ReleaseRecord): Record<string, unknown> {
+  return {
+    manifestPath: release.manifestPath,
+    manifestSha256: release.manifestSha256,
+    path: buildPublicCatalogV2ActivePath(),
+    revision: release.revision,
+    sha256: release.activePointerSha256
+  };
+}
+
+function toReleaseFinalizationEvidence(release: PublicCatalogV2ReleaseRecord): Record<string, unknown> {
+  return {
+    activationInput: {
+      manifestPath: release.manifestPath,
+      manifestSha256: release.manifestSha256,
+      revision: release.revision
+    },
+    manifest: {
+      categories: {
+        path: release.categoriesPath,
+        sha256: release.categoriesSha256
+      },
+      chunksCount: release.chunksCount,
+      index: {
+        path: release.indexPath,
+        sha256: release.indexSha256
+      },
+      itemsCount: release.itemsCount,
+      popular: {
+        count: release.popularCount,
+        path: release.popularPath,
+        sha256: release.popularSha256
+      },
+      revision: release.revision,
+      sha256: release.manifestSha256
+    }
   };
 }
 

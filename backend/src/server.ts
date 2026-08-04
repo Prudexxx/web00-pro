@@ -39,6 +39,8 @@ import { createPrismaAdminCategoryRepository } from "./modules/admin/categories/
 import { createAdminCategoryService } from "./modules/admin/categories/category.service.js";
 import { createPrismaAdminPublicCatalogRepository } from "./modules/admin/public-catalog/public-catalog-admin.repository.js";
 import { createAdminPublicCatalogService } from "./modules/admin/public-catalog/public-catalog-admin.service.js";
+import { createPrismaAdminPublicationRepository } from "./modules/admin/publication/publication.repository.js";
+import { createAdminPublicationService } from "./modules/admin/publication/publication.service.js";
 import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repository.js";
 import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
 import {
@@ -91,6 +93,8 @@ export interface StartServerOptions {
   logger?: AppLogger;
   now?: () => Date;
   publicCorsConfig: PublicCorsConfig;
+  publicCatalogV2Runtime?: PublicCatalogV2Runtime;
+  publicCatalogV2WorkerEnabled?: boolean;
   registerSignalHandlers?: boolean;
   storageConfig: StorageConfig;
 }
@@ -98,6 +102,11 @@ export interface StartServerOptions {
 export interface StartedServer {
   prisma: PrismaClient;
   server: Server;
+}
+
+export interface PublicCatalogV2Runtime {
+  start(): void;
+  stop(): Promise<void>;
 }
 
 export function startServer(options: StartServerOptions): StartedServer {
@@ -130,6 +139,8 @@ export function startServer(options: StartServerOptions): StartedServer {
     repository: storageCleanupRepository,
     storage: imageStorage
   });
+  const publicCatalogV2Runtime =
+    options.publicCatalogV2WorkerEnabled === true ? options.publicCatalogV2Runtime : undefined;
   const repository = createPrismaPublicCatalogRepository({ prisma });
   const publicCatalogService = createPublicCatalogService({
     imageUrlPolicy,
@@ -223,6 +234,9 @@ export function startServer(options: StartServerOptions): StartedServer {
       readCatalog: readCanonicalAssetSourceCatalog,
       repository: createPrismaCanonicalAssetReconciliationRepository({ prisma })
     }),
+    publicationService: createAdminPublicationService({
+      repository: createPrismaAdminPublicationRepository({ prisma })
+    }),
     publicCatalogService: createAdminPublicCatalogService({
       dryRunService: publicCatalogDryRunService,
       repository: createPrismaAdminPublicCatalogRepository({ prisma }),
@@ -264,6 +278,7 @@ export function startServer(options: StartServerOptions): StartedServer {
   if (options.storageConfig.workerEnabled) {
     storageCleanupWorker.start();
   }
+  publicCatalogV2Runtime?.start();
 
   server.listen(options.env.PORT, "0.0.0.0", () => {
     logLifecycle({
@@ -280,6 +295,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       createShutdownHandler(server, {
         disconnect: async () => {
           await storageCleanupWorker.stop();
+          await publicCatalogV2Runtime?.stop();
           await prisma.$disconnect();
         },
         env: options.env,
@@ -293,6 +309,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       createShutdownHandler(server, {
         disconnect: async () => {
           await storageCleanupWorker.stop();
+          await publicCatalogV2Runtime?.stop();
           await prisma.$disconnect();
         },
         env: options.env,

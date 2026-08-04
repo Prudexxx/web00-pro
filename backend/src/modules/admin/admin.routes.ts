@@ -17,6 +17,8 @@ import type { AdminPublicCatalogService } from "./public-catalog/public-catalog-
 import { createAdminUserRouter } from "./users/user.routes.js";
 import type { AdminUserService } from "./users/user.service.js";
 import type { AuthService } from "../auth/auth.types.js";
+import { createAdminPublicationRouter } from "./publication/publication.routes.js";
+import type { AdminPublicationService } from "./publication/publication.service.js";
 
 export interface AdminRouterOptions {
   authService: Pick<AuthService, "authenticateAccessToken">;
@@ -26,6 +28,7 @@ export interface AdminRouterOptions {
   imageService?: SiteImageService;
   maintenanceService?: AdminMaintenanceService;
   now?: () => Date;
+  publicationService?: AdminPublicationService;
   publicCatalogService?: AdminPublicCatalogService;
   siteService: AdminSiteService;
   userService?: AdminUserService;
@@ -63,6 +66,15 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
   router.use(createAdminCategoryRouter(categoryRouterOptions));
   if (userRouterOptions !== undefined) {
     router.use(createAdminUserRouter(userRouterOptions));
+  }
+  if (options.publicationService !== undefined) {
+    router.use(
+      createAdminPublicationRouter(
+        options.now === undefined
+          ? { service: options.publicationService }
+          : { now: options.now, service: options.publicationService }
+      )
+    );
   }
   router.use(createAdminAuditLogRouter({ service: options.auditLogService }));
   if (options.maintenanceService !== undefined) {

@@ -101,6 +101,7 @@ export interface PublicationCheckpointInput {
   lastErrorCode?: string | null;
   leaseId: string;
   nextRetryAt?: Date | null;
+  now?: Date;
   operationId: string;
   retryCount?: number;
   stage: PublicCatalogV2OperationStage;
@@ -115,6 +116,20 @@ export interface FinalizePublicationOperationInput {
   operationId: string;
   status: PublicCatalogV2TerminalOperationStatus;
   stage: PublicCatalogV2OperationStage;
+}
+
+export interface FinalizePublicationTransactionInput {
+  activePointerSha256: string;
+  action: PublicCatalogV2OperationAction;
+  completedAt: Date;
+  eventType: PublicCatalogV2ActivationEventType;
+  expectedPublicState: "published" | "unpublished";
+  leaseId: string;
+  operationId: string;
+  previousRevision?: number | null;
+  requestId: string;
+  revision: number;
+  siteId?: string | null;
 }
 
 export interface RecordActivationEventInput {
@@ -163,6 +178,11 @@ export interface PublicCatalogV2ProjectionCursor {
 export interface PublicCatalogV2ProjectionPage {
   items: PublicCatalogV2ProjectionRecord[];
   nextCursor: PublicCatalogV2ProjectionCursor | null;
+}
+
+export interface PublicCatalogV2ProjectionOperationIntent {
+  action: PublicCatalogV2OperationAction;
+  siteId?: string | null;
 }
 
 export interface PublicCatalogV2ProjectionRecord {
@@ -232,14 +252,28 @@ export interface PublicCatalogV2ArtifactDescriptor {
   sha256: string;
 }
 
+export interface PublicCatalogV2PostActivationFinalizationGap {
+  activePointer: Record<string, unknown>;
+  leaseId: string | null;
+  operation: PublicationOperationRecord;
+  release: Record<string, unknown>;
+}
+
 export interface PublicCatalogV2Repository {
   claimNextPublicationOperation(input: ClaimPublicationOperationInput): Promise<PublicationOperationRecord | null>;
   createOrCoalescePublicationOperation(
     input: CreatePublicationOperationInput
   ): Promise<PublicationOperationRecord>;
+  finalizePublicationTransaction(input: FinalizePublicationTransactionInput): Promise<PublicationOperationRecord>;
   finalizePublicationOperation(input: FinalizePublicationOperationInput): Promise<PublicationOperationRecord>;
+  findPostActivationFinalizationGaps(input: {
+    now: Date;
+    staleLockedBefore: Date;
+    workerId: string;
+  }): Promise<PublicCatalogV2PostActivationFinalizationGap[]>;
   iteratePublicCatalogV2ProjectionPages(input: {
     afterCursor: PublicCatalogV2ProjectionCursor | null;
+    operation?: PublicCatalogV2ProjectionOperationIntent;
     take: 100;
   }): AsyncIterable<PublicCatalogV2ProjectionPage>;
   recordActivationEvent(input: RecordActivationEventInput): Promise<void>;

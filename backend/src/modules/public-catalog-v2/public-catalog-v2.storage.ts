@@ -48,12 +48,13 @@ export interface UploadAndVerifyPublicCatalogV2ReleaseInput {
 }
 
 export interface UploadAndVerifyPublicCatalogV2ReleaseResult {
-  activePointer: {
-    manifestSha256: string;
-    path: string;
-    revision: number;
-    sha256: string;
-  };
+    activePointer: {
+      manifestSha256: string;
+      path: string;
+      previousRevision: number | null;
+      revision: number;
+      sha256: string;
+    };
   immutableArtifactsVerified: number;
   replayedImmutableArtifacts: string[];
   uploadOrder: string[];
@@ -110,6 +111,7 @@ export async function uploadAndVerifyPublicCatalogV2Release(
     activePointer: {
       manifestSha256: manifestArtifact.sha256,
       path: activePointer.path,
+      previousRevision: input.previousRevision ?? null,
       revision: input.release.activationInput.revision,
       sha256: activePointer.sha256
     },
