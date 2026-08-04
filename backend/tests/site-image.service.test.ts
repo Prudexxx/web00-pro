@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import type { AdminMutationContext } from "../src/modules/admin/admin.types.js";
@@ -5,6 +6,7 @@ import {
   createSiteImageService,
   type SiteImageRepository
 } from "../src/modules/admin/images/site-image.service.js";
+import * as imageProcessorModule from "../src/modules/images/image-processor.js";
 import type { StorageCleanupRepository } from "../src/modules/storage-cleanup/storage-cleanup.types.js";
 import type { ImageProcessor } from "../src/modules/images/image.types.js";
 import type { ImageStorage } from "../src/modules/images/image-storage.js";
@@ -48,7 +50,8 @@ function publicUrl(width: number, format: "avif" | "webp", slot = "preview", id 
 
 function processedImageFor(
   id: string,
-  slot: "gallery" | "preview"
+  slot: "gallery" | "preview",
+  source: Buffer = Buffer.from(id)
 ): Awaited<ReturnType<ImageProcessor["process"]>> {
   return {
     assetId: id,
@@ -57,6 +60,7 @@ function processedImageFor(
     originalOrientation: null,
     originalPixels: 720_000,
     originalWidth: 1200,
+    sourceSha256: createHash("sha256").update(source).digest("hex"),
     variants: [480, 960, 1200].flatMap((width) => [
       {
         body: Buffer.from(`webp-${id}-${width}`),
@@ -88,6 +92,8 @@ function createFakes(overrides: {
     deletedAt: null,
     galleryImages: [],
     id: siteId,
+    previewAssetId: null,
+    previewImage: null,
     previewImageUrl: null,
     status: "draft",
     title: "Site title",
@@ -133,7 +139,7 @@ function createFakes(overrides: {
     process: vi.fn(async (input) => {
       events.push("process");
 
-      return processedImageFor(input.assetId, input.slot);
+      return processedImageFor(input.assetId, input.slot, input.source);
     })
   };
   const storage: ImageStorage = {
@@ -184,6 +190,34 @@ function createFakes(overrides: {
 }
 
 describe("PreviewImageService", () => {
+  it("calculates lowercase sourceSha256 from the exact uploaded bytes", () => {
+    const calculateImageSourceSha256 = (
+      imageProcessorModule as {
+        calculateImageSourceSha256?: (source: Buffer) => string;
+      }
+    ).calculateImageSourceSha256;
+
+    expect(calculateImageSourceSha256).toBeTypeOf("function");
+
+    const empty = Buffer.alloc(0);
+    const known = Buffer.from("WEB00 OPV2-3 source bytes", "utf8");
+    const same = Buffer.from(known);
+    const changed = Buffer.from("WEB00 OPV2-3 source bytez", "utf8");
+    const large = Buffer.alloc(1024 * 1024, 0x5a);
+
+    expect(calculateImageSourceSha256?.(empty)).toBe(
+      createHash("sha256").update(empty).digest("hex")
+    );
+    expect(calculateImageSourceSha256?.(known)).toBe(
+      createHash("sha256").update(known).digest("hex")
+    );
+    expect(calculateImageSourceSha256?.(same)).toBe(calculateImageSourceSha256?.(known));
+    expect(calculateImageSourceSha256?.(changed)).not.toBe(
+      calculateImageSourceSha256?.(known)
+    );
+    expect(calculateImageSourceSha256?.(large)).toMatch(/^[a-f0-9]{64}$/);
+  });
+
   it("creates cleanup reservations before upload and attaches preview atomically after upload", async () => {
     const fakes = createFakes();
     const service = createSiteImageService({
@@ -225,6 +259,91 @@ describe("PreviewImageService", () => {
       expect.objectContaining({
         previewImageUrl: publicUrl(1200, "webp"),
         uploadReservationIds: expect.arrayContaining(["reservation-0"])
+      })
+    );
+  });
+
+  it("passes canonical preview asset identity into the atomic repository attach", async () => {
+    const fakes = createFakes();
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+    const source = Buffer.from("canonical-preview-source");
+
+    await service.preview.replacePreview({
+      context,
+      file: {
+        alt: "",
+        assetId,
+        declaredMimeType: "image/png",
+        index: 0,
+        source
+      },
+      siteId
+    });
+
+    expect(fakes.repository.replacePreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset: {
+          assetId,
+          decodedFormat: "png",
+          height: 600,
+          siteId,
+          slot: "preview",
+          sourceMime: "image/png",
+          sourceSha256: createHash("sha256").update(source).digest("hex"),
+          storagePath: `sites/${siteId}/preview/${assetId}`,
+          variants: [
+            {
+              contentType: "image/webp",
+              format: "webp",
+              height: 240,
+              path: variantPath(480, "webp"),
+              width: 480
+            },
+            {
+              contentType: "image/avif",
+              format: "avif",
+              height: 240,
+              path: variantPath(480, "avif"),
+              width: 480
+            },
+            {
+              contentType: "image/webp",
+              format: "webp",
+              height: 480,
+              path: variantPath(960, "webp"),
+              width: 960
+            },
+            {
+              contentType: "image/avif",
+              format: "avif",
+              height: 480,
+              path: variantPath(960, "avif"),
+              width: 960
+            },
+            {
+              contentType: "image/webp",
+              format: "webp",
+              height: 600,
+              path: variantPath(1200, "webp"),
+              width: 1200
+            },
+            {
+              contentType: "image/avif",
+              format: "avif",
+              height: 600,
+              path: variantPath(1200, "avif"),
+              width: 1200
+            }
+          ],
+          width: 1200
+        }
       })
     );
   });
@@ -346,6 +465,8 @@ describe("PreviewImageService", () => {
   it("replays an attached preview without processing, upload, audit, or cleanup", async () => {
     const fakes = createFakes({
       site: {
+        previewAssetId: assetId,
+        previewImage: { assetId },
         previewImageUrl: publicUrl(1200, "webp")
       }
     });
@@ -378,6 +499,101 @@ describe("PreviewImageService", () => {
     expect(fakes.storage.uploadObject).not.toHaveBeenCalled();
     expect(fakes.cleanup.createUploadReservations).not.toHaveBeenCalled();
     expect(fakes.repository.replacePreview).not.toHaveBeenCalled();
+  });
+
+  it("repairs preview canonical split state instead of replaying from legacy URL alone", async () => {
+    const fakes = createFakes({
+      site: {
+        previewAssetId: null,
+        previewImageUrl: publicUrl(1200, "webp")
+      }
+    });
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+    fakes.storage.inspectObjects = vi.fn(async () => ({
+      existingPaths: [variantPath(1200, "webp")],
+      missingPaths: []
+    }));
+
+    await expect(
+      service.preview.replacePreview({
+        context,
+        file: {
+          alt: "",
+          assetId,
+          declaredMimeType: "image/png",
+          index: 0,
+          source: Buffer.from("source")
+        },
+        siteId
+      })
+    ).resolves.toMatchObject({
+      replayed: false
+    });
+
+    expect(fakes.processor.process).toHaveBeenCalledTimes(1);
+    expect(fakes.storage.inspectObjects).not.toHaveBeenCalled();
+    expect(fakes.cleanup.createJobs).not.toHaveBeenCalled();
+    expect(fakes.storage.removeObjects).not.toHaveBeenCalled();
+    expect(fakes.cleanup.createUploadReservations).not.toHaveBeenCalled();
+    expect(fakes.storage.uploadObject).not.toHaveBeenCalled();
+    expect(fakes.repository.replacePreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assetId,
+        cleanupPaths: [],
+        previewImageUrl: publicUrl(1200, "webp"),
+        siteId
+      })
+    );
+  });
+
+  it("does not replay preview when compatibility mirrors match but canonical membership is missing", async () => {
+    const fakes = createFakes({
+      site: {
+        previewAssetId: assetId,
+        previewImage: null,
+        previewImageUrl: publicUrl(1200, "webp")
+      }
+    });
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+
+    await expect(
+      service.preview.replacePreview({
+        context,
+        file: {
+          alt: "",
+          assetId,
+          declaredMimeType: "image/png",
+          index: 0,
+          source: Buffer.from("source")
+        },
+        siteId
+      })
+    ).resolves.toMatchObject({
+      replayed: false
+    });
+
+    expect(fakes.repository.replacePreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assetId,
+        cleanupPaths: [],
+        previewImageUrl: publicUrl(1200, "webp"),
+        siteId
+      })
+    );
   });
 
   it("applies central site-state policy for image mutations", async () => {
@@ -506,6 +722,52 @@ describe("PreviewImageService", () => {
 });
 
 describe("GalleryImageService", () => {
+  it("passes canonical gallery asset identity into the atomic repository attach", async () => {
+    const fakes = createFakes();
+    const service = createSiteImageService({
+      cleanup: fakes.cleanup,
+      coordinator: createAssetUploadCoordinator(),
+      imageUrlPolicy: policy,
+      processor: fakes.processor,
+      repository: fakes.repository,
+      storage: fakes.storage
+    });
+    const source = Buffer.from("canonical-gallery-source");
+
+    await service.gallery.addSingle({
+      context,
+      file: {
+        alt: "Gallery alt",
+        assetId,
+        declaredMimeType: "image/png",
+        index: 0,
+        source
+      },
+      siteId
+    });
+
+    expect(fakes.repository.addGalleryImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asset: expect.objectContaining({
+          assetId,
+          decodedFormat: "png",
+          height: 600,
+          siteId,
+          slot: "gallery",
+          sourceMime: "image/png",
+          sourceSha256: createHash("sha256").update(source).digest("hex"),
+          storagePath: `sites/${siteId}/gallery/${assetId}`,
+          width: 1200
+        }),
+        image: expect.objectContaining({
+          assetId,
+          sortOrder: 0,
+          storagePath: `sites/${siteId}/gallery/${assetId}`
+        })
+      })
+    );
+  });
+
   it("appends a managed gallery image, allows replay, and rejects preview asset conflicts", async () => {
     const fakes = createFakes();
     const service = createSiteImageService({
@@ -843,8 +1105,10 @@ describe("GalleryImageService", () => {
 
       return {
         assetId: input.assetId,
+        originalFormat: "png" as const,
         originalHeight: 600,
         originalWidth: 1200,
+        sourceSha256: createHash("sha256").update(input.source).digest("hex"),
         variants: [480, 960, 1200].flatMap((width) => [
           {
             body: Buffer.from(`webp-${input.assetId}-${width}`),
@@ -1294,8 +1558,10 @@ describe("GalleryImageService", () => {
 
       return {
         assetId: input.assetId,
+        originalFormat: "png" as const,
         originalHeight: 600,
         originalWidth: 1200,
+        sourceSha256: createHash("sha256").update(input.source).digest("hex"),
         variants: [480, 960, 1200].flatMap((width) => [
           {
             body: Buffer.from(`webp-${input.assetId}-${width}`),

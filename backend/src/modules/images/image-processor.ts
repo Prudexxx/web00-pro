@@ -4,6 +4,7 @@ import sharp, {
   type SharpInput,
   type SharpOptions
 } from "sharp";
+import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import {
   IMAGE_PROCESSING_CONCURRENCY_LIMITS,
@@ -46,6 +47,10 @@ export interface SharpImageProcessorOptions {
   semaphore?: ImagePipelineSemaphore;
   sharpFactory?: SharpFactory;
   timeoutMs?: number;
+}
+
+export function calculateImageSourceSha256(source: Buffer): string {
+  return createHash("sha256").update(source).digest("hex");
 }
 
 interface ImageMetadata {
@@ -340,6 +345,7 @@ async function processImage(
     originalOrientation: metadata.orientation,
     originalPixels: metadata.pixels,
     originalWidth: metadata.width,
+    sourceSha256: calculateImageSourceSha256(input.source),
     variants,
     widths
   };

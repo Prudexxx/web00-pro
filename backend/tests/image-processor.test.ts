@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
@@ -87,6 +88,24 @@ describe("createSharpImageProcessor", () => {
       expect(variant.body.includes(Buffer.from("SOURCE_SECRET"))).toBe(false);
     }
   }, 15_000);
+
+  it("emits sourceSha256 from the exact input bytes before variant processing", async () => {
+    const processor = createSharpImageProcessor();
+    const source = await fixture("png", { width: 640, height: 320 });
+
+    const processed = await processor.process({
+      assetId,
+      declaredMimeType: "image/png",
+      siteId,
+      slot: "preview",
+      source
+    });
+
+    expect(processed.sourceSha256).toBe(
+      createHash("sha256").update(source).digest("hex")
+    );
+    expect(processed.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
+  });
 
   it("preserves alpha while avoiding enlargement", async () => {
     const processor = createSharpImageProcessor();

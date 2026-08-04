@@ -4,7 +4,7 @@ import type { AdminMutationContext } from "../admin.types.js";
 import { createPermissionPolicy } from "../rbac.policy.js";
 import type { PermissionPolicy } from "../rbac.types.js";
 import type { StorageCleanupRepository } from "../../storage-cleanup/storage-cleanup.types.js";
-import { buildVariantPath } from "../../images/image-paths.js";
+import { buildImageBasePath, buildVariantPath } from "../../images/image-paths.js";
 import {
   attachPreviewUploadDiagnostic,
   createPreviewUploadCompletedEvent,
@@ -27,6 +27,7 @@ import type {
   ImageStorage,
   ImageStorageOperationContext
 } from "../../images/image-storage.js";
+import type { PersistedSiteImageAssetInput } from "./site-media-assets.repository.js";
 import type {
   GalleryBatchResponse,
   GalleryDeleteInput,
@@ -42,6 +43,7 @@ import type {
 
 export interface SiteImageRepository {
   addGalleryImage(input: {
+    asset: PersistedSiteImageAssetInput;
     context: AdminMutationContext;
     image: ManagedGalleryImage;
     siteId: string;
@@ -60,6 +62,7 @@ export interface SiteImageRepository {
   }): Promise<SiteImageMutationSite>;
   getSiteForImageMutation(siteId: string): Promise<SiteImageMutationSite | null>;
   replacePreview(input: {
+    asset: PersistedSiteImageAssetInput;
     assetId: string;
     cleanupPaths: string[];
     context: AdminMutationContext;
@@ -194,6 +197,7 @@ type GalleryBatchUploadCandidate =
       kind: "replayed";
     }
   | {
+      asset: PersistedSiteImageAssetInput;
       file: ParsedImageFile;
       image: ManagedGalleryMutationImage;
       kind: "uploaded";
@@ -353,6 +357,7 @@ async function attachGalleryBatchCandidates(
 
     try {
       const updated = await options.repository.addGalleryImage({
+        asset: candidate.asset,
         context: input.context,
         image: candidate.image,
         siteId: input.siteId,
@@ -557,6 +562,12 @@ async function prepareGalleryBatchCandidate(
         });
 
         return {
+          asset: buildPersistedSiteImageAsset({
+            file: input.file,
+            processed,
+            siteId: input.siteId,
+            slot: "gallery"
+          }),
           file: input.file,
           image: buildManagedGalleryImage(options, {
             file: input.file,
@@ -602,7 +613,12 @@ async function replacePreview(
 
         const currentPreview = parseCurrentPreview(options.imageUrlPolicy, site);
 
-        if (currentPreview?.assetId === input.file.assetId) {
+        const currentPreviewMatchesUpload = currentPreview?.assetId === input.file.assetId;
+        const canonicalPreviewMatchesUpload =
+          site.previewAssetId === input.file.assetId &&
+          site.previewImage?.assetId === input.file.assetId;
+
+        if (currentPreviewMatchesUpload && canonicalPreviewMatchesUpload) {
           return {
             previewImage: toPublicPreview(currentPreview, options.imageUrlPolicy),
             replaced: false,
@@ -631,6 +647,59 @@ async function replacePreview(
           source: input.file.source
         });
         processedWidthCount = processed.widths.length;
+
+        if (currentPreviewMatchesUpload) {
+          setStage("PREVIEW_URL_SELECTION_STARTED");
+          const previewImageUrl = selectProcessedPreviewImageUrl(options.storage, processed);
+          if (previewImageUrl === undefined) {
+            const diagnostic: PreviewUploadDiagnostic = {
+              internalCode: "PREVIEW_CANONICAL_WEBP_NOT_FOUND",
+              largestWebpFound: false,
+              uploadedVariantCount
+            };
+
+            if (processedWidthCount !== undefined) {
+              diagnostic.processedWidthCount = processedWidthCount;
+            }
+
+            throw attachPreviewUploadDiagnostic(
+              new AppError({
+                code: "INTERNAL_ERROR",
+                message: "Internal server error.",
+                statusCode: 500
+              }),
+              diagnostic
+            );
+          }
+          setStage("PREVIEW_URL_SELECTED");
+
+          assertRequestSignalCanContinue(input.signal);
+
+          const updated = await options.repository.replacePreview({
+            asset: buildPersistedSiteImageAsset({
+              file: input.file,
+              processed,
+              siteId: input.siteId,
+              slot: "preview"
+            }),
+            assetId: input.file.assetId,
+            cleanupPaths: [],
+            context: input.context,
+            onStage: setStage,
+            previewImageUrl,
+            siteId: input.siteId,
+            uploadReservationIds: []
+          });
+          const preview = parseCurrentPreview(options.imageUrlPolicy, updated);
+
+          setStage("REQUEST_COMPLETED");
+
+          return {
+            previewImage: preview === null ? null : toPublicPreview(preview, options.imageUrlPolicy),
+            replaced: false,
+            replayed: false
+          };
+        }
 
         setStage("PREUPLOAD_INSPECTION_STARTED");
         await cleanUnattachedObjectsBeforeUpload(options, {
@@ -710,9 +779,15 @@ async function replacePreview(
         assertRequestSignalCanContinue(input.signal);
 
         const updated = await options.repository.replacePreview({
+          asset: buildPersistedSiteImageAsset({
+            file: input.file,
+            processed,
+            siteId: input.siteId,
+            slot: "preview"
+          }),
           assetId: input.file.assetId,
           cleanupPaths:
-            currentPreview === null
+            currentPreview === null || currentPreviewMatchesUpload
               ? []
               : buildCleanupPaths(currentPreview.storagePath, currentPreview.widths),
           context: input.context,
@@ -859,6 +934,12 @@ async function addSingleGallery(
       });
       assertRequestSignalCanContinue(input.signal);
       const updated = await options.repository.addGalleryImage({
+        asset: buildPersistedSiteImageAsset({
+          file: input.file,
+          processed,
+          siteId: input.siteId,
+          slot: "gallery"
+        }),
         context: input.context,
         image,
         siteId: input.siteId,
@@ -1077,6 +1158,56 @@ function buildManagedGalleryImage(
     url: options.storage.getPublicUrl(buildVariantPath(storagePath, largestWidth, "webp")),
     widths: input.processed.widths
   };
+}
+
+function buildPersistedSiteImageAsset(input: {
+  file: ParsedImageFile;
+  processed: Awaited<ReturnType<ImageProcessor["process"]>>;
+  siteId: string;
+  slot: "gallery" | "preview";
+}): PersistedSiteImageAssetInput {
+  return {
+    assetId: input.file.assetId,
+    decodedFormat: readProcessedSourceFormat(input.processed.originalFormat),
+    height: input.processed.originalHeight,
+    siteId: input.siteId,
+    slot: input.slot,
+    sourceMime: input.file.declaredMimeType,
+    sourceSha256: input.processed.sourceSha256,
+    storagePath: buildImageBasePath(input.siteId, input.slot, input.file.assetId),
+    variants: input.processed.variants.map((variant) => ({
+      contentType: variant.contentType,
+      format: variant.format,
+      height: variant.height,
+      path: variant.path,
+      width: variant.width
+    })),
+    width: input.processed.originalWidth
+  };
+}
+
+function readProcessedSourceFormat(format: Awaited<ReturnType<ImageProcessor["process"]>>["originalFormat"]): string {
+  if (format === undefined) {
+    throw new AppError({
+      code: "INTERNAL_ERROR",
+      message: "Internal server error.",
+      statusCode: 500
+    });
+  }
+
+  return format;
+}
+
+function selectProcessedPreviewImageUrl(
+  storage: ImageStorage,
+  processed: Awaited<ReturnType<ImageProcessor["process"]>>
+): string | undefined {
+  const largestWidth = Math.max(...processed.widths);
+  const previewVariant = processed.variants.find(
+    (variant) => variant.format === "webp" && variant.width === largestWidth
+  );
+
+  return previewVariant === undefined ? undefined : storage.getPublicUrl(previewVariant.path);
 }
 
 async function cleanUnattachedObjectsBeforeUpload(

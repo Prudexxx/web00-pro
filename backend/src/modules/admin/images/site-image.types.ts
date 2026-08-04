@@ -11,6 +11,10 @@ export interface SiteImageMutationSite {
   deletedAt: Date | null;
   galleryImages: unknown;
   id: string;
+  previewAssetId: string | null;
+  previewImage: {
+    assetId: string;
+  } | null;
   previewImageUrl: string | null;
   status: string;
   title: string;

@@ -18,6 +18,7 @@ export interface ProcessedImage {
   originalOrientation?: number | null;
   originalPixels?: number;
   originalWidth: number;
+  sourceSha256: string;
   variants: ImageVariant[];
   widths: number[];
 }

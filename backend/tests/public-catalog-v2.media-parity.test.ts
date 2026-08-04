@@ -20,6 +20,7 @@ import {
 const publicationRoutesModulePath = "../src/modules/admin/publication/publication.routes.js";
 const publicationContractModulePath = "../src/modules/public-catalog-v2/public-catalog-v2.publication.js";
 const parityModulePath = "../src/modules/public-catalog-v2/public-catalog-v2.builder.js";
+const siteMediaAssetsModulePath = "../src/modules/admin/images/site-media-assets.repository.js";
 const adminUiDomHelperPath = "./helpers/admin-ui-wave5-dom.mjs";
 const siteEditorModulePath = "../src/admin/assets/screens/site-editor.js";
 
@@ -42,6 +43,177 @@ function readFunction(module: Record<string, unknown>, name: string): (...args: 
 }
 
 describe("One-Click Publish V2 publication and media contracts", () => {
+  it("projects exact canonical Preview and ordered Gallery media for future release parity", async () => {
+    const module = await importContractModule(
+      siteMediaAssetsModulePath,
+      "OPV2-3 canonical media asset repository"
+    );
+    const createPrismaSiteMediaAssetsRepository = readFunction(
+      module,
+      "createPrismaSiteMediaAssetsRepository"
+    ) as () => {
+      readSitePublicationMediaParity?: (siteId: string, tx: ReturnType<typeof createCanonicalMediaTxFake>) => Promise<unknown>;
+    };
+    const repository = createPrismaSiteMediaAssetsRepository();
+
+    expect(repository.readSitePublicationMediaParity).toBeTypeOf("function");
+
+    await expect(
+      repository.readSitePublicationMediaParity?.(
+        "00000000-0000-4000-8000-000000000101",
+        createCanonicalMediaTxFake()
+      )
+    ).resolves.toEqual({
+      galleryImages: [
+        syntheticMediaAsset("gallery-b", "gallery", 0),
+        syntheticMediaAsset("gallery-a", "gallery", 1)
+      ],
+      previewImage: syntheticMediaAsset("preview-a", "preview", null),
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+  });
+
+  it("classifies media parity mismatches without slug, title or fallback substitution", async () => {
+    const module = await importContractModule(
+      siteMediaAssetsModulePath,
+      "OPV2-3 media parity verifier"
+    );
+    const verifySitePublicationMediaParity = readFunction(
+      module,
+      "verifySitePublicationMediaParity"
+    );
+    const expected = {
+      galleryImages: [
+        syntheticMediaAsset("gallery-a", "gallery", 0),
+        syntheticMediaAsset("gallery-b", "gallery", 1)
+      ],
+      previewImage: syntheticMediaAsset("preview-a", "preview", null),
+      siteId: "00000000-0000-4000-8000-000000000101"
+    };
+
+    expect(verifySitePublicationMediaParity(expected, structuredClone(expected))).toEqual({
+      code: "MATCH",
+      matched: true
+    });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      previewImage: null
+    })).toMatchObject({ code: "PREVIEW_MISSING", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      previewImage: {
+        ...expected.previewImage,
+        assetId: "preview-b",
+        variants: expected.previewImage.variants
+      }
+    })).toMatchObject({ code: "PREVIEW_ASSET_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      previewImage: {
+        ...expected.previewImage,
+        sourceSha256: "f".repeat(64)
+      }
+    })).toMatchObject({ code: "PREVIEW_HASH_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      previewImage: {
+        ...expected.previewImage,
+        assetId: expected.previewImage.assetId,
+        sourceSha256: "f".repeat(64),
+        storagePath: "sites/fallback/preview/image",
+        variants: expected.previewImage.variants
+      }
+    })).toMatchObject({ code: "PREVIEW_ASSET_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      galleryImages: [...expected.galleryImages].reverse()
+    })).toMatchObject({ code: "GALLERY_ORDER_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      galleryImages: [
+        {
+          ...expected.galleryImages[0],
+          sourceSha256: "e".repeat(64)
+        },
+        expected.galleryImages[1]
+      ]
+    })).toMatchObject({ code: "GALLERY_HASH_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      previewImage: {
+        ...expected.previewImage,
+        sourceMime: "image/webp"
+      }
+    })).toMatchObject({ code: "PREVIEW_ASSET_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      previewImage: {
+        ...expected.previewImage,
+        decodedFormat: "webp"
+      }
+    })).toMatchObject({ code: "PREVIEW_ASSET_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      galleryImages: [
+        {
+          ...expected.galleryImages[0],
+          slot: "preview"
+        },
+        expected.galleryImages[1]
+      ]
+    })).toMatchObject({ code: "GALLERY_ASSET_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity(expected, {
+      ...expected,
+      galleryImages: [
+        {
+          ...expected.galleryImages[0],
+          siteId: "00000000-0000-4000-8000-000000000999"
+        },
+        expected.galleryImages[1]
+      ]
+    })).toMatchObject({ code: "GALLERY_ASSET_MISMATCH", matched: false });
+    expect(verifySitePublicationMediaParity({
+      galleryImages: [],
+      previewImage: null,
+      siteId: "00000000-0000-4000-8000-000000000101"
+    }, {
+      galleryImages: [],
+      previewImage: null,
+      siteId: "00000000-0000-4000-8000-000000000999"
+    })).toMatchObject({
+      code: "GALLERY_ASSET_MISMATCH",
+      fieldPath: "siteId",
+      matched: false
+    });
+  });
+
+  it("rejects corrupted persisted canonical media before future release projection can consume it", async () => {
+    const module = await importContractModule(
+      siteMediaAssetsModulePath,
+      "OPV2-3 canonical media asset repository"
+    );
+    const createPrismaSiteMediaAssetsRepository = readFunction(
+      module,
+      "createPrismaSiteMediaAssetsRepository"
+    ) as () => {
+      readSitePublicationMediaParity?: (siteId: string, tx: ReturnType<typeof createCanonicalMediaTxFake>) => Promise<unknown>;
+    };
+    const repository = createPrismaSiteMediaAssetsRepository();
+    const tx = createCanonicalMediaTxFake({
+      previewImage: {
+        ...syntheticMediaAsset("preview-a", "preview", null),
+        storagePath: "https://storage.example.test/sites/preview-a?token=secret"
+      }
+    });
+
+    await expect(
+      repository.readSitePublicationMediaParity?.(
+        "00000000-0000-4000-8000-000000000101",
+        tx
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("ordinary admin site editor renders one primary publication control and keeps maintenance controls out of the routine flow", async () => {
     const { createFakeDocument } = await import(adminUiDomHelperPath);
     const { createSiteEditorScreen } = await import(siteEditorModulePath);
@@ -409,6 +581,95 @@ interface DurablePublicationInput {
 
 function fixedNow(): Date {
   return new Date("2026-08-03T16:00:00.000Z");
+}
+
+function createCanonicalMediaTxFake(
+  overrides: {
+    galleryImages?: Array<ReturnType<typeof syntheticMediaAsset>>;
+    previewImage?: ReturnType<typeof syntheticMediaAsset>;
+  } = {}
+) {
+  const siteId = "00000000-0000-4000-8000-000000000101";
+  const previewImage = overrides.previewImage ?? syntheticMediaAsset("preview-a", "preview", null);
+  const galleryImages = overrides.galleryImages ?? [
+    syntheticMediaAsset("gallery-b", "gallery", 0),
+    syntheticMediaAsset("gallery-a", "gallery", 1)
+  ];
+
+  return {
+    site: {
+      findUnique: vi.fn(async () => ({
+        galleryImageAssets: galleryImages.map((image) => ({
+          alt: `Alt ${image.assetId}`,
+          asset: canonicalMediaAssetRecord(image),
+          assetId: image.assetId,
+          siteId,
+          slot: "gallery",
+          sortOrder: image.sortOrder
+        })),
+        id: siteId,
+        previewImage: {
+          asset: canonicalMediaAssetRecord(previewImage),
+          assetId: previewImage.assetId,
+          siteId,
+          slot: "preview"
+        }
+      }))
+    }
+  };
+}
+
+function canonicalMediaAssetRecord(image: ReturnType<typeof syntheticMediaAsset>) {
+  return {
+    assetId: image.assetId,
+    decodedFormat: image.decodedFormat,
+    height: image.height,
+    siteId: image.siteId,
+    slot: image.slot,
+    sourceMime: image.sourceMime,
+    sourceSha256: image.sourceSha256,
+    storagePath: image.storagePath,
+    variants: image.variants,
+    width: image.width
+  };
+}
+
+function syntheticMediaAsset(
+  assetId: string,
+  slot: "gallery" | "preview",
+  sortOrder: number | null
+) {
+  const siteId = "00000000-0000-4000-8000-000000000101";
+  const storagePath = `sites/${siteId}/${slot}/${assetId}`;
+
+  return {
+    assetId,
+    decodedFormat: "png",
+    height: 600,
+    siteId,
+    slot,
+    sortOrder,
+    sourceMime: "image/png",
+    sourceSha256: slot === "preview" ? "a".repeat(64) : "b".repeat(64),
+    storagePath,
+    variants: [
+      {
+        contentType: "image/webp",
+        format: "webp",
+        height: 600,
+        path: `${storagePath}/1200.webp`,
+        width: 1200
+      },
+      {
+        contentType: "image/avif",
+        format: "avif",
+        height: 600,
+        path: `${storagePath}/1200.avif`,
+        width: 1200
+      }
+    ],
+    width: 1200
+  };
 }
 
 function adminPrincipal(): AuthenticatedPrincipal {

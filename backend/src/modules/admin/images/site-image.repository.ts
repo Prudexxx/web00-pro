@@ -8,6 +8,7 @@ import {
 import type { ManagedGalleryImage } from "../../images/image.types.js";
 import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
 import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
+import { createPrismaSiteMediaAssetsRepository } from "./site-media-assets.repository.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
 import {
   assertCanDeleteSiteImages,
@@ -20,6 +21,12 @@ const siteImageSelect = {
   deletedAt: true,
   galleryImages: true,
   id: true,
+  previewAssetId: true,
+  previewImage: {
+    select: {
+      assetId: true
+    }
+  },
   previewImageUrl: true,
   status: true,
   title: true
@@ -31,6 +38,7 @@ export function createPrismaSiteImageRepository(options: {
   prisma: PrismaClient;
 }): SiteImageRepository {
   const prisma = options.prisma;
+  const mediaAssets = createPrismaSiteMediaAssetsRepository();
 
   return {
     async addGalleryImage(input) {
@@ -38,6 +46,34 @@ export function createPrismaSiteImageRepository(options: {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanMutateSiteImages(input.context.actor, before);
         const gallery = readGalleryArray(before.galleryImages);
+        const existingIndex = findGalleryAssetIndex(gallery, input.image.assetId);
+
+        if (existingIndex !== -1) {
+          await mediaAssets.upsertAsset(input.asset, tx);
+          await tx.siteGalleryImage.upsert({
+            create: {
+              alt: String(gallery[existingIndex]?.alt ?? input.image.alt),
+              assetId: input.image.assetId,
+              siteId: input.siteId,
+              slot: "gallery",
+              sortOrder: existingIndex
+            },
+            update: {
+              alt: String(gallery[existingIndex]?.alt ?? input.image.alt),
+              slot: "gallery",
+              sortOrder: existingIndex
+            },
+            where: {
+              siteId_assetId: {
+                assetId: input.image.assetId,
+                siteId: input.siteId
+              }
+            }
+          });
+          await markReservationsCompleted(tx, input.uploadReservationIds, input.context.now);
+
+          return before;
+        }
 
         if (gallery.length >= 20) {
           throw new AppError({
@@ -46,6 +82,17 @@ export function createPrismaSiteImageRepository(options: {
             statusCode: 409
           });
         }
+
+        await mediaAssets.upsertAsset(input.asset, tx);
+        await tx.siteGalleryImage.create({
+          data: {
+            alt: input.image.alt,
+            assetId: input.image.assetId,
+            siteId: input.siteId,
+            slot: "gallery",
+            sortOrder: gallery.length
+          }
+        });
 
         const next = normalizeGallery([...gallery, storedGalleryImage(input.image)]);
         const after = await tx.site.update({
@@ -82,6 +129,13 @@ export function createPrismaSiteImageRepository(options: {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanDeleteSiteImages(input.context.actor, before);
         const gallery = readGalleryArray(before.galleryImages);
+        await tx.siteGalleryImage.deleteMany({
+          where: {
+            assetId: input.assetId,
+            siteId: input.siteId
+          }
+        });
+
         const next = normalizeGallery(
           gallery.filter(
             (item) =>
@@ -124,8 +178,11 @@ export function createPrismaSiteImageRepository(options: {
       return runSerializableWithRetry(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanDeleteSiteImages(input.context.actor, before);
+        await tx.sitePreviewImage.deleteMany({
+          where: { siteId: input.siteId }
+        });
         const after = await tx.site.update({
-          data: { previewImageUrl: null },
+          data: { previewAssetId: null, previewImageUrl: null },
           select: siteImageSelect,
           where: { id: input.siteId }
         });
@@ -169,8 +226,45 @@ export function createPrismaSiteImageRepository(options: {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanMutateSiteImages(input.context.actor, before);
         onStage("DB_SITE_UPDATED");
+        if (
+          before.previewAssetId === input.assetId &&
+          before.previewImageUrl === input.previewImageUrl
+        ) {
+          await mediaAssets.upsertAsset(input.asset, tx);
+          await tx.sitePreviewImage.upsert({
+            create: {
+              assetId: input.assetId,
+              siteId: input.siteId,
+              slot: "preview"
+            },
+            update: {
+              assetId: input.assetId,
+              slot: "preview"
+            },
+            where: { siteId: input.siteId }
+          });
+          await markReservationsCompleted(tx, input.uploadReservationIds, input.context.now);
+
+          return before;
+        }
+        await mediaAssets.upsertAsset(input.asset, tx);
+        await tx.sitePreviewImage.upsert({
+          create: {
+            assetId: input.assetId,
+            siteId: input.siteId,
+            slot: "preview"
+          },
+          update: {
+            assetId: input.assetId,
+            slot: "preview"
+          },
+          where: { siteId: input.siteId }
+        });
         const after = await tx.site.update({
-          data: { previewImageUrl: input.previewImageUrl },
+          data: {
+            previewAssetId: input.assetId,
+            previewImageUrl: input.previewImageUrl
+          },
           select: siteImageSelect,
           where: { id: input.siteId }
         });
@@ -211,10 +305,47 @@ export function createPrismaSiteImageRepository(options: {
       return after;
     },
     async reorderGallery(input) {
-      return runSerializableWithRetry(prisma, async (tx) => {
+      return runSiteImageSerializableWithDeadline(prisma, async (tx) => {
         const before = await getSiteOrThrow(tx, input.siteId);
         assertCanMutateSiteImages(input.context.actor, before);
         const next = normalizeGallery(input.images.map(storedGalleryImage));
+        assertGalleryReorderMatchesCurrent(readGalleryArray(before.galleryImages), next);
+        const canonicalRows = await tx.siteGalleryImage.findMany({
+          orderBy: [
+            { sortOrder: "asc" },
+            { assetId: "asc" }
+          ],
+          select: { assetId: true },
+          where: { siteId: input.siteId }
+        });
+        if (canonicalRows.length > 0) {
+          const canonicalAssetIds = assertCanonicalGallerySubsetOfMirror(
+            canonicalRows,
+            next
+          );
+          await tx.siteGalleryImage.updateMany({
+            data: { sortOrder: { increment: 1_000_000 } },
+            where: { siteId: input.siteId }
+          });
+          for (const image of next) {
+            if (!canonicalAssetIds.has(String(image.assetId))) {
+              continue;
+            }
+
+            await tx.siteGalleryImage.update({
+              data: {
+                alt: String(image.alt),
+                sortOrder: Number(image.sortOrder)
+              },
+              where: {
+                siteId_assetId: {
+                  assetId: String(image.assetId),
+                  siteId: input.siteId
+                }
+              }
+            });
+          }
+        }
         const after = await tx.site.update({
           data: { galleryImages: next as Prisma.InputJsonValue },
           select: siteImageSelect,
@@ -270,7 +401,7 @@ async function runSiteImageSerializableWithDeadline<T>(
       if (isDatabaseTimeoutError(error)) {
         throw databaseTemporary();
       }
-      if (!isRetryableSerializableConflict(error)) {
+      if (!isRetryableSerializableConflict(error) && !isUniqueConflict(error)) {
         throw error;
       }
       if (attempt === MAX_SERIALIZABLE_ATTEMPTS) {
@@ -329,6 +460,15 @@ function isRetryableSerializableConflict(error: unknown): boolean {
   );
 }
 
+function isUniqueConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
+}
+
 function databaseTemporary(): AppError {
   return new AppError({
     code: "DATABASE_TEMPORARY",
@@ -341,6 +481,14 @@ function concurrentModification(): AppError {
   return new AppError({
     code: "CONCURRENT_MODIFICATION",
     message: "The operation conflicted with another update. Try again.",
+    statusCode: 409
+  });
+}
+
+function galleryDataInvalid(): AppError {
+  return new AppError({
+    code: "GALLERY_DATA_INVALID",
+    message: "Gallery image data is invalid.",
     statusCode: 409
   });
 }
@@ -384,6 +532,73 @@ function normalizeGallery(items: Record<string, unknown>[]): Record<string, unkn
     ...item,
     sortOrder: index
   }));
+}
+
+function findGalleryAssetIndex(
+  gallery: readonly Record<string, unknown>[],
+  assetId: string
+): number {
+  return gallery.findIndex((item) => item.assetId === assetId);
+}
+
+function assertGalleryReorderMatchesCurrent(
+  current: readonly Record<string, unknown>[],
+  next: readonly Record<string, unknown>[]
+): void {
+  assertSameAssetSet(readGalleryAssetIds(current), readGalleryAssetIds(next));
+}
+
+function assertCanonicalGallerySubsetOfMirror(
+  canonicalRows: readonly { assetId: string }[],
+  next: readonly Record<string, unknown>[]
+): Set<string> {
+  const nextIds = readGalleryAssetIds(next);
+  const nextSet = new Set(nextIds);
+  if (nextSet.size !== nextIds.length) {
+    throw galleryDataInvalid();
+  }
+
+  const canonicalIds = canonicalRows.map((row) => row.assetId);
+  const canonicalSet = new Set(canonicalIds);
+  if (canonicalSet.size !== canonicalIds.length) {
+    throw galleryDataInvalid();
+  }
+
+  for (const assetId of canonicalSet) {
+    if (!nextSet.has(assetId)) {
+      throw galleryDataInvalid();
+    }
+  }
+
+  return canonicalSet;
+}
+
+function assertSameAssetSet(current: readonly string[], next: readonly string[]): void {
+  if (current.length !== next.length) {
+    throw galleryDataInvalid();
+  }
+
+  const currentSet = new Set(current);
+  const nextSet = new Set(next);
+  if (currentSet.size !== current.length || nextSet.size !== next.length) {
+    throw galleryDataInvalid();
+  }
+
+  for (const assetId of nextSet) {
+    if (!currentSet.has(assetId)) {
+      throw galleryDataInvalid();
+    }
+  }
+}
+
+function readGalleryAssetIds(items: readonly Record<string, unknown>[]): string[] {
+  return items.map((item) => {
+    if (typeof item.assetId !== "string" || item.assetId.trim() === "") {
+      throw galleryDataInvalid();
+    }
+
+    return item.assetId;
+  });
 }
 
 function hasPublicProjection(site: Pick<SiteImageMutationSite, "active" | "deletedAt" | "status">): boolean {
