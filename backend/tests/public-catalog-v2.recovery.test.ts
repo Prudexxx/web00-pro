@@ -210,6 +210,7 @@ describe("public catalog v2 publication recovery", () => {
     const startPublication = vi.fn();
     const reconciler = createPublicCatalogV2Reconciler({
       finalizer,
+      leaseId: () => "synthetic-reconciler-lease",
       now: fixedNow,
       repository,
       workerId: "web00-opv2-reconciler-01"
@@ -221,6 +222,7 @@ describe("public catalog v2 publication recovery", () => {
     });
     expect(startPublication).not.toHaveBeenCalled();
     expect(repository.findPostActivationFinalizationGaps).toHaveBeenCalledWith({
+      leaseId: "synthetic-reconciler-lease",
       now: fixedNow(),
       staleLockedBefore: new Date("2026-08-03T18:03:00.000Z"),
       workerId: "web00-opv2-reconciler-01"
@@ -231,6 +233,7 @@ describe("public catalog v2 publication recovery", () => {
         id: "00000000-0000-4000-8000-00000000feed",
         status: "running"
       }),
+      leaseId: "synthetic-reconciler-lease",
       release: releaseFixture()
     }));
   });
@@ -248,6 +251,7 @@ describe("public catalog v2 publication recovery", () => {
     const repository = createReconcilerRepositoryFake();
     const reconciler = createPublicCatalogV2Reconciler({
       finalizer: vi.fn(async () => ({ status: "succeeded" })),
+      leaseId: () => "synthetic-reconciler-lease",
       now: fixedNow,
       repository,
       runIntervalMs: 60_000,
@@ -274,6 +278,7 @@ describe("public catalog v2 publication recovery", () => {
     const repository = createPublicCatalogV2Repository(prisma);
 
     const gaps = await repository.findPostActivationFinalizationGaps({
+      leaseId: "synthetic-reconciler-lease",
       now: fixedNow(),
       staleLockedBefore: new Date("2026-08-03T18:03:00.000Z"),
       workerId: "web00-opv2-reconciler-01"
@@ -290,16 +295,44 @@ describe("public catalog v2 publication recovery", () => {
       requestId: "req_recovery",
       revision: 7,
       siteId: "00000000-0000-4000-8000-000000000101"
+    })).rejects.toMatchObject({ code: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD" });
+    await expect(repository.finalizePublicationTransaction({
+      activePointerSha256: "e".repeat(64),
+      action: "publish",
+      completedAt: fixedNow(),
+      eventType: "activate",
+      expectedPublicState: "published",
+      leaseId: "synthetic-reconciler-lease",
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      previousRevision: null,
+      requestId: "req_recovery",
+      revision: 7,
+      siteId: "00000000-0000-4000-8000-000000000101"
     })).resolves.toMatchObject({
       leaseId: null,
       status: "succeeded"
     });
+    await expect(repository.finalizePublicationTransaction({
+      activePointerSha256: "e".repeat(64),
+      action: "publish",
+      completedAt: fixedNow(),
+      eventType: "activate",
+      expectedPublicState: "published",
+      leaseId: "synthetic-lease-001",
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      previousRevision: null,
+      requestId: "req_recovery",
+      revision: 7,
+      siteId: "00000000-0000-4000-8000-000000000101"
+    })).rejects.toMatchObject({ code: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD" });
 
     expect(gaps).toEqual([
       expect.objectContaining({
         activePointer: activePointerFixture(),
+        leaseId: "synthetic-reconciler-lease",
         operation: expect.objectContaining({
           id: "00000000-0000-4000-8000-00000000feed",
+          leaseId: "synthetic-reconciler-lease",
           stage: "db_finalize",
           status: "running"
         }),
@@ -347,10 +380,170 @@ describe("public catalog v2 publication recovery", () => {
       }),
       where: {
         id: "00000000-0000-4000-8000-00000000feed",
-        leaseId: "synthetic-lease-001",
+        leaseId: "synthetic-reconciler-lease",
         status: "running"
       }
     }));
+  });
+
+  it("commits the current target and lease guard before external active pointer I/O is allowed", async () => {
+    const module = await importRepositoryModule();
+    const createPublicCatalogV2Repository = readFunction(
+      module,
+      "createPublicCatalogV2Repository"
+    ) as (prisma: ReturnType<typeof createCurrentTargetGuardPrismaFake>) => {
+      withCurrentPublicationTarget<T>(
+        input: Record<string, unknown>,
+        operation: (repository: Record<string, unknown>) => Promise<T>
+      ): Promise<T>;
+    };
+    const prisma = createCurrentTargetGuardPrismaFake();
+    const repository = createPublicCatalogV2Repository(prisma);
+    const externalPointerIo = vi.fn(async () => {
+      expect(prisma.inTransaction()).toBe(false);
+
+      return { activated: true };
+    });
+
+    await expect(repository.withCurrentPublicationTarget({
+      leaseId: "synthetic-lease-001",
+      now: fixedNow(),
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      revision: 7
+    }, externalPointerIo)).resolves.toEqual({ activated: true });
+
+    expect(externalPointerIo).toHaveBeenCalledTimes(1);
+    expect(prisma.tx.publicCatalogPublicationOperation.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: "00000000-0000-4000-8000-00000000feed",
+        leaseId: "synthetic-lease-001",
+        status: "running",
+        targetRevision: 7
+      }
+    }));
+    expect(prisma.tx.publicCatalogSetting.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        desiredRevision: { lte: 7 },
+        id: "public-catalog"
+      }
+    }));
+  });
+
+  it("rejects a stolen lease before active pointer I/O can run", async () => {
+    const module = await importRepositoryModule();
+    const createPublicCatalogV2Repository = readFunction(
+      module,
+      "createPublicCatalogV2Repository"
+    ) as (prisma: ReturnType<typeof createCurrentTargetGuardPrismaFake>) => {
+      withCurrentPublicationTarget<T>(
+        input: Record<string, unknown>,
+        operation: (repository: Record<string, unknown>) => Promise<T>
+      ): Promise<T>;
+    };
+    const prisma = createCurrentTargetGuardPrismaFake({ operationLockCount: 0 });
+    const repository = createPublicCatalogV2Repository(prisma);
+    const externalPointerIo = vi.fn(async () => ({ activated: true }));
+
+    await expect(repository.withCurrentPublicationTarget({
+      leaseId: "synthetic-lease-001",
+      now: fixedNow(),
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      revision: 7
+    }, externalPointerIo)).rejects.toMatchObject({ code: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD" });
+
+    expect(externalPointerIo).not.toHaveBeenCalled();
+    expect(prisma.tx.publicCatalogSetting.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("creates the verified release row through the concrete repository before DB finalization", async () => {
+    const module = await importRepositoryModule();
+    const createPublicCatalogV2Repository = readFunction(
+      module,
+      "createPublicCatalogV2Repository"
+    ) as (prisma: ReturnType<typeof createRecoveryPrismaFake>) => {
+      recordVerifiedPublicCatalogV2Release(input: Record<string, unknown>): Promise<void>;
+    };
+    const prisma = createRecoveryPrismaFake({
+      releaseRecord: null
+    });
+    const repository = createPublicCatalogV2Repository(prisma);
+
+    await expect(
+      repository.recordVerifiedPublicCatalogV2Release({
+        generatedAt: fixedNow(),
+        release: releaseFixture()
+      })
+    ).resolves.toBeUndefined();
+
+    expect(prisma.publicCatalogRelease.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        activePointerSha256: null,
+        activatedAt: null,
+        categoriesPath: "public-catalog/v2/releases/revision-7/categories.json",
+        categoriesSha256: "f".repeat(64),
+        chunksCount: 1,
+        generatedAt: fixedNow(),
+        indexPath: "public-catalog/v2/releases/revision-7/index.json",
+        indexSha256: "1".repeat(64),
+        itemsCount: 1,
+        manifestPath: "public-catalog/v2/releases/revision-7/manifest.json",
+        manifestSha256: "c".repeat(64),
+        popularCount: 1,
+        popularPath: "public-catalog/v2/releases/revision-7/popular.json",
+        popularSha256: "a".repeat(64),
+        revision: 7,
+        status: "verified"
+      })
+    });
+    expect(prisma.publicCatalogRelease.update).not.toHaveBeenCalled();
+  });
+
+  it("replays a verified release row unique race by re-reading the existing immutable evidence", async () => {
+    const module = await importRepositoryModule();
+    const createPublicCatalogV2Repository = readFunction(
+      module,
+      "createPublicCatalogV2Repository"
+    ) as (prisma: ReturnType<typeof createRecoveryPrismaFake>) => {
+      recordVerifiedPublicCatalogV2Release(input: Record<string, unknown>): Promise<void>;
+    };
+    const prisma = createRecoveryPrismaFake({
+      createReleaseError: uniqueConstraintError(),
+      releaseFindUniqueResults: [null, releaseRecord()]
+    });
+    const repository = createPublicCatalogV2Repository(prisma);
+
+    await expect(
+      repository.recordVerifiedPublicCatalogV2Release({
+        generatedAt: fixedNow(),
+        release: releaseFixture()
+      })
+    ).resolves.toBeUndefined();
+
+    expect(prisma.publicCatalogRelease.create).toHaveBeenCalledTimes(1);
+    expect(prisma.publicCatalogRelease.findUnique).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not rewrite a compatible verified release row that may have become active concurrently", async () => {
+    const module = await importRepositoryModule();
+    const createPublicCatalogV2Repository = readFunction(
+      module,
+      "createPublicCatalogV2Repository"
+    ) as (prisma: ReturnType<typeof createRecoveryPrismaFake>) => {
+      recordVerifiedPublicCatalogV2Release(input: Record<string, unknown>): Promise<void>;
+    };
+    const prisma = createRecoveryPrismaFake({
+      releaseRecord: verifiedReleaseRecord()
+    });
+    const repository = createPublicCatalogV2Repository(prisma);
+
+    await expect(
+      repository.recordVerifiedPublicCatalogV2Release({
+        generatedAt: fixedNow(),
+        release: releaseFixture()
+      })
+    ).resolves.toBeUndefined();
+
+    expect(prisma.publicCatalogRelease.update).not.toHaveBeenCalled();
   });
 
   it("executes DB finalization writes inside one Prisma transaction and rolls back failed activation evidence", async () => {
@@ -430,6 +623,7 @@ interface FinalizePublicationSuccessInput {
 
 interface ReconcilerOptions {
   finalizer: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  leaseId?: () => string;
   now: () => Date;
   repository: ReturnType<typeof createReconcilerRepositoryFake>;
   runIntervalMs?: number;
@@ -503,19 +697,24 @@ function createPublicationFinalizerDependenciesFake(overrides: Record<string, un
 
 function createReconcilerRepositoryFake() {
   return {
-    findPostActivationFinalizationGaps: vi.fn(async () => [
+    findPostActivationFinalizationGaps: vi.fn(async (input: { leaseId: string }) => [
       {
         activePointer: activePointerFixture(),
-        leaseId: "synthetic-lease-001",
-        operation: operationRecord({ status: "running" }),
+        leaseId: input.leaseId,
+        operation: operationRecord({ leaseId: input.leaseId, status: "running" }),
         release: releaseFixture()
       }
     ])
   };
 }
 
-function createRecoveryPrismaFake() {
+function createRecoveryPrismaFake(options: {
+  createReleaseError?: unknown;
+  releaseFindUniqueResults?: Array<ReturnType<typeof releaseRecord> | null>;
+  releaseRecord?: ReturnType<typeof releaseRecord> | null;
+} = {}) {
   const operation = operationRecord({ stage: "db_finalize", status: "running" });
+  const releaseFindUniqueResults = [...(options.releaseFindUniqueResults ?? [])];
 
   return {
     publicCatalogActivationEvent: {
@@ -534,7 +733,21 @@ function createRecoveryPrismaFake() {
       })
     },
     publicCatalogRelease: {
-      findUnique: vi.fn(async () => releaseRecord()),
+      create: vi.fn(async () => {
+        if (options.createReleaseError !== undefined) {
+          throw options.createReleaseError;
+        }
+
+        return releaseRecord();
+      }),
+      findUnique: vi.fn(async () => {
+        const next = releaseFindUniqueResults.shift();
+        if (next !== undefined) {
+          return next;
+        }
+
+        return options.releaseRecord === undefined ? releaseRecord() : options.releaseRecord;
+      }),
       update: vi.fn(async () => releaseRecord())
     },
     publicCatalogSetting: {
@@ -545,6 +758,60 @@ function createRecoveryPrismaFake() {
       updateMany: vi.fn(async () => ({ count: 1 }))
     }
   };
+}
+
+function createCurrentTargetGuardPrismaFake(options: {
+  operationLockCount?: number;
+  targetLockCount?: number;
+} = {}) {
+  let inTransaction = false;
+  const tx = {
+    publicCatalogActivationEvent: {
+      create: vi.fn(async () => ({}))
+    },
+    publicCatalogPublicationOperation: {
+      create: vi.fn(async () => operationRecord()),
+      findFirst: vi.fn(async () => null),
+      findUnique: vi.fn(async () => operationRecord()),
+      update: vi.fn(async () => operationRecord()),
+      updateMany: vi.fn(async () => ({ count: options.operationLockCount ?? 1 }))
+    },
+    publicCatalogRelease: {
+      create: vi.fn(async () => releaseRecord()),
+      findUnique: vi.fn(async () => releaseRecord()),
+      update: vi.fn(async () => releaseRecord())
+    },
+    publicCatalogSetting: {
+      findUnique: vi.fn(async () => ({
+        activeRevision: 6,
+        desiredRevision: 7
+      })),
+      update: vi.fn(async () => ({ activeRevision: 7, id: "public-catalog" })),
+      updateMany: vi.fn(async () => ({ count: options.targetLockCount ?? 1 }))
+    },
+    site: {
+      findMany: vi.fn(async () => []),
+      updateMany: vi.fn(async () => ({ count: 1 }))
+    }
+  };
+
+  return {
+    $transaction: vi.fn(async (callback: (transaction: typeof tx) => Promise<unknown>) => {
+      inTransaction = true;
+      try {
+        return await callback(tx);
+      } finally {
+        inTransaction = false;
+      }
+    }),
+    inTransaction: () => inTransaction,
+    tx,
+    ...tx
+  };
+}
+
+function uniqueConstraintError(): Error & { code: string } {
+  return Object.assign(new Error("Synthetic unique release race."), { code: "P2002" });
 }
 
 function finalizeTransactionInput(): Record<string, unknown> {
@@ -605,6 +872,7 @@ function createTransactionalRecoveryPrismaFake(options: {
       })
     },
     publicCatalogRelease: {
+      create: vi.fn(async () => releaseRecord()),
       findUnique: vi.fn(async () => releaseRecord()),
       update: vi.fn(async (args: { data: { activePointerSha256?: string; status?: string } }) => {
         state.activePointerSha256 = args.data.activePointerSha256 ?? state.activePointerSha256;
@@ -666,6 +934,7 @@ function createTransactionalRecoveryPrismaFake(options: {
       updateMany: vi.fn(async () => outsideTransaction("publicationOperation.updateMany"))
     },
     publicCatalogRelease: {
+      create: vi.fn(async () => outsideTransaction("release.create")),
       findUnique: vi.fn(async () => releaseRecord()),
       update: vi.fn(async () => outsideTransaction("release.update"))
     },
@@ -726,19 +995,39 @@ function releaseFixture(): Record<string, unknown> {
           kind: "index",
           path: "public-catalog/v2/releases/revision-7/index.json",
           sha256: "1".repeat(64)
+        },
+        {
+          kind: "popular",
+          path: "public-catalog/v2/releases/revision-7/popular.json",
+          sha256: "a".repeat(64)
+        },
+        {
+          kind: "categories",
+          path: "public-catalog/v2/releases/revision-7/categories.json",
+          sha256: "f".repeat(64)
         }
       ],
+      categories: {
+        path: "public-catalog/v2/releases/revision-7/categories.json",
+        sha256: "f".repeat(64)
+      },
       chunks: [
         {
           path: "public-catalog/v2/releases/revision-7/chunks/chunk-000001.json",
           sha256: "2".repeat(64)
         }
       ],
+      chunksCount: 1,
       index: {
         path: "public-catalog/v2/releases/revision-7/index.json",
         sha256: "1".repeat(64)
       },
       itemsCount: 1,
+      popular: {
+        count: 1,
+        path: "public-catalog/v2/releases/revision-7/popular.json",
+        sha256: "a".repeat(64)
+      },
       revision: 7,
       sha256: "c".repeat(64)
     }
@@ -756,7 +1045,41 @@ function activePointerFixture(overrides: Record<string, unknown> = {}): Record<s
   };
 }
 
-function releaseRecord() {
+interface ReleaseRecordFixture {
+  activePointerSha256: string | null;
+  activatedAt: Date | null;
+  categoriesPath: string;
+  categoriesSha256: string;
+  chunksCount: number;
+  generatedAt: Date;
+  indexPath: string;
+  indexSha256: string;
+  itemsCount: number;
+  manifestPath: string;
+  manifestSha256: string;
+  popularCount: number;
+  popularPath: string;
+  popularSha256: string;
+  revision: number;
+  status: string;
+}
+
+function releaseRecord(overrides: Partial<ReleaseRecordFixture> = {}): ReleaseRecordFixture {
+  return {
+    ...releaseRecordBase(),
+    ...overrides
+  };
+}
+
+function verifiedReleaseRecord() {
+  return releaseRecord({
+    activePointerSha256: null,
+    activatedAt: null,
+    status: "verified"
+  });
+}
+
+function releaseRecordBase(): ReleaseRecordFixture {
   return {
     activePointerSha256: "e".repeat(64),
     activatedAt: fixedNow(),

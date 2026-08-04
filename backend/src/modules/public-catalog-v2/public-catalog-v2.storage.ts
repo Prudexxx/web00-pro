@@ -18,6 +18,7 @@ export interface PublicCatalogV2Storage {
   fetchJsonArtifact(input: {
     bucketId: string;
     path: string;
+    signal?: AbortSignal;
   }): Promise<PublicCatalogV2FetchedArtifact>;
   getPublicUrl?: (path: string) => string;
   uploadActivePointer(input: PublicCatalogV2UploadInput): Promise<void>;
@@ -30,6 +31,7 @@ export interface PublicCatalogV2UploadInput {
   cacheControl: string;
   contentType: "application/json";
   path: string;
+  signal?: AbortSignal;
   upsert: boolean;
 }
 
@@ -47,6 +49,20 @@ export interface UploadAndVerifyPublicCatalogV2ReleaseInput {
   storage: PublicCatalogV2Storage;
 }
 
+export interface UploadAndVerifyPublicCatalogV2ImmutableArtifactsInput {
+  release: BuiltPublicCatalogV2Release;
+  storage: PublicCatalogV2Storage;
+}
+
+export interface UploadAndVerifyPublicCatalogV2ActivePointerInput {
+  activatedAt: Date;
+  onActivePointerUploaded?: (activePointer: UploadAndVerifyPublicCatalogV2ReleaseResult["activePointer"]) => Promise<void> | void;
+  previousRevision?: number | null;
+  release: BuiltPublicCatalogV2Release;
+  signal?: AbortSignal;
+  storage: PublicCatalogV2Storage;
+}
+
 export interface UploadAndVerifyPublicCatalogV2ReleaseResult {
     activePointer: {
       manifestSha256: string;
@@ -60,6 +76,17 @@ export interface UploadAndVerifyPublicCatalogV2ReleaseResult {
   uploadOrder: string[];
 }
 
+export interface UploadAndVerifyPublicCatalogV2ImmutableArtifactsResult {
+  immutableArtifactsVerified: number;
+  replayedImmutableArtifacts: string[];
+  uploadOrder: string[];
+}
+
+export interface UploadAndVerifyPublicCatalogV2ActivePointerResult {
+  activePointer: UploadAndVerifyPublicCatalogV2ReleaseResult["activePointer"];
+  uploadOrder: string[];
+}
+
 interface VerifiedPublicCatalogV2Artifact {
   artifact: PublicCatalogV2BuiltArtifact;
   parsed: Record<string, unknown>;
@@ -69,6 +96,20 @@ interface VerifiedPublicCatalogV2Artifact {
 export async function uploadAndVerifyPublicCatalogV2Release(
   input: UploadAndVerifyPublicCatalogV2ReleaseInput
 ): Promise<UploadAndVerifyPublicCatalogV2ReleaseResult> {
+  const immutable = await uploadAndVerifyPublicCatalogV2ImmutableArtifacts(input);
+  const active = await uploadAndVerifyPublicCatalogV2ActivePointer(input);
+
+  return {
+    activePointer: active.activePointer,
+    immutableArtifactsVerified: immutable.immutableArtifactsVerified,
+    replayedImmutableArtifacts: immutable.replayedImmutableArtifacts,
+    uploadOrder: [...immutable.uploadOrder, ...active.uploadOrder]
+  };
+}
+
+export async function uploadAndVerifyPublicCatalogV2ImmutableArtifacts(
+  input: UploadAndVerifyPublicCatalogV2ImmutableArtifactsInput
+): Promise<UploadAndVerifyPublicCatalogV2ImmutableArtifactsResult> {
   const manifestArtifact = findManifestArtifact(input.release);
   assertActivationInputMatchesManifest(input.release, manifestArtifact);
   const uploadOrder: string[] = [];
@@ -86,19 +127,43 @@ export async function uploadAndVerifyPublicCatalogV2Release(
   });
   verifyImmutableReleaseMembership(verified);
 
+  return {
+    immutableArtifactsVerified: verified.length,
+    replayedImmutableArtifacts,
+    uploadOrder
+  };
+}
+
+export async function uploadAndVerifyPublicCatalogV2ActivePointer(
+  input: UploadAndVerifyPublicCatalogV2ActivePointerInput
+): Promise<UploadAndVerifyPublicCatalogV2ActivePointerResult> {
+  const manifestArtifact = findManifestArtifact(input.release);
+  assertActivationInputMatchesManifest(input.release, manifestArtifact);
   const activePointer = buildActivePointerArtifact(input, manifestArtifact);
+  const activePointerEvidence = {
+    manifestSha256: manifestArtifact.sha256,
+    path: activePointer.path,
+    previousRevision: input.previousRevision ?? null,
+    revision: input.release.activationInput.revision,
+    sha256: activePointer.sha256
+  };
+  const uploadOrder: string[] = [];
+
   await input.storage.uploadActivePointer({
     body: activePointer.bytes,
     bucketId: PUBLIC_CATALOG_V2_JSON_BUCKET,
     cacheControl: "no-store",
     contentType: JSON_CONTENT_TYPE,
     path: activePointer.path,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
     upsert: true
   });
   uploadOrder.push(activePointer.path);
+  await input.onActivePointerUploaded?.(activePointerEvidence);
   const fetchedActive = await input.storage.fetchJsonArtifact({
     bucketId: PUBLIC_CATALOG_V2_JSON_BUCKET,
-    path: activePointer.path
+    path: activePointer.path,
+    ...(input.signal === undefined ? {} : { signal: input.signal })
   });
   verifyFetchedArtifact({
     expectedBytes: activePointer.bytes,
@@ -108,15 +173,7 @@ export async function uploadAndVerifyPublicCatalogV2Release(
   });
 
   return {
-    activePointer: {
-      manifestSha256: manifestArtifact.sha256,
-      path: activePointer.path,
-      previousRevision: input.previousRevision ?? null,
-      revision: input.release.activationInput.revision,
-      sha256: activePointer.sha256
-    },
-    immutableArtifactsVerified: verified.length,
-    replayedImmutableArtifacts,
+    activePointer: activePointerEvidence,
     uploadOrder
   };
 }

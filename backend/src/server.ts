@@ -69,6 +69,8 @@ import { createPublicCatalogDryRunService } from "./modules/public-catalog/publi
 import { createPublicCatalogStorageBucketManager } from "./modules/public-catalog/public-catalog-storage-bucket.js";
 import { createPublicCatalogSnapshotStorage } from "./modules/public-catalog/public-catalog-snapshot-storage.js";
 import { createPublicCatalogSyncService } from "./modules/public-catalog/public-catalog-sync.service.js";
+import { createPublicCatalogV2Runtime, type PublicCatalogV2Runtime } from "./modules/public-catalog-v2/public-catalog-v2.runtime.js";
+import { createPublicCatalogV2SupabaseStorage } from "./modules/public-catalog-v2/public-catalog-v2.supabase-storage.js";
 import {
   createPrismaReadinessProbe,
   createReadinessService
@@ -101,12 +103,8 @@ export interface StartServerOptions {
 
 export interface StartedServer {
   prisma: PrismaClient;
+  publicCatalogV2Runtime?: PublicCatalogV2Runtime;
   server: Server;
-}
-
-export interface PublicCatalogV2Runtime {
-  start(): void;
-  stop(): Promise<void>;
 }
 
 export function startServer(options: StartServerOptions): StartedServer {
@@ -140,7 +138,14 @@ export function startServer(options: StartServerOptions): StartedServer {
     storage: imageStorage
   });
   const publicCatalogV2Runtime =
-    options.publicCatalogV2WorkerEnabled === true ? options.publicCatalogV2Runtime : undefined;
+    options.publicCatalogV2WorkerEnabled === true
+      ? options.publicCatalogV2Runtime ?? createPublicCatalogV2Runtime({
+          enabled: true,
+          now: options.now ?? (() => new Date()),
+          prisma,
+          storage: createPublicCatalogV2SupabaseStorage(options.storageConfig)
+        })
+      : undefined;
   const repository = createPrismaPublicCatalogRepository({ prisma });
   const publicCatalogService = createPublicCatalogService({
     imageUrlPolicy,
@@ -234,6 +239,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       readCatalog: readCanonicalAssetSourceCatalog,
       repository: createPrismaCanonicalAssetReconciliationRepository({ prisma })
     }),
+    publicationEnabled: publicCatalogV2Runtime !== undefined,
     publicationService: createAdminPublicationService({
       repository: createPrismaAdminPublicationRepository({ prisma })
     }),
@@ -294,8 +300,10 @@ export function startServer(options: StartServerOptions): StartedServer {
       "SIGTERM",
       createShutdownHandler(server, {
         disconnect: async () => {
-          await storageCleanupWorker.stop();
-          await publicCatalogV2Runtime?.stop();
+          await Promise.all([
+            publicCatalogV2Runtime?.stop(),
+            storageCleanupWorker.stop()
+          ]);
           await prisma.$disconnect();
         },
         env: options.env,
@@ -308,8 +316,10 @@ export function startServer(options: StartServerOptions): StartedServer {
       "SIGINT",
       createShutdownHandler(server, {
         disconnect: async () => {
-          await storageCleanupWorker.stop();
-          await publicCatalogV2Runtime?.stop();
+          await Promise.all([
+            publicCatalogV2Runtime?.stop(),
+            storageCleanupWorker.stop()
+          ]);
           await prisma.$disconnect();
         },
         env: options.env,
@@ -320,7 +330,11 @@ export function startServer(options: StartServerOptions): StartedServer {
     );
   }
 
-  return { prisma, server };
+  return {
+    prisma,
+    ...(publicCatalogV2Runtime === undefined ? {} : { publicCatalogV2Runtime }),
+    server
+  };
 }
 
 export function createShutdownHandler(
@@ -356,9 +370,10 @@ export function createShutdownHandler(
     }, timeoutMs);
 
     server.close((error?: Error) => {
-      clearTimeout(forcedTimeout);
-
-      void handleServerClosed(error, options, now);
+      void handleServerClosed(error, options, now)
+        .finally(() => {
+          clearTimeout(forcedTimeout);
+        });
     });
   };
 }
@@ -420,6 +435,7 @@ export function main(): StartedServer {
     env,
     imageProcessingConfig,
     publicCorsConfig,
+    publicCatalogV2WorkerEnabled: readPublicCatalogV2WorkerEnabled(process.env),
     storageConfig
   });
 }
@@ -456,6 +472,10 @@ function readRuntimeVersionInfo(env: NodeJS.ProcessEnv): {
     commit: env.RENDER_GIT_COMMIT ?? null,
     version: env.npm_package_version ?? null
   };
+}
+
+export function readPublicCatalogV2WorkerEnabled(env: NodeJS.ProcessEnv): boolean {
+  return env.PUBLIC_CATALOG_V2_WORKER_ENABLED === "true";
 }
 
 function isDirectRun(): boolean {

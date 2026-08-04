@@ -66,15 +66,18 @@ describe("public catalog v2 orchestrator", () => {
     const repository = createOrchestratorRepositoryFake({ claimable: true });
     const releaseBuilder = vi.fn(async () => syntheticRelease());
     const releaseUploader = vi.fn(async () => ({
+      immutableArtifactsVerified: 5,
+      replayedImmutableArtifacts: [],
+      uploadOrder: ["manifest"]
+    }));
+    const activePointerUploader = vi.fn(async () => ({
       activePointer: {
         manifestSha256: "a".repeat(64),
         path: "public-catalog/v2/active.json",
         revision: 7,
         sha256: "b".repeat(64)
       },
-      immutableArtifactsVerified: 5,
-      replayedImmutableArtifacts: [],
-      uploadOrder: ["manifest", "active"]
+      uploadOrder: ["active"]
     }));
     const finalizer = vi.fn(async () => ({
       buttonLabel: "Опубликовано",
@@ -85,6 +88,7 @@ describe("public catalog v2 orchestrator", () => {
     }));
     const orchestrator = createPublicCatalogV2Orchestrator(orchestratorOptions({
       finalizer,
+      activePointerUploader,
       releaseBuilder,
       releaseUploader,
       repository
@@ -122,6 +126,9 @@ describe("public catalog v2 orchestrator", () => {
       take: 100
     });
     expect(releaseUploader).toHaveBeenCalledWith(expect.objectContaining({
+      release: syntheticRelease()
+    }));
+    expect(activePointerUploader).toHaveBeenCalledWith(expect.objectContaining({
       activatedAt: fixedNow(),
       previousRevision: 6,
       release: syntheticRelease()
@@ -136,6 +143,7 @@ describe("public catalog v2 orchestrator", () => {
         id: "00000000-0000-4000-8000-00000000feed",
         status: "running"
       }),
+      repository: expect.any(Object),
       release: syntheticRelease()
     }));
     expect(repository.recordedStages).toEqual([
@@ -188,13 +196,17 @@ describe("public catalog v2 orchestrator", () => {
     });
     const releaseBuilder = vi.fn(async () => syntheticRelease());
     const releaseUploader = vi.fn(async () => ({
-      activePointer: {},
       immutableArtifactsVerified: 0,
       replayedImmutableArtifacts: [],
       uploadOrder: []
     }));
+    const activePointerUploader = vi.fn(async () => ({
+      activePointer: {},
+      uploadOrder: []
+    }));
     const finalizer = vi.fn(async () => ({ status: "succeeded" }));
     const orchestrator = createPublicCatalogV2Orchestrator(orchestratorOptions({
+      activePointerUploader,
       finalizer,
       releaseBuilder,
       releaseUploader,
@@ -208,6 +220,7 @@ describe("public catalog v2 orchestrator", () => {
     });
     expect(releaseBuilder).not.toHaveBeenCalled();
     expect(releaseUploader).not.toHaveBeenCalled();
+    expect(activePointerUploader).not.toHaveBeenCalled();
     expect(repository.recordedStages).toEqual(["db_finalize"]);
     expect(finalizer).toHaveBeenCalledWith(expect.objectContaining({
       activePointer: expect.objectContaining({
@@ -215,6 +228,197 @@ describe("public catalog v2 orchestrator", () => {
         revision: 7
       }),
       release: syntheticRelease()
+    }));
+  });
+
+  it("persists a verified release row after immutable verification and before the active pointer is uploaded", async () => {
+    const module = await importOrchestratorModule();
+    const createPublicCatalogV2Orchestrator = readFunction(
+      module,
+      "createPublicCatalogV2Orchestrator"
+    ) as (options: OrchestratorOptions) => {
+      runOnce(): Promise<Record<string, unknown>>;
+    };
+    const repository = createOrchestratorRepositoryFake({ claimable: true });
+    const releaseUploader = vi.fn(async () => ({
+      immutableArtifactsVerified: 5,
+      replayedImmutableArtifacts: [],
+      uploadOrder: ["manifest"]
+    }));
+    const activePointerUploader = vi.fn(async () => ({
+      activePointer: {
+        manifestSha256: "a".repeat(64),
+        path: "public-catalog/v2/active.json",
+        revision: 7,
+        sha256: "b".repeat(64)
+      },
+      uploadOrder: ["active"]
+    }));
+    const orchestrator = createPublicCatalogV2Orchestrator(orchestratorOptions({
+      activePointerUploader,
+      releaseUploader,
+      repository
+    }));
+
+    await expect(orchestrator.runOnce()).resolves.toMatchObject({
+      claimed: true,
+      status: "succeeded"
+    });
+
+    expect(repository.recordVerifiedPublicCatalogV2Release).toHaveBeenCalledWith({
+      generatedAt: fixedNow(),
+      release: syntheticRelease()
+    });
+    expect(releaseUploader.mock.invocationCallOrder[0]).toBeLessThan(
+      repository.recordVerifiedPublicCatalogV2Release.mock.invocationCallOrder[0]!
+    );
+    expect(repository.recordVerifiedPublicCatalogV2Release.mock.invocationCallOrder[0]).toBeLessThan(
+      activePointerUploader.mock.invocationCallOrder[0]!
+    );
+    expect(repository.recordVerifiedPublicCatalogV2Release.mock.invocationCallOrder[0]).toBeGreaterThan(
+      releaseUploader.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("revalidates the active pointer lease inside the current-target guard before storage upload", async () => {
+    const module = await importOrchestratorModule();
+    const createPublicCatalogV2Orchestrator = readFunction(
+      module,
+      "createPublicCatalogV2Orchestrator"
+    ) as (options: OrchestratorOptions) => {
+      runOnce(): Promise<Record<string, unknown>>;
+    };
+    const repository = createOrchestratorRepositoryFake({ claimable: true });
+    repository.withCurrentPublicationTarget.mockImplementation(async (_input, callback) => {
+      const guardedRepository = {
+        ...repository,
+        recordPublicationCheckpoint: vi.fn(async (input: PublicationCheckpointInput) => {
+          if (input.stage === "active_build") {
+            throw Object.assign(new Error("Synthetic stolen active lease."), {
+              code: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD"
+            });
+          }
+
+          return repository.recordPublicationCheckpoint(input);
+        })
+      };
+
+      return callback(guardedRepository);
+    });
+    const activePointerUploader = vi.fn(async () => activePointerResult());
+    const orchestrator = createPublicCatalogV2Orchestrator(orchestratorOptions({
+      activePointerUploader,
+      repository
+    }));
+
+    await expect(orchestrator.runOnce()).resolves.toMatchObject({
+      claimed: true,
+      status: "retry_wait"
+    });
+
+    expect(activePointerUploader).not.toHaveBeenCalled();
+    expect(repository.recordPublicationCheckpoint).toHaveBeenLastCalledWith(expect.objectContaining({
+      lastErrorCode: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD",
+      operationId: "00000000-0000-4000-8000-00000000feed",
+      status: "retry_wait"
+    }));
+  });
+
+  it("bounds active pointer storage I/O with an abort signal shorter than the stale-lease window", async () => {
+    vi.useFakeTimers();
+    try {
+      const module = await importOrchestratorModule();
+      const createPublicCatalogV2Orchestrator = readFunction(
+        module,
+        "createPublicCatalogV2Orchestrator"
+      ) as (options: OrchestratorOptions & { activePointerTimeoutMs?: number }) => {
+        runOnce(): Promise<Record<string, unknown>>;
+      };
+      const repository = createOrchestratorRepositoryFake({ claimable: true });
+      const activePointerUploader = vi.fn(async (input: Record<string, unknown>) => {
+        const signal = input.signal;
+        if (!(signal instanceof AbortSignal)) {
+          return activePointerResult();
+        }
+
+        return await new Promise<Record<string, unknown>>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(signal.reason);
+          }, { once: true });
+        });
+      });
+      const orchestrator = createPublicCatalogV2Orchestrator(orchestratorOptions({
+        activePointerTimeoutMs: 10,
+        activePointerUploader,
+        leaseTtlMs: 60_000,
+        repository
+      } as Partial<OrchestratorOptions> & { activePointerTimeoutMs: number }));
+
+      const run = orchestrator.runOnce();
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(run).resolves.toMatchObject({
+        claimed: true,
+        status: "retry_wait"
+      });
+      expect(activePointerUploader.mock.calls[0]?.[0]).toMatchObject({
+        signal: expect.any(AbortSignal)
+      });
+      expect(repository.recordPublicationCheckpoint).toHaveBeenLastCalledWith(expect.objectContaining({
+        lastErrorCode: "PUBLIC_CATALOG_V2_ACTIVE_POINTER_TIMEOUT",
+        status: "retry_wait"
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("persists active pointer evidence immediately after upload when read-back later aborts", async () => {
+    const module = await importOrchestratorModule();
+    const createPublicCatalogV2Orchestrator = readFunction(
+      module,
+      "createPublicCatalogV2Orchestrator"
+    ) as (options: OrchestratorOptions) => {
+      runOnce(): Promise<Record<string, unknown>>;
+    };
+    const repository = createOrchestratorRepositoryFake({ claimable: true });
+    const activePointerUploader = vi.fn(async (input: Record<string, unknown>) => {
+      const onActivePointerUploaded = input.onActivePointerUploaded;
+      if (typeof onActivePointerUploaded !== "function") {
+        throw Object.assign(new Error("Synthetic active upload callback missing."), {
+          code: "PUBLIC_CATALOG_V2_ACTIVE_UPLOAD_CHECKPOINT_MISSING"
+        });
+      }
+
+      await onActivePointerUploaded(activePointerResult().activePointer);
+      throw Object.assign(new Error("Synthetic active read-back timeout."), {
+        code: "PUBLIC_CATALOG_V2_ACTIVE_POINTER_TIMEOUT"
+      });
+    });
+    const orchestrator = createPublicCatalogV2Orchestrator(orchestratorOptions({
+      activePointerUploader,
+      repository
+    }));
+
+    await expect(orchestrator.runOnce()).resolves.toMatchObject({
+      claimed: true,
+      status: "retry_wait"
+    });
+
+    expect(repository.recordPublicationCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      lastCheckpoint: expect.objectContaining({
+        activePointer: expect.objectContaining({
+          path: "public-catalog/v2/active.json",
+          revision: 7
+        }),
+        release: syntheticRelease(),
+        revision: 7
+      }),
+      stage: "active_upload"
+    }));
+    expect(repository.recordPublicationCheckpoint).toHaveBeenLastCalledWith(expect.objectContaining({
+      lastErrorCode: "PUBLIC_CATALOG_V2_ACTIVE_POINTER_TIMEOUT",
+      status: "retry_wait"
     }));
   });
 });
@@ -227,6 +431,7 @@ interface OrchestratorOptions {
   now: () => Date;
   releaseBuilder: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   releaseUploader: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  activePointerUploader: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   repository: ReturnType<typeof createOrchestratorRepositoryFake>;
   runIntervalMs?: number;
   workerId: string;
@@ -263,15 +468,18 @@ function orchestratorOptions(overrides: Partial<OrchestratorOptions> = {}): Orch
     now: fixedNow,
     releaseBuilder: vi.fn(async () => syntheticRelease()),
     releaseUploader: vi.fn(async () => ({
+      immutableArtifactsVerified: 5,
+      replayedImmutableArtifacts: [],
+      uploadOrder: ["manifest"]
+    })),
+    activePointerUploader: vi.fn(async () => ({
       activePointer: {
         manifestSha256: "a".repeat(64),
         path: "public-catalog/v2/active.json",
         revision: 7,
         sha256: "b".repeat(64)
       },
-      immutableArtifactsVerified: 5,
-      replayedImmutableArtifacts: [],
-      uploadOrder: ["manifest", "active"]
+      uploadOrder: ["active"]
     })),
     repository: createOrchestratorRepositoryFake({ claimable: true }),
     workerId: "web00-opv2-worker-01",
@@ -303,6 +511,7 @@ function createOrchestratorRepositoryFake(options: {
       yield projectionPage();
     }),
     previousRevision: 6,
+    recordVerifiedPublicCatalogV2Release: vi.fn(async () => undefined),
     recordActivationEvent: vi.fn(),
     recordedStages,
     recordPublicationCheckpoint: vi.fn(async (input: PublicationCheckpointInput) => {
@@ -312,7 +521,8 @@ function createOrchestratorRepositoryFake(options: {
 
       return operation;
     }),
-    settings: { showDemoInModal: true }
+    settings: { showDemoInModal: true },
+    withCurrentPublicationTarget: vi.fn(async (_input, callback) => callback(repository))
   };
 
   return repository;
@@ -375,6 +585,18 @@ function syntheticRelease(): Record<string, unknown> {
       revision: 7,
       sha256: "a".repeat(64)
     }
+  };
+}
+
+function activePointerResult(): Record<string, unknown> {
+  return {
+    activePointer: {
+      manifestSha256: "a".repeat(64),
+      path: "public-catalog/v2/active.json",
+      revision: 7,
+      sha256: "b".repeat(64)
+    },
+    uploadOrder: ["active"]
   };
 }
 

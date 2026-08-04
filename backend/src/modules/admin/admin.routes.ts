@@ -28,6 +28,7 @@ export interface AdminRouterOptions {
   imageService?: SiteImageService;
   maintenanceService?: AdminMaintenanceService;
   now?: () => Date;
+  publicationEnabled?: boolean;
   publicationService?: AdminPublicationService;
   publicCatalogService?: AdminPublicCatalogService;
   siteService: AdminSiteService;
@@ -71,8 +72,8 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
     router.use(
       createAdminPublicationRouter(
         options.now === undefined
-          ? { service: options.publicationService }
-          : { now: options.now, service: options.publicationService }
+          ? { enabled: options.publicationEnabled ?? false, service: options.publicationService }
+          : { enabled: options.publicationEnabled ?? false, now: options.now, service: options.publicationService }
       )
     );
   }

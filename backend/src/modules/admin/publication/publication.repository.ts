@@ -77,6 +77,19 @@ async function startPublicationTransaction(
     return existingOperation;
   }
 
+  const settings = await tx.publicCatalogSetting.upsert({
+    create: {
+      activeRevision: 0,
+      autoPublish: true,
+      desiredRevision: 1,
+      id: PUBLIC_CATALOG_SETTING_ID,
+      showDemoInModal: true
+    },
+    update: {
+      updatedAt: input.now
+    },
+    where: { id: PUBLIC_CATALOG_SETTING_ID }
+  });
   const activeOperation = await tx.publicCatalogPublicationOperation.findFirst({
     orderBy: { createdAt: "asc" },
     where: {
@@ -89,17 +102,6 @@ async function startPublicationTransaction(
     throwActivePublicationConflict(activeOperation);
   }
 
-  const settings = await tx.publicCatalogSetting.upsert({
-    create: {
-      activeRevision: 0,
-      autoPublish: true,
-      desiredRevision: 1,
-      id: PUBLIC_CATALOG_SETTING_ID,
-      showDemoInModal: true
-    },
-    update: {},
-    where: { id: PUBLIC_CATALOG_SETTING_ID }
-  });
   const targetRevision =
     Math.max(settings.activeRevision, settings.desiredRevision) + 1;
 

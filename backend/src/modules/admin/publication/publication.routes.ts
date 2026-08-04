@@ -8,6 +8,7 @@ import { createAdminPublicationController } from "./publication.controller.js";
 import type { AdminPublicationService } from "./publication.service.js";
 
 export function createAdminPublicationRouter(options: {
+  enabled?: boolean;
   now?: () => Date;
   policy?: PermissionPolicy;
   service: AdminPublicationService;
@@ -19,6 +20,7 @@ export function createAdminPublicationRouter(options: {
   router.post(
     "/sites/:id/publication",
     createPublicationActionPermissionMiddleware(policy),
+    createPublicationEnabledMiddleware(options.enabled ?? false),
     controller.startPublication
   );
   router.get(
@@ -28,6 +30,21 @@ export function createAdminPublicationRouter(options: {
   );
 
   return router;
+}
+
+function createPublicationEnabledMiddleware(enabled: boolean): RequestHandler {
+  return (_request, _response, next) => {
+    if (!enabled) {
+      next(new AppError({
+        code: "PUBLIC_CATALOG_V2_DISABLED",
+        message: "Public catalog V2 publication is disabled.",
+        statusCode: 503
+      }));
+      return;
+    }
+
+    next();
+  };
 }
 
 function createPublicationActionPermissionMiddleware(policy: PermissionPolicy): RequestHandler {

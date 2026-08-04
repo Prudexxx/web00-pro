@@ -12,6 +12,7 @@ const DEFAULT_LEASE_TTL_MS = 60_000;
 const DEFAULT_RETRY_DELAY_MS = 30_000;
 const DEFAULT_WORKER_ID = "web00-public-catalog-v2-worker";
 const DEFAULT_RUN_INTERVAL_MS = 30_000;
+const DEFAULT_ACTIVE_POINTER_TIMEOUT_MS = 15_000;
 
 const RELEASE_PIPELINE_STAGES = [
   "media_preflight",
@@ -56,7 +57,15 @@ export type PublicCatalogV2OrchestratorRunResult =
       status: string;
     };
 
+class PublicCatalogV2OrchestratorError extends Error {
+  constructor(readonly code: "PUBLIC_CATALOG_V2_ACTIVE_POINTER_TIMEOUT") {
+    super(code);
+    this.name = "PublicCatalogV2OrchestratorError";
+  }
+}
+
 export interface PublicCatalogV2OrchestratorOptions {
+  activePointerTimeoutMs?: number;
   enabled?: boolean;
   finalizer: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
   leaseId?: () => string;
@@ -69,15 +78,22 @@ export interface PublicCatalogV2OrchestratorOptions {
     settings: PublicCatalogV2Settings;
   }) => Promise<Record<string, unknown>>;
   releaseUploader: (input: {
+    release: Record<string, unknown>;
+  }) => Promise<Record<string, unknown>>;
+  activePointerUploader: (input: {
     activatedAt: Date;
+    onActivePointerUploaded?: (activePointer: Record<string, unknown>) => Promise<void> | void;
     previousRevision: number | null;
     release: Record<string, unknown>;
+    signal?: AbortSignal;
   }) => Promise<Record<string, unknown>>;
   repository: Pick<
     PublicCatalogV2Repository,
     | "claimNextPublicationOperation"
     | "iteratePublicCatalogV2ProjectionPages"
     | "recordPublicationCheckpoint"
+    | "recordVerifiedPublicCatalogV2Release"
+    | "withCurrentPublicationTarget"
   > & {
     previousRevision?: number | null;
     settings?: PublicCatalogV2Settings;
@@ -93,6 +109,7 @@ export function createPublicCatalogV2Orchestrator(
   const enabled = options.enabled ?? true;
   const leaseId = options.leaseId ?? randomUUID;
   const leaseTtlMs = options.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
+  const activePointerTimeoutMs = readActivePointerTimeoutMs(options.activePointerTimeoutMs, leaseTtlMs);
   const now = options.now ?? (() => new Date());
   const retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   const runIntervalMs = options.runIntervalMs ?? DEFAULT_RUN_INTERVAL_MS;
@@ -157,8 +174,9 @@ export function createPublicCatalogV2Orchestrator(
         pageMode: "keyset"
       }, now());
 
+      const releaseGeneratedAt = operation.createdAt;
       const release = await options.releaseBuilder({
-        generatedAt: startedAt,
+        generatedAt: releaseGeneratedAt,
         pages: options.repository.iteratePublicCatalogV2ProjectionPages({
           afterCursor: null,
           operation: readProjectionOperationIntent(operation),
@@ -173,38 +191,68 @@ export function createPublicCatalogV2Orchestrator(
           revision: operation.targetRevision
         }, now());
       }
-
-      const uploadResult = await options.releaseUploader({
-        activatedAt: startedAt,
-        previousRevision: readPreviousRevision(options.repository),
+      await options.releaseUploader({
         release
       });
-      const activePointer = readActivePointer(uploadResult);
-
-      await checkpoint(options.repository, operation, currentLeaseId, "active_build", {
-        revision: operation.targetRevision
-      }, now());
-      await checkpoint(options.repository, operation, currentLeaseId, "active_upload", {
-        activePointer,
-        release,
-        revision: operation.targetRevision
-      }, now());
-      await checkpoint(options.repository, operation, currentLeaseId, "active_verify", {
-        activePointer,
-        release,
-        revision: operation.targetRevision
-      }, now());
-      await checkpoint(options.repository, operation, currentLeaseId, "db_finalize", {
-        activePointer,
-        release,
-        revision: operation.targetRevision
-      }, now());
-
-      const finalized = await options.finalizer({
-        activePointer,
-        leaseId: currentLeaseId,
-        operation,
+      await options.repository.recordVerifiedPublicCatalogV2Release({
+        generatedAt: releaseGeneratedAt,
         release
+      });
+
+      const finalized = await options.repository.withCurrentPublicationTarget({
+        leaseId: currentLeaseId,
+        now: now(),
+        operationId: operation.id,
+        revision: operation.targetRevision
+      }, async (guardedRepository) => {
+        await checkpoint(guardedRepository, operation, currentLeaseId, "active_build", {
+          revision: operation.targetRevision
+        }, now());
+        let activeUploadCheckpointed = false;
+        const uploadResult = await runActivePointerUpload({
+          operation: (signal) => options.activePointerUploader({
+            activatedAt: startedAt,
+            onActivePointerUploaded: async (activePointer) => {
+              await checkpoint(guardedRepository, operation, currentLeaseId, "active_upload", {
+                activePointer,
+                release,
+                revision: operation.targetRevision
+              }, now());
+              activeUploadCheckpointed = true;
+            },
+            previousRevision: readPreviousRevision(options.repository),
+            release,
+            signal
+          }),
+          timeoutMs: activePointerTimeoutMs
+        });
+        const activePointer = readActivePointer(uploadResult);
+
+        if (!activeUploadCheckpointed) {
+          await checkpoint(guardedRepository, operation, currentLeaseId, "active_upload", {
+            activePointer,
+            release,
+            revision: operation.targetRevision
+          }, now());
+        }
+        await checkpoint(guardedRepository, operation, currentLeaseId, "active_verify", {
+          activePointer,
+          release,
+          revision: operation.targetRevision
+        }, now());
+        await checkpoint(guardedRepository, operation, currentLeaseId, "db_finalize", {
+          activePointer,
+          release,
+          revision: operation.targetRevision
+        }, now());
+
+        return options.finalizer({
+          activePointer,
+          leaseId: currentLeaseId,
+          operation,
+          repository: guardedRepository,
+          release
+        });
       });
 
       return {
@@ -284,6 +332,48 @@ async function checkpoint(
     operationId: operation.id,
     stage
   });
+}
+
+async function runActivePointerUpload(input: {
+  operation: (signal: AbortSignal) => Promise<Record<string, unknown>>;
+  timeoutMs: number;
+}): Promise<Record<string, unknown>> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort(new PublicCatalogV2OrchestratorError("PUBLIC_CATALOG_V2_ACTIVE_POINTER_TIMEOUT"));
+  }, input.timeoutMs);
+
+  try {
+    const result = await input.operation(controller.signal);
+    if (controller.signal.aborted) {
+      throw readAbortReason(controller.signal);
+    }
+
+    return result;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw readAbortReason(controller.signal);
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function readAbortReason(signal: AbortSignal): unknown {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new PublicCatalogV2OrchestratorError("PUBLIC_CATALOG_V2_ACTIVE_POINTER_TIMEOUT");
+}
+
+function readActivePointerTimeoutMs(value: number | undefined, leaseTtlMs: number): number {
+  const maximum = Math.max(1, leaseTtlMs - 1_000);
+  if (value === undefined || !Number.isSafeInteger(value) || value < 1) {
+    return Math.min(DEFAULT_ACTIVE_POINTER_TIMEOUT_MS, maximum);
+  }
+
+  return Math.min(value, maximum);
 }
 
 function readSettings(repository: PublicCatalogV2OrchestratorOptions["repository"]): PublicCatalogV2Settings {

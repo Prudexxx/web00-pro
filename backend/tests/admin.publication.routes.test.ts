@@ -10,7 +10,7 @@ import type { B5Permission, PermissionPolicy } from "../src/modules/admin/rbac.t
 const publicationRoutesModulePath = "../src/modules/admin/publication/publication.routes.js";
 
 describe("admin publication routes", () => {
-  it("enqueues a new publication operation as queued without claiming a worker lease in the HTTP request", async () => {
+  it("fails closed for publication POST when the V2 feature gate is not explicitly enabled", async () => {
     const module = await importPublicationRoutesModule();
     const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
       now: () => Date;
@@ -18,6 +18,36 @@ describe("admin publication routes", () => {
     }) => Router;
     const service = createPublicationServiceFake();
     const app = createPublicationRouteApp(createAdminPublicationRouter({
+      now: fixedNow,
+      service
+    }));
+
+    const response = await request(app)
+      .post("/api/admin/sites/00000000-0000-4000-8000-000000000101/publication")
+      .set("Authorization", "Bearer admin")
+      .set("Cookie", "web00-admin-session=synthetic")
+      .set("X-CSRF-Token", "synthetic-csrf")
+      .set("X-Request-Id", "req_publish_disabled")
+      .set("Idempotency-Key", "00000000-0000-4000-8000-0000000000d1")
+      .send({ action: "publish" })
+      .expect(503);
+
+    expect(response.body.error).toMatchObject({
+      code: "PUBLIC_CATALOG_V2_DISABLED"
+    });
+    expect(service.startPublication).not.toHaveBeenCalled();
+  });
+
+  it("enqueues a new publication operation as queued without claiming a worker lease in the HTTP request", async () => {
+    const module = await importPublicationRoutesModule();
+    const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
+      enabled?: boolean;
+      now: () => Date;
+      service: ReturnType<typeof createPublicationServiceFake>;
+    }) => Router;
+    const service = createPublicationServiceFake();
+    const app = createPublicationRouteApp(createAdminPublicationRouter({
+      enabled: true,
       now: fixedNow,
       service
     }));

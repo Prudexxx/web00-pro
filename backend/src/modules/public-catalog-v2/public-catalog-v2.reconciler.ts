@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 const DEFAULT_RECONCILER_LEASE_TTL_MS = 60_000;
 const DEFAULT_RECONCILER_INTERVAL_MS = 30_000;
 const DEFAULT_RECONCILER_WORKER_ID = "web00-public-catalog-v2-reconciler";
@@ -16,17 +18,19 @@ export interface PublicCatalogV2ReconcilerRunResult {
 export interface PublicCatalogV2ReconcilerOptions {
   enabled?: boolean;
   finalizer: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  leaseId?: () => string;
   leaseTtlMs?: number;
   now?: () => Date;
   repository: {
     findPostActivationFinalizationGaps(input: {
+      leaseId: string;
       now: Date;
       staleLockedBefore: Date;
       workerId: string;
     }): Promise<Array<{
       activePointer: Record<string, unknown>;
-      leaseId?: string;
-      operation: Record<string, unknown>;
+      leaseId?: string | null;
+      operation: unknown;
       release: Record<string, unknown>;
     }>>;
   };
@@ -38,6 +42,7 @@ export function createPublicCatalogV2Reconciler(
   options: PublicCatalogV2ReconcilerOptions
 ): PublicCatalogV2Reconciler {
   const enabled = options.enabled ?? true;
+  const leaseId = options.leaseId ?? randomUUID;
   const leaseTtlMs = options.leaseTtlMs ?? DEFAULT_RECONCILER_LEASE_TTL_MS;
   const now = options.now ?? (() => new Date());
   const runIntervalMs = options.runIntervalMs ?? DEFAULT_RECONCILER_INTERVAL_MS;
@@ -54,7 +59,9 @@ export function createPublicCatalogV2Reconciler(
     }
 
     const runAt = now();
+    const currentLeaseId = leaseId();
     const gaps = await options.repository.findPostActivationFinalizationGaps({
+      leaseId: currentLeaseId,
       now: runAt,
       staleLockedBefore: new Date(runAt.getTime() - leaseTtlMs),
       workerId

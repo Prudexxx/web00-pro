@@ -279,11 +279,12 @@ describe("One-Click Publish V2 publication and media contracts", () => {
   it("mounts the real one-click publication route with RBAC, CSRF, idempotency headers and async operation DTO", async () => {
     const module = await importContractModule(publicationRoutesModulePath, "admin publication route module");
     const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
+      enabled?: boolean;
       now: () => Date;
       service: ReturnType<typeof createPublicationServiceFake>;
     }) => Router;
     const service = createPublicationServiceFake();
-    const app = createPublicationRouteApp(createAdminPublicationRouter({ now: fixedNow, service }));
+    const app = createPublicationRouteApp(createAdminPublicationRouter({ enabled: true, now: fixedNow, service }));
 
     await request(app)
       .post("/api/admin/sites/00000000-0000-4000-8000-000000000101/publication")

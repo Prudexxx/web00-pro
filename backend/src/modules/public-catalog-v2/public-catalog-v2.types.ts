@@ -96,6 +96,13 @@ export interface ClaimPublicationOperationInput {
   staleLockedBefore?: Date | null;
 }
 
+export interface CurrentPublicationTargetInput {
+  leaseId: string;
+  now: Date;
+  operationId: string;
+  revision: number;
+}
+
 export interface PublicationCheckpointInput {
   lastCheckpoint: Record<string, unknown>;
   lastErrorCode?: string | null;
@@ -139,6 +146,11 @@ export interface RecordActivationEventInput {
   previousRevision?: number | null;
   requestId: string;
   revision: number;
+}
+
+export interface RecordVerifiedPublicCatalogV2ReleaseInput {
+  generatedAt: Date;
+  release: Record<string, unknown>;
 }
 
 export interface PublicationOperationRecord {
@@ -267,6 +279,7 @@ export interface PublicCatalogV2Repository {
   finalizePublicationTransaction(input: FinalizePublicationTransactionInput): Promise<PublicationOperationRecord>;
   finalizePublicationOperation(input: FinalizePublicationOperationInput): Promise<PublicationOperationRecord>;
   findPostActivationFinalizationGaps(input: {
+    leaseId: string;
     now: Date;
     staleLockedBefore: Date;
     workerId: string;
@@ -278,4 +291,9 @@ export interface PublicCatalogV2Repository {
   }): AsyncIterable<PublicCatalogV2ProjectionPage>;
   recordActivationEvent(input: RecordActivationEventInput): Promise<void>;
   recordPublicationCheckpoint(input: PublicationCheckpointInput): Promise<PublicationOperationRecord>;
+  recordVerifiedPublicCatalogV2Release(input: RecordVerifiedPublicCatalogV2ReleaseInput): Promise<void>;
+  withCurrentPublicationTarget<T>(
+    input: CurrentPublicationTargetInput,
+    operation: (repository: PublicCatalogV2Repository) => Promise<T>
+  ): Promise<T>;
 }

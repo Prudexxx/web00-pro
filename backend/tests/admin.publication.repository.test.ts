@@ -84,7 +84,7 @@ describe("admin publication repository", () => {
         requestFingerprint: "d".repeat(64)
       }))
     ).rejects.toMatchObject({ code: "PUBLIC_CATALOG_SYNC_CONFLICT" });
-    expect(prisma.tx.publicCatalogSetting.upsert).not.toHaveBeenCalled();
+    expect(prisma.tx.publicCatalogSetting.upsert).toHaveBeenCalledTimes(1);
     expect(prisma.tx.publicCatalogSetting.update).not.toHaveBeenCalled();
     expect(prisma.tx.publicCatalogPublicationOperation.create).not.toHaveBeenCalled();
     expect(prisma.tx.auditLog.create).not.toHaveBeenCalled();
@@ -121,8 +121,47 @@ describe("admin publication repository", () => {
         requestFingerprint: "d".repeat(64)
       }))
     ).rejects.toMatchObject({ code: "PUBLIC_CATALOG_SYNC_CONFLICT" });
-    expect(prisma.tx.publicCatalogSetting.upsert).not.toHaveBeenCalled();
+    expect(prisma.tx.publicCatalogSetting.upsert).toHaveBeenCalledTimes(1);
     expect(prisma.tx.publicCatalogSetting.update).not.toHaveBeenCalled();
+    expect(prisma.tx.publicCatalogPublicationOperation.create).not.toHaveBeenCalled();
+    expect(prisma.tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("locks the catalog settings singleton before checking for active nonterminal operations", async () => {
+    const module = await importPublicationRepositoryModule();
+    const createPrismaAdminPublicationRepository = readFunction(
+      module,
+      "createPrismaAdminPublicationRepository"
+    ) as (options: { prisma: ReturnType<typeof createPrismaFake> }) => {
+      startPublication(input: AdminPublicationStartInput): Promise<PublicationOperationRecord>;
+    };
+    const runningOperation = operationRecord({
+      id: "00000000-0000-4000-8000-00000000b111",
+      idempotencyKey: "00000000-0000-4000-8000-0000000000b1",
+      stage: "content_transaction",
+      status: "running",
+      targetRevision: 7
+    });
+    const prisma = createPrismaFake({
+      activeOperation: runningOperation,
+      existingOperation: null
+    });
+    const repository = createPrismaAdminPublicationRepository({ prisma });
+
+    await expect(
+      repository.startPublication(startInput({
+        idempotencyKey: "00000000-0000-4000-8000-0000000000d2",
+        requestFingerprint: "d".repeat(64)
+      }))
+    ).rejects.toMatchObject({ code: "PUBLIC_CATALOG_SYNC_CONFLICT" });
+
+    expect(prisma.tx.publicCatalogSetting.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.tx.publicCatalogPublicationOperation.findFirst).toHaveBeenCalledTimes(1);
+    expect(
+      prisma.tx.publicCatalogSetting.upsert.mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      prisma.tx.publicCatalogPublicationOperation.findFirst.mock.invocationCallOrder[0]!
+    );
     expect(prisma.tx.publicCatalogPublicationOperation.create).not.toHaveBeenCalled();
     expect(prisma.tx.auditLog.create).not.toHaveBeenCalled();
   });
@@ -158,6 +197,8 @@ describe("admin publication repository", () => {
         siteId: "00000000-0000-4000-8000-000000000101"
       }))
     ).rejects.toMatchObject({ code: "PUBLIC_CATALOG_SYNC_CONFLICT" });
+    expect(prisma.tx.publicCatalogSetting.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.tx.publicCatalogSetting.update).not.toHaveBeenCalled();
     expect(prisma.tx.publicCatalogPublicationOperation.create).not.toHaveBeenCalled();
     expect(prisma.tx.auditLog.create).not.toHaveBeenCalled();
   });

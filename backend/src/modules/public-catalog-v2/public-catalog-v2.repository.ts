@@ -3,6 +3,7 @@ import {
   PUBLIC_CATALOG_V2_TERMINAL_OPERATION_STATUSES,
   type ClaimPublicationOperationInput,
   type CreatePublicationOperationInput,
+  type CurrentPublicationTargetInput,
   type FinalizePublicationTransactionInput,
   type FinalizePublicationOperationInput,
   type PublicationCheckpointInput,
@@ -13,6 +14,7 @@ import {
   type PublicCatalogV2ProjectionPage,
   type PublicCatalogV2ProjectionRecord,
   type PublicCatalogV2Repository,
+  type RecordVerifiedPublicCatalogV2ReleaseInput,
   type RecordActivationEventInput
 } from "./public-catalog-v2.types.js";
 import { publicCategoryVisibilityWhere } from "../public-catalog/public-catalog.visibility.js";
@@ -21,6 +23,8 @@ import { buildPublicCatalogV2ActivePath } from "./public-catalog-v2.paths.js";
 const DEFAULT_OPERATION_STAGE = "content_transaction";
 const DEFAULT_OPERATION_STATUS = "queued";
 const PUBLIC_CATALOG_SETTING_ID = "public-catalog";
+
+type VerifiedReleaseData = ReturnType<typeof toVerifiedReleaseData>;
 
 type ClaimQuery = {
   orderBy: Array<Record<string, "asc" | "desc">>;
@@ -42,11 +46,14 @@ export interface PublicCatalogV2PrismaClient {
     updateMany(args: unknown): Promise<{ count: number }>;
   };
   publicCatalogRelease?: {
+    create(args: unknown): Promise<unknown>;
     findUnique(args: unknown): Promise<PublicCatalogV2ReleaseRecord | null>;
     update(args: unknown): Promise<unknown>;
   };
   publicCatalogSetting?: {
+    findUnique?(args: unknown): Promise<{ activeRevision: number; desiredRevision: number } | null>;
     update(args: unknown): Promise<unknown>;
+    updateMany?(args: unknown): Promise<{ count: number }>;
   };
   site: {
     findMany(args: unknown): Promise<PublicCatalogV2PrismaProjectionSite[]>;
@@ -129,6 +136,8 @@ export class PublicCatalogV2RepositoryError extends Error {
       | "PUBLIC_CATALOG_V2_INVALID_TERMINAL_STATUS"
       | "PUBLIC_CATALOG_V2_LEASE_NOT_HELD"
       | "PUBLIC_CATALOG_V2_INVALID_RETRY_SCHEDULE"
+      | "PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED"
+      | "PUBLIC_CATALOG_V2_STALE_TARGET_REVISION"
   ) {
     super(code);
     this.name = "PublicCatalogV2RepositoryError";
@@ -144,7 +153,10 @@ export function createPublicCatalogV2Repository(prisma: PublicCatalogV2PrismaCli
     findPostActivationFinalizationGaps: (input) => findPostActivationFinalizationGaps(prisma, input),
     iteratePublicCatalogV2ProjectionPages: (input) => iteratePublicCatalogV2ProjectionPages(prisma, input),
     recordActivationEvent: (input) => recordActivationEvent(prisma, input),
-    recordPublicationCheckpoint: (input) => recordPublicationCheckpoint(prisma, input)
+    recordPublicationCheckpoint: (input) => recordPublicationCheckpoint(prisma, input),
+    recordVerifiedPublicCatalogV2Release: (input) => recordVerifiedPublicCatalogV2Release(prisma, input),
+    withCurrentPublicationTarget: (input, operation) =>
+      withCurrentPublicationTarget(prisma, input, operation)
   };
 }
 
@@ -214,6 +226,7 @@ async function claimNextPublicationOperation(
   }
 
   const { operation, where } = claimCandidate;
+  const targetRevision = await readClaimTargetRevision(prisma, operation.targetRevision);
   const claim = await prisma.publicCatalogPublicationOperation.updateMany({
     data: {
       leaseId: input.leaseId,
@@ -221,6 +234,7 @@ async function claimNextPublicationOperation(
       lockedBy: input.lockedBy,
       nextRetryAt: null,
       status: "running",
+      targetRevision,
       updatedAt: input.now
     },
     where: {
@@ -350,8 +364,11 @@ async function finalizePublicationTransactionBody(
   input: FinalizePublicationTransactionInput
 ): Promise<PublicationOperationRecord> {
   const releaseModel = requirePublicCatalogRelease(prisma);
-  const settingModel = requirePublicCatalogSetting(prisma);
 
+  const existingOperation = await findExistingFinalizationOperation(prisma, input);
+  if (existingOperation !== null) {
+    return existingOperation;
+  }
   await releaseModel.update({
     data: {
       activatedAt: input.completedAt,
@@ -360,12 +377,7 @@ async function finalizePublicationTransactionBody(
     },
     where: { revision: input.revision }
   });
-  await settingModel.update({
-    data: {
-      activeRevision: input.revision
-    },
-    where: { id: PUBLIC_CATALOG_SETTING_ID }
-  });
+  await activateCurrentPublicationTarget(prisma, input);
   if (input.siteId !== undefined && input.siteId !== null) {
     await finalizeSitePublicState(prisma, input);
   }
@@ -375,6 +387,7 @@ async function finalizePublicationTransactionBody(
     completedAt: input.completedAt,
     lastCheckpoint: {
       activePointerSha256: input.activePointerSha256,
+      finalizingLeaseId: input.leaseId,
       revision: input.revision
     },
     leaseId: input.leaseId,
@@ -384,9 +397,169 @@ async function finalizePublicationTransactionBody(
   });
 }
 
+async function withCurrentPublicationTarget<T>(
+  prisma: PublicCatalogV2PrismaClient,
+  input: CurrentPublicationTargetInput,
+  operation: (repository: PublicCatalogV2Repository) => Promise<T>
+): Promise<T> {
+  await lockCurrentPublicationTarget(prisma, input);
+
+  return operation(createPublicCatalogV2Repository(prisma));
+}
+
+async function findExistingFinalizationOperation(
+  prisma: PublicCatalogV2PrismaClient,
+  input: FinalizePublicationTransactionInput
+): Promise<PublicationOperationRecord | null> {
+  const operation = await prisma.publicCatalogPublicationOperation.findUnique({
+    where: { id: input.operationId }
+  });
+
+  if (operation === null) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  if (isSameActivationFinalization(operation, input)) {
+    return operation;
+  }
+
+  if (operation.status !== "running" || operation.leaseId !== input.leaseId) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  return null;
+}
+
+async function lockCurrentPublicationTarget(
+  prisma: PublicCatalogV2PrismaClient,
+  input: CurrentPublicationTargetInput
+): Promise<void> {
+  if (prisma.$transaction !== undefined) {
+    await prisma.$transaction((tx) => lockCurrentPublicationTargetBody(tx, input));
+    return;
+  }
+
+  await lockCurrentPublicationTargetBody(prisma, input);
+}
+
+async function lockCurrentPublicationTargetBody(
+  prisma: PublicCatalogV2PrismaClient,
+  input: CurrentPublicationTargetInput
+): Promise<void> {
+  const operationLocked = await prisma.publicCatalogPublicationOperation.updateMany({
+    data: {
+      lockedAt: input.now
+    },
+    where: {
+      id: input.operationId,
+      leaseId: input.leaseId,
+      status: "running",
+      targetRevision: input.revision
+    }
+  });
+
+  if (operationLocked.count !== 1) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  const settingModel = requirePublicCatalogSetting(prisma);
+  const updateMany = settingModel.updateMany;
+  if (updateMany === undefined) {
+    await assertTargetRevisionStillCurrent(prisma, input.revision);
+    return;
+  }
+
+  const locked = await updateMany({
+    data: { updatedAt: input.now },
+    where: {
+      desiredRevision: { lte: input.revision },
+      id: PUBLIC_CATALOG_SETTING_ID
+    }
+  });
+
+  if (locked.count !== 1) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_STALE_TARGET_REVISION");
+  }
+}
+
+async function activateCurrentPublicationTarget(
+  prisma: PublicCatalogV2PrismaClient,
+  input: FinalizePublicationTransactionInput
+): Promise<void> {
+  const settingModel = requirePublicCatalogSetting(prisma);
+  const updateMany = settingModel.updateMany;
+  if (updateMany === undefined) {
+    await assertTargetRevisionStillCurrent(prisma, input.revision);
+    await settingModel.update({
+      data: {
+        activeRevision: input.revision
+      },
+      where: { id: PUBLIC_CATALOG_SETTING_ID }
+    });
+    return;
+  }
+
+  const activated = await updateMany({
+    data: {
+      activeRevision: input.revision
+    },
+    where: {
+      desiredRevision: { lte: input.revision },
+      id: PUBLIC_CATALOG_SETTING_ID
+    }
+  });
+
+  if (activated.count !== 1) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_STALE_TARGET_REVISION");
+  }
+}
+
+async function readClaimTargetRevision(
+  prisma: PublicCatalogV2PrismaClient,
+  operationTargetRevision: number
+): Promise<number> {
+  const desiredRevision = await readDesiredRevision(prisma);
+
+  return desiredRevision === null
+    ? operationTargetRevision
+    : Math.max(operationTargetRevision, desiredRevision);
+}
+
+async function assertTargetRevisionStillCurrent(
+  prisma: PublicCatalogV2PrismaClient,
+  revision: number
+): Promise<void> {
+  const desiredRevision = await readDesiredRevision(prisma);
+
+  if (desiredRevision !== null && desiredRevision > revision) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_STALE_TARGET_REVISION");
+  }
+}
+
+async function readDesiredRevision(prisma: PublicCatalogV2PrismaClient): Promise<number | null> {
+  const findUnique = prisma.publicCatalogSetting?.findUnique;
+  if (findUnique === undefined) {
+    return null;
+  }
+  const settings = await findUnique({
+    select: {
+      activeRevision: true,
+      desiredRevision: true
+    },
+    where: { id: PUBLIC_CATALOG_SETTING_ID }
+  });
+
+  if (settings === null) {
+    return null;
+  }
+
+  return Math.max(settings.activeRevision, settings.desiredRevision);
+}
+
 async function findPostActivationFinalizationGaps(
   prisma: PublicCatalogV2PrismaClient,
   input: {
+    leaseId: string;
     now: Date;
     staleLockedBefore: Date;
     workerId: string;
@@ -418,21 +591,73 @@ async function findPostActivationFinalizationGaps(
   }> = [];
 
   for (const operation of operations) {
-    const release = await prisma.publicCatalogRelease.findUnique({
-      where: { revision: operation.targetRevision }
+    const claim = await prisma.publicCatalogPublicationOperation.updateMany({
+      data: {
+        leaseId: input.leaseId,
+        lockedAt: input.now,
+        lockedBy: input.workerId
+      },
+      where: {
+        id: operation.id,
+        lockedAt: { lte: input.staleLockedBefore },
+        stage: { in: ["active_verify", "db_finalize"] },
+        status: "running"
+      }
     });
-    if (release === null || release.activePointerSha256 === null || release.status !== "active") {
+    if (claim.count !== 1) {
       continue;
     }
-    gaps.push({
-      activePointer: toActivePointerReadBack(release),
-      leaseId: operation.leaseId,
-      operation: { ...operation },
-      release: toReleaseFinalizationEvidence(release)
+    const claimed = await prisma.publicCatalogPublicationOperation.findUnique({
+      where: { id: operation.id }
     });
+    if (claimed === null) {
+      continue;
+    }
+    const release = await prisma.publicCatalogRelease.findUnique({
+      where: { revision: claimed.targetRevision }
+    });
+    if (release === null) {
+      continue;
+    }
+    if (release.activePointerSha256 !== null && release.status === "active") {
+      gaps.push({
+        activePointer: toActivePointerReadBack(release),
+        leaseId: input.leaseId,
+        operation: { ...claimed },
+        release: toReleaseFinalizationEvidence(release)
+      });
+      continue;
+    }
+
+    const checkpointGap = readPostActivationFinalizationGap(claimed);
+    if (checkpointGap !== null) {
+      gaps.push({
+        ...checkpointGap,
+        leaseId: input.leaseId,
+        operation: { ...claimed }
+      });
+    }
   }
 
   return gaps;
+}
+
+function readPostActivationFinalizationGap(operation: PublicationOperationRecord): {
+  activePointer: Record<string, unknown>;
+  release: Record<string, unknown>;
+} | null {
+  const checkpoint = readMaybeRecord(operation.lastCheckpoint);
+  if (checkpoint === null || checkpoint.revision !== operation.targetRevision) {
+    return null;
+  }
+  const activePointer = readMaybeRecord(checkpoint.activePointer);
+  const release = readMaybeRecord(checkpoint.release);
+
+  if (activePointer === null || release === null) {
+    return null;
+  }
+
+  return { activePointer, release };
 }
 
 async function recordActivationEvent(
@@ -449,6 +674,85 @@ async function recordActivationEvent(
       revision: input.revision
     }
   });
+}
+
+async function recordVerifiedPublicCatalogV2Release(
+  prisma: PublicCatalogV2PrismaClient,
+  input: RecordVerifiedPublicCatalogV2ReleaseInput
+): Promise<void> {
+  const releaseModel = requirePublicCatalogRelease(prisma);
+  const data = toVerifiedReleaseData(input);
+  const existing = await releaseModel.findUnique({
+    where: { revision: data.revision }
+  });
+
+  if (existing?.status === "active") {
+    return;
+  }
+
+  if (existing === null) {
+    try {
+      await releaseModel.create({ data });
+      return;
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) {
+        throw error;
+      }
+    }
+    const raced = await releaseModel.findUnique({
+      where: { revision: data.revision }
+    });
+    if (raced === null) {
+      throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+    }
+    assertCompatibleVerifiedRelease(raced, data);
+    return;
+  }
+
+  assertCompatibleVerifiedRelease(existing, data);
+}
+
+function assertCompatibleVerifiedRelease(
+  existing: PublicCatalogV2ReleaseRecord,
+  data: VerifiedReleaseData
+): void {
+  if (existing.status === "active") {
+    return;
+  }
+
+  const comparableFields: Array<keyof VerifiedReleaseData> = [
+    "activePointerSha256",
+    "activatedAt",
+    "categoriesPath",
+    "categoriesSha256",
+    "chunksCount",
+    "generatedAt",
+    "indexPath",
+    "indexSha256",
+    "itemsCount",
+    "manifestPath",
+    "manifestSha256",
+    "popularCount",
+    "popularPath",
+    "popularSha256",
+    "revision",
+    "status"
+  ];
+
+  for (const field of comparableFields) {
+    const existingValue = existing[field];
+    const expectedValue = data[field];
+    if (existingValue instanceof Date && expectedValue instanceof Date) {
+      if (existingValue.getTime() !== expectedValue.getTime()) {
+        throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+      }
+      continue;
+    }
+
+    if (existingValue !== expectedValue) {
+      throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+    }
+  }
 }
 
 async function recordOrVerifyActivationEvent(
@@ -692,7 +996,38 @@ function isSameTerminalFinalization(
   operation: PublicationOperationRecord,
   input: FinalizePublicationOperationInput
 ): boolean {
-  return operation.completedAt !== null && operation.status === input.status;
+  if (
+    operation.completedAt === null ||
+    operation.status !== input.status ||
+    operation.stage !== input.stage
+  ) {
+    return false;
+  }
+
+  const existingCheckpoint = readMaybeRecord(operation.lastCheckpoint);
+  if (existingCheckpoint === null || input.lastCheckpoint === undefined) {
+    return true;
+  }
+
+  return Object.entries(input.lastCheckpoint).every(([key, value]) =>
+    existingCheckpoint[key] === value
+  );
+}
+
+function isSameActivationFinalization(
+  operation: PublicationOperationRecord,
+  input: FinalizePublicationTransactionInput
+): boolean {
+  const checkpoint = readMaybeRecord(operation.lastCheckpoint);
+
+  return (
+    operation.completedAt !== null &&
+    operation.stage === "db_finalize" &&
+    operation.status === "succeeded" &&
+    checkpoint?.activePointerSha256 === input.activePointerSha256 &&
+    checkpoint?.finalizingLeaseId === input.leaseId &&
+    checkpoint?.revision === input.revision
+  );
 }
 
 async function findClaimCandidate(
@@ -838,6 +1173,12 @@ function toActivePointerReadBack(release: PublicCatalogV2ReleaseRecord): Record<
   };
 }
 
+function readMaybeRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function toReleaseFinalizationEvidence(release: PublicCatalogV2ReleaseRecord): Record<string, unknown> {
   return {
     activationInput: {
@@ -865,6 +1206,80 @@ function toReleaseFinalizationEvidence(release: PublicCatalogV2ReleaseRecord): R
       sha256: release.manifestSha256
     }
   };
+}
+
+function toVerifiedReleaseData(input: RecordVerifiedPublicCatalogV2ReleaseInput): {
+  activePointerSha256: null;
+  activatedAt: null;
+  categoriesPath: string;
+  categoriesSha256: string;
+  chunksCount: number;
+  generatedAt: Date;
+  indexPath: string;
+  indexSha256: string;
+  itemsCount: number;
+  manifestPath: string;
+  manifestSha256: string;
+  popularCount: number;
+  popularPath: string;
+  popularSha256: string;
+  revision: number;
+  status: "verified";
+} {
+  const release = readReleaseRecord(input.release);
+  const activationInput = readReleaseRecord(release.activationInput);
+  const manifest = readReleaseRecord(release.manifest);
+  const categories = readReleaseRecord(manifest.categories);
+  const index = readReleaseRecord(manifest.index);
+  const popular = readReleaseRecord(manifest.popular);
+  const revision = readReleaseNumber(activationInput.revision);
+
+  if (readReleaseNumber(manifest.revision) !== revision) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+  }
+
+  return {
+    activePointerSha256: null,
+    activatedAt: null,
+    categoriesPath: readReleaseString(categories.path),
+    categoriesSha256: readReleaseString(categories.sha256),
+    chunksCount: readReleaseNumber(manifest.chunksCount),
+    generatedAt: input.generatedAt,
+    indexPath: readReleaseString(index.path),
+    indexSha256: readReleaseString(index.sha256),
+    itemsCount: readReleaseNumber(manifest.itemsCount),
+    manifestPath: readReleaseString(activationInput.manifestPath),
+    manifestSha256: readReleaseString(activationInput.manifestSha256),
+    popularCount: readReleaseNumber(popular.count),
+    popularPath: readReleaseString(popular.path),
+    popularSha256: readReleaseString(popular.sha256),
+    revision,
+    status: "verified"
+  };
+}
+
+function readReleaseRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function readReleaseNumber(value: unknown): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+  }
+
+  return value;
+}
+
+function readReleaseString(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_RELEASE_ROW_FAILED");
+  }
+
+  return value;
 }
 
 function toProjectionRecord(row: PublicCatalogV2PrismaProjectionSite): PublicCatalogV2ProjectionRecord {

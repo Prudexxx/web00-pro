@@ -92,6 +92,32 @@ describe("createShutdownHandler", () => {
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(exit).not.toHaveBeenCalled();
   });
+
+  it("keeps the forced timeout armed until async disconnect completes", async () => {
+    vi.useFakeTimers();
+    let closeCallback: (() => void) | undefined;
+    const close = vi.fn((callback?: () => void) => {
+      closeCallback = callback;
+      return undefined as unknown as Server;
+    });
+    const disconnect = vi.fn(() => new Promise<void>(() => undefined));
+    const exit = vi.fn();
+    const logger = { log: vi.fn() };
+    const handler = createShutdownHandler(
+      { close } as unknown as Server,
+      { disconnect, env: testEnv, exit, logger, signal: "SIGTERM" }
+    );
+
+    handler();
+    closeCallback?.();
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(exit).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
 });
 
 describe("app/server auth integration boundary", () => {
@@ -157,6 +183,120 @@ describe("app/server auth integration boundary", () => {
     );
 
     vi.doUnmock("node:http");
+  });
+
+  it("stops the V2 runtime concurrently with cleanup before disconnecting Prisma during shutdown", async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    let closeCallback: ((error?: Error) => void) | undefined;
+    const listen = vi.fn();
+    const close = vi.fn((callback?: (error?: Error) => void) => {
+      closeCallback = callback;
+      return undefined as unknown as Server;
+    });
+    const server = { close, listen } as unknown as Server;
+    const cleanupStopGate = createDeferred<void>();
+    const order: string[] = [];
+    const runtimeStop = vi.fn(async () => {
+      order.push("runtime.stop");
+    });
+    const cleanupStop = vi.fn(async () => {
+      order.push("cleanup.stop.begin");
+      await cleanupStopGate.promise;
+      order.push("cleanup.stop.end");
+    });
+    const disconnect = vi.fn(async () => {
+      order.push("prisma.disconnect");
+    });
+    const signalHandlers: Partial<Record<NodeJS.Signals, () => void>> = {};
+    const processOnce = vi.spyOn(process, "once").mockImplementation(((signal, listener) => {
+      if (signal === "SIGTERM" || signal === "SIGINT") {
+        signalHandlers[signal] = listener as () => void;
+      }
+
+      return process;
+    }) as typeof process.once);
+
+    vi.doMock("node:http", () => ({
+      createServer: vi.fn(() => server)
+    }));
+    vi.doMock("../src/modules/storage-cleanup/storage-cleanup.worker.js", () => ({
+      createStorageCleanupWorker: vi.fn(() => ({
+        start: vi.fn(),
+        stop: cleanupStop,
+        tick: vi.fn()
+      }))
+    }));
+    vi.doMock("../src/modules/public-catalog-v2/public-catalog-v2.runtime.js", () => ({
+      createPublicCatalogV2Runtime: vi.fn(() => ({
+        reconcileOnce: vi.fn(),
+        runOnce: vi.fn(),
+        start: vi.fn(),
+        stop: runtimeStop
+      }))
+    }));
+
+    try {
+      const { startServer } = await import("../src/server.js");
+
+      startServer({
+        authEnv: {
+          ACCESS_TOKEN_TTL_SECONDS: 900,
+          AUTH_FINGERPRINT_SECRET: Buffer.alloc(32, 2),
+          AUTH_FINGERPRINT_SECRET_BASE64: Buffer.alloc(32, 2).toString("base64"),
+          JWT_ACCESS_SECRET: Buffer.alloc(32, 1),
+          JWT_ACCESS_SECRET_BASE64: Buffer.alloc(32, 1).toString("base64"),
+          JWT_AUDIENCE: "web00-admin",
+          JWT_ISSUER: "web00-backend",
+          REFRESH_TOKEN_TTL_SECONDS: 604_800,
+          TRUST_PROXY_HOPS: 1
+        },
+        createPrisma: vi.fn(() => ({ $disconnect: disconnect }) as never),
+        databaseEnv: { DATABASE_URL: "postgresql://user:pass@127.0.0.1:5432/web00_backend_dev" },
+        env: { ...testEnv, PORT: 53_202 },
+        logger: { log: vi.fn() },
+        publicCatalogV2WorkerEnabled: true,
+        publicCorsConfig: {
+          allowedMethods: ["GET", "HEAD", "OPTIONS"],
+          allowedOrigins: new Set(["https://prudexxx.github.io"]),
+          maxOrigins: 10
+        },
+        storageConfig: {
+          bucket: "web00-catalog-images",
+          credentials: {
+            serviceRoleKey: "sb_secret_fake",
+            supabaseUrl: "https://storage.web00.invalid"
+          },
+          publicBaseUrl: "https://storage.web00.invalid",
+          workerEnabled: true,
+          workerPollIntervalSeconds: 60
+        }
+      });
+
+      signalHandlers.SIGTERM?.();
+      closeCallback?.();
+      await Promise.resolve();
+
+      expect(runtimeStop).toHaveBeenCalledTimes(1);
+      expect(cleanupStop).toHaveBeenCalledTimes(1);
+      expect(disconnect).not.toHaveBeenCalled();
+
+      cleanupStopGate.resolve();
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      expect(order).toEqual([
+        "runtime.stop",
+        "cleanup.stop.begin",
+        "cleanup.stop.end",
+        "prisma.disconnect"
+      ]);
+    } finally {
+      processOnce.mockRestore();
+      vi.doUnmock("node:http");
+      vi.doUnmock("../src/modules/storage-cleanup/storage-cleanup.worker.js");
+      vi.doUnmock("../src/modules/public-catalog-v2/public-catalog-v2.runtime.js");
+    }
   });
 
   it("mounts injected auth routes before the final 404 handler", async () => {
@@ -241,3 +381,18 @@ describe("app/server auth integration boundary", () => {
     expect(app.get("trust proxy")).not.toBe(true);
   });
 });
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  reject: (error: unknown) => void;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, reject, resolve };
+}

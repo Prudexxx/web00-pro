@@ -7,6 +7,7 @@ import {
 
 const builderModulePath = "../src/modules/public-catalog-v2/public-catalog-v2.builder.js";
 const storageModulePath = "../src/modules/public-catalog-v2/public-catalog-v2.storage.js";
+const supabaseStorageModulePath = "../src/modules/public-catalog-v2/public-catalog-v2.supabase-storage.js";
 
 async function importStorageModule(): Promise<Record<string, unknown>> {
   try {
@@ -14,6 +15,17 @@ async function importStorageModule(): Promise<Record<string, unknown>> {
   } catch (error) {
     throw new Error(
       "Expected Public Catalog V2 storage verifier module to exist; OPV2-4 is RED until immutable read-back verification is implemented.",
+      { cause: error }
+    );
+  }
+}
+
+async function importSupabaseStorageModule(): Promise<Record<string, unknown>> {
+  try {
+    return await import(supabaseStorageModulePath);
+  } catch (error) {
+    throw new Error(
+      "Expected Public Catalog V2 Supabase storage adapter to exist; OPV2-5 runtime wiring requires production storage construction.",
       { cause: error }
     );
   }
@@ -39,6 +51,47 @@ function readFunction(module: Record<string, unknown>, name: string): (...args: 
 }
 
 describe("Public Catalog V2 storage verifier", () => {
+  it("does not read provider error bodies from the Supabase adapter", async () => {
+    const module = await importSupabaseStorageModule();
+    const createPublicCatalogV2SupabaseStorage = readFunction(module, "createPublicCatalogV2SupabaseStorage");
+    const uploadErrorBody = vi.fn(async () => "synthetic-provider-upload-body");
+    const fetchErrorBody = vi.fn(async () => "synthetic-provider-fetch-body");
+    const storage = createPublicCatalogV2SupabaseStorage(syntheticStorageConfig(), {
+      fetchImpl: vi.fn()
+        .mockResolvedValueOnce({
+          headers: { get: () => "text/plain" },
+          ok: false,
+          status: 500,
+          text: uploadErrorBody
+        })
+        .mockResolvedValueOnce({
+          headers: { get: () => "text/plain" },
+          ok: false,
+          status: 500,
+          text: fetchErrorBody
+        })
+    }) as {
+      fetchJsonArtifact(input: Record<string, unknown>): Promise<unknown>;
+      uploadActivePointer(input: Record<string, unknown>): Promise<void>;
+    };
+
+    await expect(storage.uploadActivePointer({
+      body: "{}\n",
+      bucketId: "web00-public-catalog",
+      cacheControl: "no-store",
+      contentType: "application/json",
+      path: "public-catalog/v2/active.json",
+      upsert: true
+    })).rejects.toThrow("PUBLIC_CATALOG_V2_STORAGE_UNAVAILABLE");
+    await expect(storage.fetchJsonArtifact({
+      bucketId: "web00-public-catalog",
+      path: "public-catalog/v2/active.json"
+    })).rejects.toThrow("PUBLIC_CATALOG_V2_STORAGE_UNAVAILABLE");
+
+    expect(uploadErrorBody).not.toHaveBeenCalled();
+    expect(fetchErrorBody).not.toHaveBeenCalled();
+  });
+
   it("uploads immutable artifacts with read-back verification before active pointer activation", async () => {
     const builderModule = await importBuilderModule();
     const storageModule = await importStorageModule();
@@ -319,6 +372,19 @@ describe("Public Catalog V2 storage verifier", () => {
     });
   }, 30_000);
 });
+
+function syntheticStorageConfig() {
+  return {
+    bucket: "web00-catalog-images",
+    credentials: {
+      serviceRoleKey: "synthetic-service-role-key",
+      supabaseUrl: "https://storage.web00.invalid"
+    },
+    publicBaseUrl: "https://storage.web00.invalid",
+    workerEnabled: false,
+    workerPollIntervalSeconds: 60
+  };
+}
 
 function createFakeV2Storage(options: {
   bucketOverride?: string;
