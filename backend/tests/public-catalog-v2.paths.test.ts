@@ -51,6 +51,9 @@ describe("Public Catalog V2 storage paths", () => {
     expect(() => assertPublicCatalogV2StoragePath("web00-catalog-images/public-catalog/v2/active.json")).toThrow(
       "Invalid Public Catalog V2 Storage path."
     );
+    expect(() =>
+      assertPublicCatalogV2StoragePath("public-catalog/v2/releases/revision-7/chunks/chunk-000000.json")
+    ).toThrow("Invalid Public Catalog V2 Storage path.");
   });
 
   it("requires immutable release artifacts to be verified before the active pointer switches last", async () => {

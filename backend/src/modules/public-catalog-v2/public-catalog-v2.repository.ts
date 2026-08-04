@@ -7,11 +7,13 @@ import {
   type PublicationCheckpointInput,
   type PublicationOperationRecord,
   type PublicCatalogV2ProjectionCursor,
+  type PublicCatalogV2MediaAsset,
   type PublicCatalogV2ProjectionPage,
   type PublicCatalogV2ProjectionRecord,
   type PublicCatalogV2Repository,
   type RecordActivationEventInput
 } from "./public-catalog-v2.types.js";
+import { publicCategoryVisibilityWhere } from "../public-catalog/public-catalog.visibility.js";
 
 const DEFAULT_OPERATION_STAGE = "content_transaction";
 const DEFAULT_OPERATION_STATUS = "queued";
@@ -33,8 +35,56 @@ export interface PublicCatalogV2PrismaClient {
     updateMany(args: unknown): Promise<{ count: number }>;
   };
   site: {
-    findMany(args: unknown): Promise<PublicCatalogV2ProjectionRecord[]>;
+    findMany(args: unknown): Promise<PublicCatalogV2PrismaProjectionSite[]>;
   };
+}
+
+interface PublicCatalogV2PrismaProjectionSite {
+  active: boolean;
+  category: {
+    description: string | null;
+    slug: string;
+    sortOrder: number;
+    title: string;
+  };
+  categoryId: string;
+  createdAt: Date;
+  deletedAt: Date | null;
+  deliveryLabel: string | null;
+  demoMode: string | null;
+  demoUrl: string | null;
+  featured: boolean;
+  features: string[];
+  fullDescription: string | null;
+  galleryImageAssets: Array<{
+    alt: string;
+    asset: PublicCatalogV2PrismaProjectionMediaAsset;
+    sortOrder: number;
+  }>;
+  id: string;
+  previewImage: {
+    asset: PublicCatalogV2PrismaProjectionMediaAsset;
+  } | null;
+  priceLabel: string | null;
+  publishedAt: Date | null;
+  shortDescription: string;
+  siteUrl: string | null;
+  slug: string;
+  sortOrder: number;
+  status: string;
+  tags: string[];
+  title: string;
+  updatedAt: Date;
+  views: number;
+}
+
+interface PublicCatalogV2PrismaProjectionMediaAsset {
+  assetId: string;
+  height: number;
+  sourceSha256: string;
+  storagePath: string;
+  variants: unknown;
+  width: number;
 }
 
 export class PublicCatalogV2RepositoryError extends Error {
@@ -269,21 +319,89 @@ async function* iteratePublicCatalogV2ProjectionPages(
   let afterCursor = input.afterCursor;
 
   for (;;) {
-    const items = await prisma.site.findMany({
+    const rows = await prisma.site.findMany({
       orderBy: [
         { sortOrder: "asc" },
         { createdAt: "desc" },
         { slug: "asc" },
         { id: "asc" }
       ],
+      select: {
+        active: true,
+        category: {
+          select: {
+            description: true,
+            slug: true,
+            sortOrder: true,
+            title: true
+          }
+        },
+        categoryId: true,
+        createdAt: true,
+        deletedAt: true,
+        deliveryLabel: true,
+        demoMode: true,
+        demoUrl: true,
+        featured: true,
+        features: true,
+        fullDescription: true,
+        galleryImageAssets: {
+          orderBy: [
+            { sortOrder: "asc" },
+            { assetId: "asc" }
+          ],
+          select: {
+            alt: true,
+            asset: {
+              select: {
+                assetId: true,
+                height: true,
+                sourceSha256: true,
+                storagePath: true,
+                variants: true,
+                width: true
+              }
+            },
+            sortOrder: true
+          }
+        },
+        id: true,
+        previewImage: {
+          select: {
+            asset: {
+              select: {
+                assetId: true,
+                height: true,
+                sourceSha256: true,
+                storagePath: true,
+                variants: true,
+                width: true
+              }
+            }
+          }
+        },
+        priceLabel: true,
+        publishedAt: true,
+        shortDescription: true,
+        siteUrl: true,
+        slug: true,
+        sortOrder: true,
+        status: true,
+        tags: true,
+        title: true,
+        updatedAt: true,
+        views: true
+      },
       take: input.take,
       where: {
         active: true,
+        category: publicCategoryVisibilityWhere(),
         deletedAt: null,
         status: "published",
         ...buildProjectionCursorWhere(afterCursor)
       }
     });
+    const items = rows.map(toProjectionRecord);
 
     if (items.length === 0) {
       return;
@@ -414,6 +532,78 @@ function buildProjectionCursorWhere(afterCursor: PublicCatalogV2ProjectionCursor
       }
     ]
   };
+}
+
+function toProjectionRecord(row: PublicCatalogV2PrismaProjectionSite): PublicCatalogV2ProjectionRecord {
+  return {
+    active: row.active,
+    category: {
+      description: row.category.description,
+      slug: row.category.slug,
+      sortOrder: row.category.sortOrder,
+      title: row.category.title
+    },
+    categoryId: row.categoryId,
+    createdAt: row.createdAt,
+    deletedAt: row.deletedAt,
+    deliveryLabel: row.deliveryLabel,
+    demoMode: row.demoMode,
+    demoUrl: row.demoUrl,
+    featured: row.featured,
+    features: row.features,
+    fullDescription: row.fullDescription,
+    galleryImages: row.galleryImageAssets.map((image) => ({
+      ...toProjectionMediaAsset(image.asset),
+      alt: image.alt,
+      sortOrder: image.sortOrder
+    })),
+    id: row.id,
+    previewImage: row.previewImage === null ? null : toProjectionMediaAsset(row.previewImage.asset),
+    priceLabel: row.priceLabel,
+    publishedAt: row.publishedAt,
+    shortDescription: row.shortDescription,
+    siteUrl: row.siteUrl,
+    slug: row.slug,
+    sortOrder: row.sortOrder,
+    status: row.status,
+    tags: row.tags,
+    title: row.title,
+    updatedAt: row.updatedAt,
+    views: row.views
+  };
+}
+
+function toProjectionMediaAsset(asset: PublicCatalogV2PrismaProjectionMediaAsset): PublicCatalogV2MediaAsset {
+  return {
+    assetId: asset.assetId,
+    height: asset.height,
+    sourceSha256: asset.sourceSha256,
+    storagePath: asset.storagePath,
+    variants: readProjectionMediaVariants(asset.variants),
+    width: asset.width
+  };
+}
+
+function readProjectionMediaVariants(value: unknown): PublicCatalogV2MediaAsset["variants"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((variant) => {
+    if (typeof variant !== "object" || variant === null || Array.isArray(variant)) {
+      return { width: 0 };
+    }
+    const record = variant as Record<string, unknown>;
+    const mapped: PublicCatalogV2MediaAsset["variants"][number] = {
+      width: typeof record.width === "number" ? record.width : 0
+    };
+    if (record.format === "avif" || record.format === "webp") {
+      mapped.format = record.format;
+    }
+    if (typeof record.path === "string") {
+      mapped.path = record.path;
+    }
+    return mapped;
+  });
 }
 
 function isUniqueConstraintError(error: unknown): boolean {

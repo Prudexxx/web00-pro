@@ -167,16 +167,69 @@ export interface PublicCatalogV2ProjectionPage {
 
 export interface PublicCatalogV2ProjectionRecord {
   active: boolean;
+  category?: {
+    description?: string | null;
+    slug: string;
+    sortOrder?: number;
+    title: string;
+  };
   categoryId: string;
   createdAt: Date;
   deletedAt: Date | null;
+  deliveryLabel?: string | null;
+  demoMode?: string | null;
+  demoUrl?: string | null;
   featured: boolean;
+  features?: string[];
+  fullDescription?: string | null;
+  galleryImages?: PublicCatalogV2MediaAsset[];
   id: string;
+  previewImage?: PublicCatalogV2MediaAsset | null;
+  priceLabel?: string | null;
   publishedAt: Date | null;
+  shortDescription?: string | null;
+  siteUrl?: string | null;
   slug: string;
   sortOrder: number;
   status: string;
+  tags?: string[];
+  title?: string;
   updatedAt: Date;
+  views?: number;
+}
+
+export interface PublicCatalogV2MediaVariant {
+  avifUrl?: string;
+  format?: "avif" | "webp";
+  path?: string;
+  webpUrl?: string;
+  width: number;
+}
+
+export interface PublicCatalogV2MediaAsset {
+  alt?: string;
+  assetId: string;
+  height: number;
+  lqip?: string | null;
+  sortOrder?: number;
+  sourceSha256: string;
+  storagePath: string;
+  url?: string;
+  variants: PublicCatalogV2MediaVariant[];
+  width: number;
+}
+
+export interface PublicCatalogV2Settings {
+  showDemoInModal: boolean;
+}
+
+export interface PublicCatalogV2ArtifactDescriptor {
+  byteLength: number;
+  bytes: number;
+  itemsCount?: number;
+  kind: "categories" | "chunk" | "index" | "manifest" | "popular";
+  path: string;
+  sha256: string;
 }
 
 export interface PublicCatalogV2Repository {

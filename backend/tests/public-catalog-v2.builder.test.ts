@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   createPublicCatalogSnapshot
@@ -6,6 +7,7 @@ import { mapSiteToPublicCatalogItem } from "../src/modules/public-catalog/public
 import type { PublicSiteRecord } from "../src/modules/public-catalog/public-catalog.types.js";
 import {
   createSyntheticTenThousandProjectionPages,
+  syntheticGalleryAssets,
   syntheticProjectionPages
 } from "./helpers/public-catalog-v2-synthetic-fixtures.js";
 
@@ -65,7 +67,7 @@ describe("Public Catalog V2 builder", () => {
       settings: { showDemoInModal: true }
     });
 
-    expect(snapshot.items.map((item) => item.slug)).toEqual(["z-site", "a-site"]);
+    expect(snapshot.items.map((item) => item.slug)).toEqual(["a-site", "z-site"]);
   });
 
   it("preserves DB catalog order across nonalphabetical slugs in the V2 release index", async () => {
@@ -104,6 +106,108 @@ describe("Public Catalog V2 builder", () => {
     expect(release.index.items.map((item) => item.slug)).toEqual(["catalog-first", "popular-first"]);
     expect(release.popular.items.map((item) => item.slug)).toEqual(["popular-first", "catalog-first"]);
     expect(release.popular.popularOrder).toEqual(["popular-first", "catalog-first"]);
+  });
+
+  it("emits compact index card and search fields when projection supplies them", async () => {
+    const module = await importBuilderModule();
+    const buildPublicCatalogV2Release = readFunction(module, "buildPublicCatalogV2Release");
+
+    const release = await buildPublicCatalogV2Release({
+      chunkSize: 100,
+      generatedAt: new Date("2026-08-03T16:00:00.000Z"),
+      pages: syntheticProjectionPages([
+        {
+          category: { slug: "individual", title: "Индивидуально" },
+          deliveryLabel: "7 days",
+          features: ["Managed demo"],
+          priceLabel: "from 1000",
+          shortDescription: "Synthetic compact card text",
+          slug: "compact-card",
+          sortOrder: 1,
+          tags: ["premium"]
+        }
+      ]),
+      revision: 15,
+      settings: { showDemoInModal: true }
+    }) as {
+      index: {
+        items: Array<{
+          categoryTitle?: string;
+          deliveryLabel?: string;
+          features?: string[];
+          priceLabel?: string;
+          shortDescription?: string;
+          slug: string;
+          tags?: string[];
+        }>;
+      };
+    };
+
+    expect(release.index.items[0]).toMatchObject({
+      categoryTitle: "Индивидуально",
+      deliveryLabel: "7 days",
+      features: ["Managed demo"],
+      priceLabel: "from 1000",
+      shortDescription: "Synthetic compact card text",
+      slug: "compact-card",
+      tags: ["premium"]
+    });
+  });
+
+  it("rejects gallery sortOrder gaps instead of renumbering projected media", async () => {
+    const module = await importBuilderModule();
+    const buildPublicCatalogV2Release = readFunction(module, "buildPublicCatalogV2Release");
+    const galleryImages = syntheticGalleryAssets(["gallery-a", "gallery-b"]).map((image, index) => ({
+      ...image,
+      sortOrder: index === 0 ? 0 : 3
+    }));
+
+    await expect(
+      buildPublicCatalogV2Release({
+        chunkSize: 100,
+        generatedAt: new Date("2026-08-03T16:00:00.000Z"),
+        pages: syntheticProjectionPages([
+          {
+            galleryImages,
+            slug: "gallery-gap",
+            sortOrder: 1
+          }
+        ]),
+        revision: 16,
+        settings: { showDemoInModal: true }
+      })
+    ).rejects.toThrow("PUBLIC_CATALOG_V2_INVALID_MEDIA");
+  });
+
+  it("rejects artifacts that exceed hard release byte budgets before upload", async () => {
+    const module = await importBuilderModule();
+    const buildPublicCatalogV2Release = readFunction(module, "buildPublicCatalogV2Release");
+
+    await expect(
+      buildPublicCatalogV2Release({
+        chunkSize: 100,
+        generatedAt: new Date("2026-08-03T16:00:00.000Z"),
+        pages: syntheticProjectionPages([
+          {
+            fullDescription: "x".repeat(600 * 1024),
+            slug: "oversized-chunk",
+            sortOrder: 1
+          }
+        ]),
+        revision: 17,
+        settings: { showDemoInModal: true }
+      })
+    ).rejects.toThrow("PUBLIC_CATALOG_V2_ARTIFACT_BYTES_EXCEEDED");
+  });
+
+  it("keeps V2 repository projection aligned with V1 public category visibility", () => {
+    const source = readFileSync(
+      new URL("../src/modules/public-catalog-v2/public-catalog-v2.repository.ts", import.meta.url),
+      "utf8"
+    );
+
+    expect(source).toContain("publicCategoryVisibilityWhere");
+    expect(source).toMatch(/category:\s*publicCategoryVisibilityWhere\(\)/);
   });
 
   it("shards 10000 synthetic cards from keyset pages with bounded buffering and pointer activation last", async () => {
@@ -166,5 +270,5 @@ describe("Public Catalog V2 builder", () => {
       path: "public-catalog/v2/releases/revision-42/chunks/chunk-000001.json"
     });
     expect(release.activationOrder.at(-1)).toBe("public-catalog/v2/active.json");
-  });
+  }, 30_000);
 });

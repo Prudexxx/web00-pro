@@ -1,12 +1,18 @@
 export interface SyntheticV2ProjectionRecord {
   category?: { slug: string; title: string };
   createdAt?: string;
+  deliveryLabel?: string;
   featured?: boolean;
+  features?: string[];
+  fullDescription?: string;
   galleryImages?: SyntheticV2MediaAsset[];
   id?: string;
   previewImage?: SyntheticV2MediaAsset | null;
+  priceLabel?: string;
+  shortDescription?: string;
   slug: string;
   sortOrder: number;
+  tags?: string[];
   title?: string;
   views?: number;
 }
@@ -71,12 +77,24 @@ export function syntheticGalleryAssets(assetIds: string[]): SyntheticV2MediaAsse
   }));
 }
 
-export function syntheticTenThousandRecords(): SyntheticV2ProjectionRecord[] {
-  return Array.from({ length: 10_000 }, (_, index) => ({
-    id: `synthetic-fixture-${String(index + 1).padStart(5, "0")}`,
-    slug: `synthetic-fixture-${String(index + 1).padStart(5, "0")}`,
-    sortOrder: index + 1
-  }));
+function syntheticStressGalleryAssets(ordinal: number): SyntheticV2MediaAsset[] {
+  const itemId = String(ordinal).padStart(5, "0");
+  return [0, 1, 2, 3].map((galleryIndex) => {
+    const assetId = `g${itemId}${galleryIndex}`;
+    const hashNibble = String(galleryIndex + 1);
+    return {
+      assetId,
+      height: 900,
+      sortOrder: galleryIndex,
+      sourceSha256: hashNibble.repeat(64),
+      storagePath: `g/${assetId}.png`,
+      variants: [
+        { format: "webp", path: `g/${assetId}.webp`, width: 800 },
+        { format: "avif", path: `g/${assetId}.avif`, width: 800 }
+      ],
+      width: 1200
+    };
+  });
 }
 
 export function createSyntheticTenThousandProjectionPages(pageSize = 100): {
@@ -93,13 +111,21 @@ export function createSyntheticTenThousandProjectionPages(pageSize = 100): {
     cursor: { createdAt: string; id: string; sortOrder: number } | null;
     records: SyntheticV2ProjectionRecord[];
   }> {
-    for (let offset = 0; offset < 10_000; offset += pageSize) {
-      const records = Array.from({ length: Math.min(pageSize, 10_000 - offset) }, (_unused, index) => {
-        const ordinal = offset + index + 1;
+    for (let firstOrdinal = 1; firstOrdinal <= 10_000; firstOrdinal += pageSize) {
+      const recordsInPage = Math.min(pageSize, 10_001 - firstOrdinal);
+      const records = Array.from({ length: recordsInPage }, (_unused, index) => {
+        const ordinal = firstOrdinal + index;
         return {
+          category: { slug: "synthetic-category", title: "" },
+          createdAt: "2026-08-03T00:00:00.000Z",
+          featured: ordinal > 9_980,
+          galleryImages: syntheticStressGalleryAssets(ordinal),
           id: `synthetic-fixture-${String(ordinal).padStart(5, "0")}`,
+          previewImage: null,
           slug: `synthetic-fixture-${String(ordinal).padStart(5, "0")}`,
-          sortOrder: ordinal
+          sortOrder: ordinal,
+          title: `Synthetic fixture ${ordinal}`,
+          views: 10_000 - ordinal
         };
       });
       maxLiveRecordCount = Math.max(maxLiveRecordCount, records.length);
