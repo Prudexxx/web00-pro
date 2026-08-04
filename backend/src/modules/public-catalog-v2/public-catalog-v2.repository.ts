@@ -16,6 +16,11 @@ import {
 const DEFAULT_OPERATION_STAGE = "content_transaction";
 const DEFAULT_OPERATION_STATUS = "queued";
 
+type ClaimQuery = {
+  orderBy: Array<Record<string, "asc" | "desc">>;
+  where: Record<string, unknown>;
+};
+
 export interface PublicCatalogV2PrismaClient {
   publicCatalogActivationEvent: {
     create(args: unknown): Promise<unknown>;
@@ -33,7 +38,13 @@ export interface PublicCatalogV2PrismaClient {
 }
 
 export class PublicCatalogV2RepositoryError extends Error {
-  constructor(readonly code: "IDEMPOTENCY_KEY_REUSED" | "PUBLIC_CATALOG_V2_INVALID_TERMINAL_STATUS") {
+  constructor(
+    readonly code:
+      | "IDEMPOTENCY_KEY_REUSED"
+      | "PUBLIC_CATALOG_V2_INVALID_TERMINAL_STATUS"
+      | "PUBLIC_CATALOG_V2_LEASE_NOT_HELD"
+      | "PUBLIC_CATALOG_V2_INVALID_RETRY_SCHEDULE"
+  ) {
     super(code);
     this.name = "PublicCatalogV2RepositoryError";
   }
@@ -109,27 +120,25 @@ async function claimNextPublicationOperation(
   prisma: PublicCatalogV2PrismaClient,
   input: ClaimPublicationOperationInput
 ): Promise<PublicationOperationRecord | null> {
-  const operation = await prisma.publicCatalogPublicationOperation.findFirst({
-    orderBy: { createdAt: "asc" },
-    where: buildClaimWhere(input.staleLockedBefore ?? null)
-  });
+  const claimCandidate = await findClaimCandidate(prisma, input);
 
-  if (operation === null) {
+  if (claimCandidate === null) {
     return null;
   }
 
-  const claimWhere = buildClaimWhere(input.staleLockedBefore ?? null);
+  const { operation, where } = claimCandidate;
   const claim = await prisma.publicCatalogPublicationOperation.updateMany({
     data: {
       leaseId: input.leaseId,
       lockedAt: input.now,
       lockedBy: input.lockedBy,
+      nextRetryAt: null,
       status: "running",
       updatedAt: input.now
     },
     where: {
       id: operation.id,
-      ...claimWhere
+      ...where
     }
   });
 
@@ -146,15 +155,51 @@ async function recordPublicationCheckpoint(
   prisma: PublicCatalogV2PrismaClient,
   input: PublicationCheckpointInput
 ): Promise<PublicationOperationRecord> {
-  return prisma.publicCatalogPublicationOperation.update({
+  const status = input.status ?? "running";
+
+  if (
+    (status === "retry_wait" && input.nextRetryAt == null) ||
+    (status === "running" && input.nextRetryAt !== undefined && input.nextRetryAt !== null)
+  ) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_INVALID_RETRY_SCHEDULE");
+  }
+
+  const checkpoint = await prisma.publicCatalogPublicationOperation.updateMany({
     data: {
       lastCheckpoint: input.lastCheckpoint,
       lastErrorCode: input.lastErrorCode ?? null,
+      ...(status === "retry_wait"
+        ? {
+            leaseId: null,
+            lockedAt: null,
+            lockedBy: null,
+            nextRetryAt: input.nextRetryAt,
+            status
+          }
+        : { status }),
       ...(input.retryCount === undefined ? {} : { retryCount: input.retryCount }),
       stage: input.stage
     },
+    where: {
+      id: input.operationId,
+      leaseId: input.leaseId,
+      status: "running"
+    }
+  });
+
+  if (checkpoint.count !== 1) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  const updated = await prisma.publicCatalogPublicationOperation.findUnique({
     where: { id: input.operationId }
   });
+
+  if (updated === null) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  return updated;
 }
 
 async function finalizePublicationOperation(
@@ -165,7 +210,7 @@ async function finalizePublicationOperation(
     throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_INVALID_TERMINAL_STATUS");
   }
 
-  return prisma.publicCatalogPublicationOperation.update({
+  const finalize = await prisma.publicCatalogPublicationOperation.updateMany({
     data: {
       completedAt: input.completedAt,
       lastCheckpoint: input.lastCheckpoint ?? {},
@@ -176,8 +221,26 @@ async function finalizePublicationOperation(
       stage: input.stage,
       status: input.status
     },
+    where: {
+      id: input.operationId,
+      leaseId: input.leaseId,
+      status: "running"
+    }
+  });
+
+  const finalized = await prisma.publicCatalogPublicationOperation.findUnique({
     where: { id: input.operationId }
   });
+
+  if (finalized === null) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  if (finalize.count !== 1 && !isSameTerminalFinalization(finalized, input)) {
+    throw new PublicCatalogV2RepositoryError("PUBLIC_CATALOG_V2_LEASE_NOT_HELD");
+  }
+
+  return finalized;
 }
 
 async function recordActivationEvent(
@@ -273,20 +336,57 @@ function assertMatchingFingerprint(operation: PublicationOperationRecord, reques
   }
 }
 
-function buildClaimWhere(staleLockedBefore: Date | null): Record<string, unknown> {
-  const claimableStatuses: Record<string, unknown>[] = [
-    { status: "queued" },
-    { status: "retry_wait" }
+function isSameTerminalFinalization(
+  operation: PublicationOperationRecord,
+  input: FinalizePublicationOperationInput
+): boolean {
+  return operation.completedAt !== null && operation.status === input.status;
+}
+
+async function findClaimCandidate(
+  prisma: PublicCatalogV2PrismaClient,
+  input: ClaimPublicationOperationInput
+): Promise<{ operation: PublicationOperationRecord; where: Record<string, unknown> } | null> {
+  for (const query of buildClaimQueries(input)) {
+    const operation = await prisma.publicCatalogPublicationOperation.findFirst(query);
+
+    if (operation !== null) {
+      return {
+        operation,
+        where: query.where
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildClaimQueries(input: ClaimPublicationOperationInput): ClaimQuery[] {
+  const queries: ClaimQuery[] = [
+    {
+      orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }],
+      where: { status: "queued" }
+    },
+    {
+      orderBy: [{ nextRetryAt: "asc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }],
+      where: {
+        nextRetryAt: { lte: input.now },
+        status: "retry_wait"
+      }
+    }
   ];
 
-  if (staleLockedBefore !== null) {
-    claimableStatuses.push({
-      lockedAt: { lte: staleLockedBefore },
-      status: "running"
+  if (input.staleLockedBefore !== undefined && input.staleLockedBefore !== null) {
+    queries.push({
+      orderBy: [{ lockedAt: "asc" as const }, { createdAt: "asc" as const }, { id: "asc" as const }],
+      where: {
+        lockedAt: { lte: input.staleLockedBefore },
+        status: "running"
+      }
     });
   }
 
-  return { OR: claimableStatuses };
+  return queries;
 }
 
 function buildProjectionCursorWhere(afterCursor: PublicCatalogV2ProjectionCursor | null): Record<string, unknown> {

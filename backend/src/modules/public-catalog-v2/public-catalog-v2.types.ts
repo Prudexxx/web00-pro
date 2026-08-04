@@ -99,15 +99,19 @@ export interface ClaimPublicationOperationInput {
 export interface PublicationCheckpointInput {
   lastCheckpoint: Record<string, unknown>;
   lastErrorCode?: string | null;
+  leaseId: string;
+  nextRetryAt?: Date | null;
   operationId: string;
   retryCount?: number;
   stage: PublicCatalogV2OperationStage;
+  status?: Extract<PublicCatalogV2OperationStatus, "running" | "retry_wait">;
 }
 
 export interface FinalizePublicationOperationInput {
   completedAt: Date;
   lastCheckpoint?: Record<string, unknown>;
   lastErrorCode?: string | null;
+  leaseId: string;
   operationId: string;
   status: PublicCatalogV2TerminalOperationStatus;
   stage: PublicCatalogV2OperationStage;
@@ -134,6 +138,7 @@ export interface PublicationOperationRecord {
   leaseId: string | null;
   lockedAt: Date | null;
   lockedBy: string | null;
+  nextRetryAt: Date | null;
   operationGroupKey: string;
   operationScope: string;
   projectionHash: string | null;

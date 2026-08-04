@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { PublicationOperationRecord } from "../../src/modules/public-catalog-v2/public-catalog-v2.types.js";
+import type {
+  CreatePublicationOperationInput,
+  PublicationOperationRecord
+} from "../../src/modules/public-catalog-v2/public-catalog-v2.types.js";
 
 const migrationPath = join(
   process.cwd(),
@@ -87,11 +90,50 @@ describe("Public Catalog V2 publication schema", () => {
     expect(sql).toContain(
       'CONSTRAINT "public_catalog_publication_operations_fingerprint_chk" CHECK ("request_fingerprint" ~ \'^[a-f0-9]{64}$\' AND ("projection_hash" IS NULL OR "projection_hash" ~ \'^[a-f0-9]{64}$\'))'
     );
+    expect(sql).toContain(
+      'CONSTRAINT "public_catalog_publication_operations_state_chk" CHECK ('
+    );
+    expect(sql).toContain(
+      `"status" = 'running' AND "lease_id" IS NOT NULL AND "locked_at" IS NOT NULL AND "locked_by" IS NOT NULL AND "next_retry_at" IS NULL AND "completed_at" IS NULL`
+    );
+    expect(sql).toContain(
+      `"status" = 'retry_wait' AND "lease_id" IS NULL AND "locked_at" IS NULL AND "locked_by" IS NULL AND "next_retry_at" IS NOT NULL AND "completed_at" IS NULL`
+    );
+    expect(sql).toContain(
+      `"status" IN ('succeeded', 'failed', 'cancelled') AND "lease_id" IS NULL AND "locked_at" IS NULL AND "locked_by" IS NULL AND "next_retry_at" IS NULL AND "completed_at" IS NOT NULL`
+    );
     for (const status of operationStatuses) {
       expect(sql).toContain(`'${status}'`);
     }
     expect(sql).toMatch(
       /CREATE UNIQUE INDEX "public_catalog_publication_operations_active_group_key"\s+ON "public_catalog_publication_operations" \("operation_group_key"\)\s+(?:--[^\n]*\n\s+)?WHERE "status" IN \('queued', 'running', 'retry_wait'\);/m
+    );
+  });
+
+  it("defines bounded recovery scanner fields and indexes for long-lived operation history", () => {
+    const sql = readRequiredFile(migrationPath);
+
+    expect(sql).toMatch(/"next_retry_at"\s+TIMESTAMPTZ\(6\)/i);
+    expect(sql).toMatch(
+      /CREATE INDEX "public_catalog_publication_operations_queued_claim_idx"\s+ON "public_catalog_publication_operations" \("created_at", "id"\)\s+WHERE "status" = 'queued';/m
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "public_catalog_publication_operations_retry_due_idx"\s+ON "public_catalog_publication_operations" \("next_retry_at", "created_at", "id"\)\s+WHERE "status" = 'retry_wait';/m
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "public_catalog_publication_operations_stale_lease_idx"\s+ON "public_catalog_publication_operations" \("locked_at", "created_at", "id"\)\s+WHERE "status" = 'running';/m
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "public_catalog_publication_operations_target_revision_idx"\s+ON "public_catalog_publication_operations" \("target_revision", "created_at"\);/m
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "public_catalog_activation_events_revision_type_idx"\s+ON "public_catalog_activation_events" \("revision", "event_type", "created_at"\);/m
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "public_catalog_releases_status_revision_idx"\s+ON "public_catalog_releases" \("status", "revision"\);/m
+    );
+    expect(sql).toMatch(
+      /CREATE INDEX "sites_public_catalog_v2_projection_idx"\s+ON "sites" \("sort_order" ASC, "created_at" DESC, "slug" ASC, "id" ASC\)\s+WHERE "status" = 'published' AND "active" = true AND "deleted_at" IS NULL;/m
     );
   });
 
@@ -146,6 +188,16 @@ describe("Public Catalog V2 publication schema", () => {
       '@@map("public_catalog_activation_events")'
     );
     expect(modelBlock(schema, "Site")).toMatch(/previewAssetId\s+String\?/);
+    expect(modelBlock(schema, "PublicCatalogPublicationOperation")).toMatch(/nextRetryAt\s+DateTime\?/);
+    expect(modelBlock(schema, "PublicCatalogPublicationOperation")).toContain(
+      '@@index([targetRevision, createdAt], map: "public_catalog_publication_operations_target_revision_idx")'
+    );
+    expect(modelBlock(schema, "PublicCatalogRelease")).toContain(
+      '@@index([status, revision], map: "public_catalog_releases_status_revision_idx")'
+    );
+    expect(modelBlock(schema, "PublicCatalogActivationEvent")).toContain(
+      '@@index([revision, eventType, createdAt], map: "public_catalog_activation_events_revision_type_idx")'
+    );
     expect(modelBlock(schema, "SitePreviewImage")).toContain(
       '@relation("SitePreviewImageAsset", fields: [siteId, assetId, slot], references: [siteId, assetId, slot], onDelete: Restrict'
     );
@@ -199,10 +251,281 @@ describe("Public Catalog V2 publication schema", () => {
         }),
         where: expect.objectContaining({
           id: "00000000-0000-4000-8000-000000000001",
-          OR: [{ status: "queued" }, { status: "retry_wait" }]
+          status: "queued"
         })
       })
     ]);
+  });
+
+  it("claims due retry operations by retry schedule and leaves future retries parked", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const now = new Date("2026-08-03T17:05:00.000Z");
+    const prismaFake = createRetryClaimPrismaFake(now);
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    const result = await repository.claimNextPublicationOperation({
+      leaseId: "synthetic-retry-lease",
+      lockedBy: "synthetic-worker",
+      now,
+      staleLockedBefore: new Date("2026-08-03T17:04:00.000Z")
+    });
+
+    expect(result?.id).toBe("00000000-0000-4000-8000-0000000000d1");
+    expect(result?.nextRetryAt).toBeNull();
+    expect(prismaFake.publicCatalogPublicationOperation.findFirstCalls).toEqual([
+      expect.objectContaining({
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        where: { status: "queued" }
+      }),
+      expect.objectContaining({
+        orderBy: [{ nextRetryAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        where: {
+          nextRetryAt: { lte: now },
+          status: "retry_wait"
+        }
+      })
+    ]);
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          nextRetryAt: null,
+          status: "running"
+        }),
+        where: {
+          id: "00000000-0000-4000-8000-0000000000d1",
+          nextRetryAt: { lte: now },
+          status: "retry_wait"
+        }
+      })
+    ]);
+  });
+
+  it("lease-gates checkpoint writes and atomically parks retry_wait operations", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const nextRetryAt = new Date("2026-08-03T17:10:00.000Z");
+    const prismaFake = createRetrySchedulePrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    await expect(
+      repository.recordPublicationCheckpoint({
+        lastCheckpoint: { stage: "manifest_upload" },
+        lastErrorCode: "SYNTHETIC_RETRYABLE_STORAGE_ERROR",
+        leaseId: "current-lease",
+        nextRetryAt,
+        operationId: "00000000-0000-4000-8000-000000000001",
+        retryCount: 2,
+        stage: "manifest_upload",
+        status: "retry_wait"
+      })
+    ).resolves.toMatchObject({
+      leaseId: null,
+      lockedAt: null,
+      lockedBy: null,
+      nextRetryAt,
+      retryCount: 2,
+      status: "retry_wait"
+    });
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        data: expect.objectContaining({
+          leaseId: null,
+          lockedAt: null,
+          lockedBy: null,
+          nextRetryAt,
+          status: "retry_wait"
+        }),
+        where: {
+          id: "00000000-0000-4000-8000-000000000001",
+          leaseId: "current-lease",
+          status: "running"
+        }
+      })
+    ]);
+  });
+
+  it("rejects checkpoint writes from an old lease owner", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const prismaFake = createCheckpointLeasePrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    await expect(
+      repository.recordPublicationCheckpoint({
+        lastCheckpoint: { stage: "chunk_upload" },
+        lastErrorCode: "STALE_WORKER_ATTEMPT",
+        leaseId: "stale-lease",
+        operationId: "00000000-0000-4000-8000-000000000001",
+        retryCount: 1,
+        stage: "chunk_upload"
+      })
+    ).rejects.toMatchObject({ code: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD" });
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        where: {
+          id: "00000000-0000-4000-8000-000000000001",
+          leaseId: "stale-lease",
+          status: "running"
+        }
+      })
+    ]);
+  });
+
+  it("requires the current lease id before terminal finalization", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const prismaFake = createFinalizeLeasePrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    await expect(
+      repository.finalizePublicationOperation({
+        completedAt: new Date("2026-08-03T17:06:00.000Z"),
+        leaseId: "stale-lease",
+        operationId: "00000000-0000-4000-8000-000000000001",
+        status: "succeeded",
+        stage: "db_finalize"
+      } as Parameters<typeof repository.finalizePublicationOperation>[0] & { leaseId: string })
+    ).rejects.toMatchObject({ code: "PUBLIC_CATALOG_V2_LEASE_NOT_HELD" });
+
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        where: {
+          id: "00000000-0000-4000-8000-000000000001",
+          leaseId: "stale-lease",
+          status: "running"
+        }
+      })
+    ]);
+    expect(prismaFake.publicCatalogPublicationOperation.updateCalls).toEqual([]);
+  });
+
+  it("returns an existing terminal DB finalization without writing it twice", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const prismaFake = createTerminalFinalizePrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    await expect(
+      repository.finalizePublicationOperation({
+        completedAt: new Date("2026-08-03T17:06:00.000Z"),
+        leaseId: "already-released-lease",
+        operationId: "00000000-0000-4000-8000-000000000001",
+        status: "succeeded",
+        stage: "db_finalize"
+      })
+    ).resolves.toMatchObject({
+      completedAt: new Date("2026-08-03T17:05:59.000Z"),
+      leaseId: null,
+      status: "succeeded"
+    });
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        where: {
+          id: "00000000-0000-4000-8000-000000000001",
+          leaseId: "already-released-lease",
+          status: "running"
+        }
+      })
+    ]);
+    expect(prismaFake.publicCatalogPublicationOperation.updateCalls).toEqual([]);
+  });
+
+  it("claims stale leases at the exact cutoff without stealing fresh running leases", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const cutoff = new Date("2026-08-03T17:05:00.000Z");
+    const prismaFake = createStaleLeaseClaimPrismaFake(cutoff);
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    const result = await repository.claimNextPublicationOperation({
+      leaseId: "replacement-lease",
+      lockedBy: "replacement-worker",
+      now: new Date("2026-08-03T17:06:00.000Z"),
+      staleLockedBefore: cutoff
+    });
+
+    expect(result?.id).toBe("00000000-0000-4000-8000-0000000000e1");
+    expect(prismaFake.publicCatalogPublicationOperation.findFirstCalls).toEqual([
+      expect.objectContaining({
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        where: { status: "queued" }
+      }),
+      expect.objectContaining({
+        orderBy: [{ nextRetryAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        where: {
+          nextRetryAt: { lte: new Date("2026-08-03T17:06:00.000Z") },
+          status: "retry_wait"
+        }
+      }),
+      expect.objectContaining({
+        orderBy: [{ lockedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+        where: {
+          lockedAt: { lte: cutoff },
+          status: "running"
+        }
+      })
+    ]);
+    expect(prismaFake.publicCatalogPublicationOperation.updateManyCalls).toEqual([
+      expect.objectContaining({
+        where: {
+          id: "00000000-0000-4000-8000-0000000000e1",
+          lockedAt: { lte: cutoff },
+          status: "running"
+        }
+      })
+    ]);
+  });
+
+  it("replays exact idempotency-key requests and rejects changed fingerprints under the approved global key scope", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const prismaFake = createIdempotencyReplayPrismaFake();
+    const repository = repositoryModule.createPublicCatalogV2Repository(prismaFake);
+
+    await expect(repository.createOrCoalescePublicationOperation(syntheticCreateInput())).resolves.toMatchObject({
+      id: "00000000-0000-4000-8000-000000000001",
+      idempotencyKey: "synthetic-key"
+    });
+    await expect(
+      repository.createOrCoalescePublicationOperation(
+        syntheticCreateInput({
+          action: "unpublish",
+          requestFingerprint: "b".repeat(64),
+          siteId: "00000000-0000-4000-8000-000000000202"
+        })
+      )
+    ).rejects.toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+
+    expect(prismaFake.publicCatalogPublicationOperation.createCalls).toEqual([]);
+  });
+
+  it("coalesces one active catalog operation while terminal rows do not block a new operation", async () => {
+    const repositoryModule = await import("../../src/modules/public-catalog-v2/public-catalog-v2.repository.js");
+    const activeFake = createActiveGroupPrismaFake();
+    const terminalFake = createTerminalGroupPrismaFake();
+
+    await expect(
+      repositoryModule.createPublicCatalogV2Repository(activeFake).createOrCoalescePublicationOperation(
+        syntheticCreateInput({ idempotencyKey: "active-group-key" })
+      )
+    ).resolves.toMatchObject({
+      id: "00000000-0000-4000-8000-0000000000a1",
+      status: "running"
+    });
+    expect(activeFake.publicCatalogPublicationOperation.createCalls).toEqual([]);
+
+    await expect(
+      repositoryModule.createPublicCatalogV2Repository(terminalFake).createOrCoalescePublicationOperation(
+        syntheticCreateInput({ idempotencyKey: "terminal-does-not-block" })
+      )
+    ).resolves.toMatchObject({
+      id: "00000000-0000-4000-8000-0000000000c1",
+      status: "queued"
+    });
+    expect(terminalFake.publicCatalogPublicationOperation.findFirstCalls).toEqual([
+      expect.objectContaining({
+        orderBy: { createdAt: "asc" },
+        where: {
+          operationGroupKey: "public-catalog",
+          status: { in: ["queued", "running", "retry_wait"] }
+        }
+      })
+    ]);
+    expect(terminalFake.publicCatalogPublicationOperation.createCalls).toHaveLength(1);
   });
 });
 
@@ -265,13 +588,15 @@ function createConcurrentClaimPrismaFake() {
       },
       updateMany: async (args: {
         data: Partial<ReturnType<typeof syntheticOperationRecord>>;
-        where: { OR?: Array<{ status: string }>; id?: string };
+        where: {
+          id?: string;
+          lockedAt?: { lte: Date };
+          nextRetryAt?: { lte: Date };
+          status?: string;
+        };
       }) => {
         updateManyCalls.push(args);
-        if (
-          args.where.id === stored.id &&
-          args.where.OR?.some((branch) => branch.status === stored.status)
-        ) {
+        if (args.where.id === stored.id && args.where.status === stored.status) {
           Object.assign(stored, args.data);
 
           return { count: 1 };
@@ -284,6 +609,445 @@ function createConcurrentClaimPrismaFake() {
     site: {
       findMany: async () => []
     }
+  };
+}
+
+function createRetryClaimPrismaFake(now: Date) {
+  const dueRetry = {
+    ...syntheticOperationRecord(),
+    createdAt: new Date("2026-08-03T17:00:00.000Z"),
+    id: "00000000-0000-4000-8000-0000000000d1",
+    nextRetryAt: now,
+    status: "retry_wait"
+  } as PublicationOperationRecord & { nextRetryAt: Date };
+  const futureRetry = {
+    ...syntheticOperationRecord(),
+    createdAt: new Date("2026-08-03T16:59:00.000Z"),
+    id: "00000000-0000-4000-8000-0000000000f1",
+    nextRetryAt: new Date("2026-08-03T17:10:00.000Z"),
+    status: "retry_wait"
+  } as PublicationOperationRecord & { nextRetryAt: Date };
+  let selected: (PublicationOperationRecord & { nextRetryAt: Date }) | null = null;
+  const findFirstCalls: unknown[] = [];
+  const updateManyCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async (args: {
+        where?: {
+          OR?: unknown[];
+          nextRetryAt?: { lte: Date };
+          status?: string;
+        };
+      }) => {
+        findFirstCalls.push(args);
+
+        if (args.where?.status === "queued") {
+          return null;
+        }
+
+        if (
+          args.where?.status === "retry_wait" &&
+          args.where.nextRetryAt?.lte.getTime() === now.getTime()
+        ) {
+          selected = dueRetry;
+
+          return { ...dueRetry };
+        }
+
+        if (args.where?.OR !== undefined) {
+          selected = futureRetry;
+
+          return { ...futureRetry };
+        }
+
+        return null;
+      },
+      findUnique: async () => (selected === null ? null : { ...selected }),
+      update: async () => syntheticOperationRecord(),
+      updateMany: async (args: {
+        data: Partial<PublicationOperationRecord>;
+        where: { id?: string; nextRetryAt?: { lte: Date }; status?: string };
+      }) => {
+        updateManyCalls.push(args);
+        if (
+          selected !== null &&
+          args.where.id === selected.id &&
+          args.where.status === selected.status &&
+          (args.where.nextRetryAt === undefined ||
+            selected.nextRetryAt.getTime() <= args.where.nextRetryAt.lte.getTime())
+        ) {
+          Object.assign(selected, args.data);
+
+          return { count: 1 };
+        }
+
+        return { count: 0 };
+      },
+      findFirstCalls,
+      updateManyCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createFinalizeLeasePrismaFake() {
+  const stored = {
+    ...syntheticOperationRecord(),
+    leaseId: "current-lease",
+    lockedAt: new Date("2026-08-03T17:05:00.000Z"),
+    lockedBy: "current-worker",
+    status: "running"
+  };
+  const updateCalls: unknown[] = [];
+  const updateManyCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async () => null,
+      findUnique: async () => ({ ...stored }),
+      update: async (args: { data: Partial<PublicationOperationRecord> }) => {
+        updateCalls.push(args);
+        Object.assign(stored, args.data);
+
+        return { ...stored };
+      },
+      updateMany: async (args: {
+        data: Partial<PublicationOperationRecord>;
+        where: { id?: string; leaseId?: string; status?: string };
+      }) => {
+        updateManyCalls.push(args);
+        if (args.where.id === stored.id && args.where.leaseId === stored.leaseId && args.where.status === "running") {
+          Object.assign(stored, args.data);
+
+          return { count: 1 };
+        }
+
+        return { count: 0 };
+      },
+      updateCalls,
+      updateManyCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createRetrySchedulePrismaFake() {
+  const stored = {
+    ...syntheticOperationRecord(),
+    leaseId: "current-lease",
+    lockedAt: new Date("2026-08-03T17:05:00.000Z"),
+    lockedBy: "current-worker",
+    status: "running"
+  };
+  const updateManyCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async () => null,
+      findUnique: async () => ({ ...stored }),
+      update: async () => syntheticOperationRecord(),
+      updateMany: async (args: {
+        data: Partial<PublicationOperationRecord>;
+        where: { id?: string; leaseId?: string; status?: string };
+      }) => {
+        updateManyCalls.push(args);
+        if (args.where.id === stored.id && args.where.leaseId === stored.leaseId && args.where.status === "running") {
+          Object.assign(stored, args.data);
+
+          return { count: 1 };
+        }
+
+        return { count: 0 };
+      },
+      updateManyCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createCheckpointLeasePrismaFake() {
+  const stored = {
+    ...syntheticOperationRecord(),
+    leaseId: "current-lease",
+    lockedAt: new Date("2026-08-03T17:05:00.000Z"),
+    lockedBy: "current-worker",
+    status: "running"
+  };
+  const updateManyCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async () => null,
+      findUnique: async () => ({ ...stored }),
+      update: async () => syntheticOperationRecord(),
+      updateMany: async (args: {
+        data: Partial<PublicationOperationRecord>;
+        where: { id?: string; leaseId?: string; status?: string };
+      }) => {
+        updateManyCalls.push(args);
+        if (args.where.id === stored.id && args.where.leaseId === stored.leaseId && args.where.status === "running") {
+          Object.assign(stored, args.data);
+
+          return { count: 1 };
+        }
+
+        return { count: 0 };
+      },
+      updateManyCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createTerminalFinalizePrismaFake() {
+  const stored = {
+    ...syntheticOperationRecord(),
+    completedAt: new Date("2026-08-03T17:05:59.000Z"),
+    leaseId: null,
+    lockedAt: null,
+    lockedBy: null,
+    stage: "db_finalize",
+    status: "succeeded"
+  };
+  const updateCalls: unknown[] = [];
+  const updateManyCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async () => null,
+      findUnique: async () => ({ ...stored }),
+      update: async (args: { data: Partial<PublicationOperationRecord> }) => {
+        updateCalls.push(args);
+        Object.assign(stored, args.data);
+
+        return { ...stored };
+      },
+      updateMany: async (args: unknown) => {
+        updateManyCalls.push(args);
+
+        return { count: 0 };
+      },
+      updateCalls,
+      updateManyCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createStaleLeaseClaimPrismaFake(cutoff: Date) {
+  const staleRunning = {
+    ...syntheticOperationRecord(),
+    id: "00000000-0000-4000-8000-0000000000e1",
+    leaseId: "stale-lease",
+    lockedAt: cutoff,
+    lockedBy: "stale-worker",
+    status: "running"
+  };
+  const freshRunning = {
+    ...syntheticOperationRecord(),
+    id: "00000000-0000-4000-8000-0000000000f2",
+    leaseId: "fresh-lease",
+    lockedAt: new Date("2026-08-03T17:05:01.000Z"),
+    lockedBy: "fresh-worker",
+    status: "running"
+  };
+  const findFirstCalls: unknown[] = [];
+  const updateManyCalls: unknown[] = [];
+  let selected: typeof staleRunning | null = null;
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async () => syntheticOperationRecord(),
+      findFirst: async (args: {
+        where?: {
+          lockedAt?: { lte: Date };
+          nextRetryAt?: { lte: Date };
+          status?: string;
+        };
+      }) => {
+        findFirstCalls.push(args);
+
+        if (
+          args.where?.status === "running" &&
+          args.where.lockedAt?.lte.getTime() === cutoff.getTime() &&
+          freshRunning.lockedAt.getTime() > cutoff.getTime()
+        ) {
+          selected = staleRunning;
+
+          return { ...staleRunning };
+        }
+
+        return null;
+      },
+      findUnique: async () => (selected === null ? null : { ...selected }),
+      update: async () => syntheticOperationRecord(),
+      updateMany: async (args: {
+        data: Partial<PublicationOperationRecord>;
+        where: { id?: string; lockedAt?: { lte: Date }; status?: string };
+      }) => {
+        updateManyCalls.push(args);
+
+        if (
+          selected !== null &&
+          args.where.id === selected.id &&
+          args.where.status === "running" &&
+          args.where.lockedAt?.lte.getTime() === cutoff.getTime()
+        ) {
+          Object.assign(selected, args.data);
+
+          return { count: 1 };
+        }
+
+        return { count: 0 };
+      },
+      findFirstCalls,
+      updateManyCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createIdempotencyReplayPrismaFake() {
+  const existing = syntheticOperationRecord();
+  const createCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async (args: unknown) => {
+        createCalls.push(args);
+
+        return syntheticOperationRecord();
+      },
+      findFirst: async () => null,
+      findUnique: async (args: { where?: { idempotencyKey?: string } }) =>
+        args.where?.idempotencyKey === existing.idempotencyKey ? { ...existing } : null,
+      update: async () => syntheticOperationRecord(),
+      updateMany: async () => ({ count: 0 }),
+      createCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createActiveGroupPrismaFake() {
+  const active = {
+    ...syntheticOperationRecord(),
+    id: "00000000-0000-4000-8000-0000000000a1",
+    status: "running"
+  };
+  const createCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async (args: unknown) => {
+        createCalls.push(args);
+
+        return syntheticOperationRecord();
+      },
+      findFirst: async () => ({ ...active }),
+      findUnique: async () => null,
+      update: async () => syntheticOperationRecord(),
+      updateMany: async () => ({ count: 0 }),
+      createCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function createTerminalGroupPrismaFake() {
+  const createCalls: unknown[] = [];
+  const findFirstCalls: unknown[] = [];
+
+  return {
+    publicCatalogActivationEvent: {
+      create: async () => ({})
+    },
+    publicCatalogPublicationOperation: {
+      create: async (args: unknown) => {
+        createCalls.push(args);
+
+        return {
+          ...syntheticOperationRecord(),
+          id: "00000000-0000-4000-8000-0000000000c1"
+        };
+      },
+      findFirst: async (args: unknown) => {
+        findFirstCalls.push(args);
+
+        return null;
+      },
+      findUnique: async () => null,
+      update: async () => syntheticOperationRecord(),
+      updateMany: async () => ({ count: 0 }),
+      createCalls,
+      findFirstCalls
+    },
+    site: {
+      findMany: async () => []
+    }
+  };
+}
+
+function syntheticCreateInput(overrides: Partial<CreatePublicationOperationInput> = {}): CreatePublicationOperationInput {
+  return {
+    action: "publish",
+    actorUserId: null,
+    idempotencyKey: "synthetic-key",
+    operationGroupKey: "public-catalog",
+    operationScope: "site:00000000-0000-4000-8000-000000000101",
+    projectionHash: null,
+    requestFingerprint: "a".repeat(64),
+    requestId: "synthetic-request",
+    siteId: "00000000-0000-4000-8000-000000000101",
+    targetRevision: 1,
+    trigger: "site_publish",
+    ...overrides
   };
 }
 
@@ -302,6 +1066,7 @@ function syntheticOperationRecord(): PublicationOperationRecord {
     leaseId: null,
     lockedAt: null,
     lockedBy: null,
+    nextRetryAt: null,
     operationGroupKey: "public-catalog",
     operationScope: "site:00000000-0000-4000-8000-000000000101",
     projectionHash: null,

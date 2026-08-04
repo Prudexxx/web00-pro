@@ -35,6 +35,10 @@ CREATE TABLE "site_image_assets" (
 ALTER TABLE "sites"
   ADD COLUMN "preview_asset_id" UUID;
 
+CREATE INDEX "sites_public_catalog_v2_projection_idx"
+  ON "sites" ("sort_order" ASC, "created_at" DESC, "slug" ASC, "id" ASC)
+  WHERE "status" = 'published' AND "active" = true AND "deleted_at" IS NULL;
+
 CREATE TABLE "site_preview_images" (
   "site_id" UUID NOT NULL,
   "asset_id" UUID NOT NULL,
@@ -78,6 +82,7 @@ CREATE TABLE "public_catalog_publication_operations" (
   "status" TEXT NOT NULL,
   "stage" TEXT NOT NULL,
   "retry_count" INTEGER NOT NULL DEFAULT 0,
+  "next_retry_at" TIMESTAMPTZ(6),
   "lease_id" TEXT,
   "locked_at" TIMESTAMPTZ(6),
   "locked_by" TEXT,
@@ -93,13 +98,34 @@ CREATE TABLE "public_catalog_publication_operations" (
   CONSTRAINT "public_catalog_publication_operations_status_chk" CHECK ("status" IN ('queued', 'running', 'retry_wait', 'succeeded', 'failed', 'cancelled')),
   CONSTRAINT "public_catalog_publication_operations_fingerprint_chk" CHECK ("request_fingerprint" ~ '^[a-f0-9]{64}$' AND ("projection_hash" IS NULL OR "projection_hash" ~ '^[a-f0-9]{64}$')),
   CONSTRAINT "public_catalog_publication_operations_retry_count_chk" CHECK ("retry_count" >= 0),
-  CONSTRAINT "public_catalog_publication_operations_target_revision_chk" CHECK ("target_revision" >= 1)
+  CONSTRAINT "public_catalog_publication_operations_target_revision_chk" CHECK ("target_revision" >= 1),
+  CONSTRAINT "public_catalog_publication_operations_state_chk" CHECK (
+    ("status" = 'queued' AND "lease_id" IS NULL AND "locked_at" IS NULL AND "locked_by" IS NULL AND "next_retry_at" IS NULL AND "completed_at" IS NULL)
+    OR ("status" = 'running' AND "lease_id" IS NOT NULL AND "locked_at" IS NOT NULL AND "locked_by" IS NOT NULL AND "next_retry_at" IS NULL AND "completed_at" IS NULL)
+    OR ("status" = 'retry_wait' AND "lease_id" IS NULL AND "locked_at" IS NULL AND "locked_by" IS NULL AND "next_retry_at" IS NOT NULL AND "completed_at" IS NULL)
+    OR ("status" IN ('succeeded', 'failed', 'cancelled') AND "lease_id" IS NULL AND "locked_at" IS NULL AND "locked_by" IS NULL AND "next_retry_at" IS NULL AND "completed_at" IS NOT NULL)
+  )
 );
 
 CREATE UNIQUE INDEX "public_catalog_publication_operations_active_group_key"
   ON "public_catalog_publication_operations" ("operation_group_key")
   -- nonterminal operation coalescing
   WHERE "status" IN ('queued', 'running', 'retry_wait');
+
+CREATE INDEX "public_catalog_publication_operations_queued_claim_idx"
+  ON "public_catalog_publication_operations" ("created_at", "id")
+  WHERE "status" = 'queued';
+
+CREATE INDEX "public_catalog_publication_operations_retry_due_idx"
+  ON "public_catalog_publication_operations" ("next_retry_at", "created_at", "id")
+  WHERE "status" = 'retry_wait';
+
+CREATE INDEX "public_catalog_publication_operations_stale_lease_idx"
+  ON "public_catalog_publication_operations" ("locked_at", "created_at", "id")
+  WHERE "status" = 'running';
+
+CREATE INDEX "public_catalog_publication_operations_target_revision_idx"
+  ON "public_catalog_publication_operations" ("target_revision", "created_at");
 
 CREATE TABLE "public_catalog_releases" (
   "revision" INTEGER NOT NULL,
@@ -123,6 +149,9 @@ CREATE TABLE "public_catalog_releases" (
   CONSTRAINT "public_catalog_releases_counts_chk" CHECK ("items_count" >= 0 AND "chunks_count" >= 0 AND "popular_count" >= 0)
 );
 
+CREATE INDEX "public_catalog_releases_status_revision_idx"
+  ON "public_catalog_releases" ("status", "revision");
+
 CREATE TABLE "public_catalog_activation_events" (
   "id" UUID NOT NULL DEFAULT gen_random_uuid(),
   "operation_id" UUID,
@@ -139,3 +168,6 @@ CREATE TABLE "public_catalog_activation_events" (
   CONSTRAINT "public_catalog_activation_events_previous_revision_fkey" FOREIGN KEY ("previous_revision") REFERENCES "public_catalog_releases"("revision") ON DELETE RESTRICT ON UPDATE CASCADE,
   CONSTRAINT "public_catalog_activation_events_type_chk" CHECK ("event_type" IN ('activate', 'rollback', 'reconcile'))
 );
+
+CREATE INDEX "public_catalog_activation_events_revision_type_idx"
+  ON "public_catalog_activation_events" ("revision", "event_type", "created_at");

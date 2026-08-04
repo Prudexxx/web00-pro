@@ -242,6 +242,7 @@ model PublicCatalogPublicationOperation {
   status             String                        @db.Text
   stage              String                        @db.Text
   retryCount         Int                           @default(0) @map("retry_count")
+  nextRetryAt        DateTime?                     @map("next_retry_at") @db.Timestamptz(6)
   leaseId            String?                       @map("lease_id") @db.Text
   lockedAt           DateTime?                     @map("locked_at") @db.Timestamptz(6)
   lockedBy           String?                       @map("locked_by") @db.Text
@@ -253,6 +254,7 @@ model PublicCatalogPublicationOperation {
   completedAt        DateTime?                     @map("completed_at") @db.Timestamptz(6)
   activationEvent    PublicCatalogActivationEvent?
 
+  @@index([targetRevision, createdAt], map: "public_catalog_publication_operations_target_revision_idx")
   @@map("public_catalog_publication_operations")
 }
 
@@ -276,6 +278,7 @@ model PublicCatalogRelease {
   activationEvents         PublicCatalogActivationEvent[] @relation("ActivationEventRevision")
   previousActivationEvents PublicCatalogActivationEvent[] @relation("ActivationEventPreviousRevision")
 
+  @@index([status, revision], map: "public_catalog_releases_status_revision_idx")
   @@map("public_catalog_releases")
 }
 
@@ -292,5 +295,6 @@ model PublicCatalogActivationEvent {
   release             PublicCatalogRelease               @relation("ActivationEventRevision", fields: [revision], references: [revision], onDelete: Restrict, onUpdate: Cascade)
   previousRelease     PublicCatalogRelease?              @relation("ActivationEventPreviousRevision", fields: [previousRevision], references: [revision], onDelete: Restrict, onUpdate: Cascade)
 
+  @@index([revision, eventType, createdAt], map: "public_catalog_activation_events_revision_type_idx")
   @@map("public_catalog_activation_events")
 }
