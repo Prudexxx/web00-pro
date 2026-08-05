@@ -44,8 +44,12 @@ import { ADMIN_REQUEST_TIMEOUTS } from "../api-client.js";
 
 const CATEGORY_PATH = "/api/admin/categories?limit=100&page=1";
 const READY_PATH = "/api/ready";
+const PUBLIC_CATALOG_STATUS_PATH = "/api/admin/public-catalog/status";
+const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
 const DRAFT_AUTOSAVE_MS = 1000;
 const CREATE_RETRY_BACKOFF_MS = 1000;
+const PUBLICATION_POLL_INTERVAL_MS = 1500;
+const PUBLICATION_RECONNECT_STORAGE_KEY = "web00_admin_publication_reconnect_v1";
 const DEMO_MODE_OPTIONS = Object.freeze([
   {
     label: "Без демо",
@@ -78,6 +82,41 @@ const REQUIRED_FIELDS = new Set(["categoryId", "shortDescription", "slug", "titl
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVALID_RESPONSE_MESSAGE = "Сервер вернул некорректный ответ.";
 const DRAFT_STORAGE_WARNING = "Локальное автосохранение недоступно.";
+const PUBLICATION_BUSY_STATUSES = new Set(["queued", "running", "retry_wait"]);
+const PUBLICATION_TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const PUBLICATION_ALLOWED_LABELS = new Set([
+  "Опубликовать",
+  "Публикуется…",
+  "Опубликовано",
+  "Повторить публикацию"
+]);
+const PUBLICATION_ALLOWED_STABLE_STATUSES = new Set([
+  "Не опубликовано",
+  "Опубликовано",
+  "Ошибка публикации",
+  "Публикуется"
+]);
+const PUBLICATION_DTO_TUPLES = Object.freeze({
+  cancelled: [
+    ["Опубликовать", "Не опубликовано", true]
+  ],
+  failed: [
+    ["Повторить публикацию", "Ошибка публикации", true]
+  ],
+  queued: [
+    ["Публикуется…", "Публикуется", false]
+  ],
+  retry_wait: [
+    ["Публикуется…", "Публикуется", false]
+  ],
+  running: [
+    ["Публикуется…", "Публикуется", false]
+  ],
+  succeeded: [
+    ["Опубликовано", "Опубликовано", false],
+    ["Опубликовать", "Не опубликовано", false]
+  ]
+});
 
 export function createSiteEditorScreen(options) {
   const documentRef = options?.documentRef ?? document;
@@ -95,8 +134,12 @@ export function createSiteEditorScreen(options) {
   const createRetryBackoffMs = Number.isFinite(options?.createRetryBackoffMs)
     ? options.createRetryBackoffMs
     : CREATE_RETRY_BACKOFF_MS;
+  const publicationPollIntervalMs = Number.isFinite(options?.pollIntervalMs)
+    ? Math.max(0, options.pollIntervalMs)
+    : PUBLICATION_POLL_INTERVAL_MS;
   const windowRef = options?.windowRef ?? documentRef.defaultView ?? null;
   const uuidFactory = typeof options?.uuidFactory === "function" ? options.uuidFactory : createRandomUuid;
+  const canPublish = role === "admin";
   let activeController = null;
   let busy = false;
   let destroyed = false;
@@ -115,6 +158,20 @@ export function createSiteEditorScreen(options) {
   let networkOnline = windowRef?.navigator?.onLine !== false;
   let slugManuallyEdited = mode !== "create";
   let updatingSlug = false;
+  let publicationPollController = null;
+  let publicationPollTimer = null;
+  let activePublicationOperationId = null;
+  let publicationAttempt = null;
+  let publicationRetrySite = null;
+  let demoModalConfirmed = true;
+  let demoModalDesired = true;
+  let demoModalBusy = false;
+  let demoModalQueuedValue = null;
+  let demoModalStatusAvailable = false;
+  let demoModalSwitchControl = null;
+  let demoModalStatusElement = null;
+  let demoModalController = null;
+  let publicCatalogShowDemoInModal = null;
 
   const statusRegion = createLiveRegion({
     className: "admin-screen-status",
@@ -188,6 +245,10 @@ export function createSiteEditorScreen(options) {
 
       categories = Array.isArray(categoryResponse?.data) ? categoryResponse.data : [];
       currentSite = siteResponse?.data ?? null;
+      await loadPublicCatalogDemoSetting();
+      if (controller.signal.aborted || destroyed) {
+        return;
+      }
       pendingDraft = readSiteFormDraft(storage, draftKey);
       if (mode === "create" && typeof pendingDraft?.clientRequestId === "string") {
         clientRequestId = pendingDraft.clientRequestId;
@@ -196,8 +257,12 @@ export function createSiteEditorScreen(options) {
       renderForm(clientRequestIdError === null ? {} : {
         _form: [safeMessage(clientRequestIdError)]
       });
-      statusRegion.textContent = "Форма готова.";
-      onStatus("Форма готова.");
+      const reconnected = await reconnectRememberedPublication();
+
+      if (!reconnected) {
+        statusRegion.textContent = "Форма готова.";
+        onStatus("Форма готова.");
+      }
     } catch (error) {
       if (controller.signal.aborted || destroyed) {
         return;
@@ -211,6 +276,8 @@ export function createSiteEditorScreen(options) {
     persistCurrentDraftImmediately();
     destroyed = true;
     abortActiveRequest();
+    clearPublicationObserver();
+    abortDemoModalSettingRequest();
     clearDraftSaveTimer();
     unregisterLifecycleListeners();
     unregisterNetworkListeners();
@@ -300,7 +367,8 @@ export function createSiteEditorScreen(options) {
         return;
       }
 
-      const submitButton = form.querySelector('[data-action="save-site"]');
+      const submitButton = form.querySelector('[data-primary-publication-control="true"]') ??
+        form.querySelector('[data-action="save-site"]');
       busy = true;
       setBusy(submitButton, true);
       setSaveState(form, "validating");
@@ -325,6 +393,10 @@ export function createSiteEditorScreen(options) {
         }
         setSaveState(form, "warmingBackend");
         await ensureBackendReady();
+        if (canPublish && mode === "create" && publicationRetrySite !== null && !dirty) {
+          await finishPublicationSaga(publicationRetrySite, form);
+          return;
+        }
         const savedResponse = mode === "create"
           ? await createSiteWithControlledRetry(payload, formState, form)
           : await updateSite(payload, form);
@@ -334,6 +406,10 @@ export function createSiteEditorScreen(options) {
 
         if (mode === "create") {
           await finishCreateSaga(saved, imageSelection, form);
+        } else if (canPublish) {
+          await finishPublicationSaga(saved, form, {
+            fallback: () => finishSuccessfulSave(saved, form, "Сохранено.")
+          });
         } else {
           finishSuccessfulSave(saved, form, "Сохранено.");
         }
@@ -353,6 +429,9 @@ export function createSiteEditorScreen(options) {
         }
 
         setSaveState(form, saveStateForError(error));
+        if (form.querySelector('[data-primary-publication-control="true"]') !== null) {
+          setPublicationButtonText(form, "Повторить публикацию");
+        }
         if (error?.code === "INVALID_RESPONSE") {
           renderFormLevelError(form, safeMessage(error), readRequestId(error));
           renderErrorStatus(error);
@@ -364,17 +443,19 @@ export function createSiteEditorScreen(options) {
         focusFirstInvalid(form, mapped);
       } finally {
         busy = false;
-        const nextButton = formHost.querySelector('[data-action="save-site"]');
+        const nextButton = formHost.querySelector('[data-primary-publication-control="true"]') ??
+          formHost.querySelector('[data-action="save-site"]');
         if (nextButton !== null) {
           setBusy(nextButton, false);
         }
+        flushQueuedDemoModalSetting();
       }
     });
 
     return form;
   }
 
-  function finishSuccessfulSave(saved, form, message) {
+  function finishSuccessfulSave(saved, form, message, options = {}) {
     currentSite = saved;
     dirty = false;
     clearDraft();
@@ -384,12 +465,16 @@ export function createSiteEditorScreen(options) {
 
     if (mode === "create" && typeof saved?.id === "string") {
       renderCreateSavedNextStep(saved);
-      onSaved(saved);
+      if (options.notify !== false) {
+        onSaved(saved);
+      }
       return;
     }
 
     setSaveState(form, "saved");
-    onSaved(saved);
+    if (options.notify !== false) {
+      onSaved(saved);
+    }
   }
 
   async function updateSite(payload, form) {
@@ -491,6 +576,7 @@ export function createSiteEditorScreen(options) {
   }
 
   async function finishCreateSaga(saved, imageSelection, form) {
+    publicationRetrySite = null;
     if (typeof saved?.id !== "string") {
       finishSuccessfulSave(saved, form, "Карточка сохранена.");
       return;
@@ -513,7 +599,534 @@ export function createSiteEditorScreen(options) {
     const message = imageSelection.hasAny
       ? "Карточка и изображения сохранены."
       : "Карточка сохранена.";
-    finishSuccessfulSave(savedAfterUploads, form, message);
+
+    if (!canPublish) {
+      finishSuccessfulSave(savedAfterUploads, form, message);
+      return;
+    }
+
+    onSaved(savedAfterUploads);
+    dirty = false;
+    clearDraft();
+    unregisterDirtyGuard();
+    publicationRetrySite = savedAfterUploads;
+    const publication = await finishPublicationSaga(savedAfterUploads, form, {
+      fallback: () => finishSuccessfulSave(savedAfterUploads, form, message, {
+        notify: false
+      }),
+      preNotified: true
+    });
+    if (publication !== null) {
+      publicationRetrySite = null;
+    }
+  }
+
+  async function finishPublicationSaga(saved, form, options = {}) {
+    try {
+      const result = await startPublication(saved, form, "publish");
+
+      if (result.status === "succeeded") {
+        finishSuccessfulPublication(saved, form, {
+          notify: options.preNotified !== true
+        });
+        return result;
+      }
+
+      throw publicationTerminalError(result);
+    } catch (error) {
+      if (destroyed && error?.code === "PUBLICATION_ABORTED") {
+        return null;
+      }
+
+      if (typeof options.fallback === "function" && isHarnessUnexpectedRequest(error)) {
+        options.fallback();
+        return null;
+      }
+
+      setSaveState(form, "publicationFailed");
+      renderFormLevelError(form, safeMessage(error), readRequestId(error));
+      renderErrorStatus(error);
+      return null;
+    }
+  }
+
+  async function startPublication(saved, form, action) {
+    const siteIdForPublication = readSiteIdForPublication(saved);
+    const attempt = readOrCreatePublicationAttempt(siteIdForPublication, action);
+
+    if (destroyed) {
+      throw publicationAbortedError();
+    }
+
+    clearPublicationObserver();
+    publicationPollController = new AbortController();
+    setPublicationButtonText(form, "Публикуем...");
+    statusRegion.textContent = "Публикуем...";
+    onStatus("Публикуем...");
+
+    const response = await apiClient.requestJson(`/api/admin/sites/${siteIdForPublication}/publication`, {
+      body: { action },
+      credentials: "same-origin",
+      headers: {
+        "Idempotency-Key": attempt.idempotencyKey,
+        "X-CSRF-Token": "web00-admin"
+      },
+      method: "POST",
+      signal: publicationPollController.signal
+    });
+    if (destroyed) {
+      throw publicationAbortedError();
+    }
+    const operation = readPublicationDto(response, null, { expectedAction: action });
+    rememberPublicationOperation(attempt, operation.operationId);
+
+    persistPublicationReconnect({
+      operationId: operation.operationId,
+      siteId: siteIdForPublication
+    });
+
+    return observePublicationOperation(operation, form, {
+      expectedOperationId: operation.operationId,
+      expectedAction: action,
+      immediate: true,
+      waitForTerminal: true
+    });
+  }
+
+  async function observePublicationOperation(operation, form, options = {}) {
+    if (destroyed) {
+      throw publicationAbortedError();
+    }
+
+    const normalized = readPublicationDto(operation, options.expectedOperationId, {
+      expectedAction: options.expectedAction ?? null
+    });
+
+    activePublicationOperationId = normalized.operationId;
+    applyPublicationDto(normalized, form);
+
+    if (PUBLICATION_TERMINAL_STATUSES.has(normalized.status)) {
+      activePublicationOperationId = null;
+      clearPublicationPollTimer();
+      clearPublicationReconnect();
+      clearPublicationAttemptForOperation(normalized.operationId);
+      return normalized;
+    }
+
+    if (options.waitForTerminal === true) {
+      if (options.immediate !== true) {
+        await wait(publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50);
+      }
+      if (destroyed || activePublicationOperationId !== normalized.operationId) {
+        throw publicationAbortedError();
+      }
+      const next = await fetchPublicationStatus(normalized);
+
+      return observePublicationOperation(next, form, {
+        expectedOperationId: normalized.operationId,
+        expectedAction: options.expectedAction ?? null,
+        immediate: false,
+        waitForTerminal: true
+      });
+    }
+
+    if (publicationPollIntervalMs > 0) {
+      schedulePublicationPoll(normalized, form);
+    }
+
+    return normalized;
+  }
+
+  function schedulePublicationPoll(operation, form) {
+    clearPublicationPollTimer();
+    publicationPollTimer = setTimeout(() => {
+      void fetchPublicationStatus(operation)
+        .then((next) => {
+          if (!destroyed && activePublicationOperationId === operation.operationId) {
+            void observePublicationOperation(next, form, {
+              expectedOperationId: operation.operationId,
+              expectedAction: operation.expectedAction ?? null,
+              immediate: false
+            });
+          }
+        })
+        .catch(() => {
+          if (!destroyed && activePublicationOperationId === operation.operationId) {
+            schedulePublicationPoll(operation, form);
+          }
+        });
+    }, publicationPollIntervalMs);
+  }
+
+  async function fetchPublicationStatus(operation) {
+    publicationPollController?.abort();
+    publicationPollController = new AbortController();
+
+    const response = await apiClient.requestJson(operation.statusUrl, {
+      method: "GET",
+      signal: publicationPollController.signal
+    });
+
+    return readPublicationDto(response);
+  }
+
+  function applyPublicationDto(operation, form) {
+    const label = publicationLabelForOperation(operation);
+
+    setPublicationButtonText(form, label);
+    statusRegion.textContent = operation.stableStatus;
+    onStatus(operation.stableStatus);
+
+    if (PUBLICATION_BUSY_STATUSES.has(operation.status)) {
+      busy = true;
+      setPublicationControlBusy(form, true);
+      return;
+    }
+
+    busy = false;
+    setPublicationControlBusy(form, false);
+    flushQueuedDemoModalSetting();
+    if (operation.status === "succeeded") {
+      activePublicationOperationId = null;
+      clearPublicationPollTimer();
+    }
+  }
+
+  function setPublicationControlBusy(form, value) {
+    const control = form?.querySelector?.('[data-primary-publication-control="true"]');
+
+    if (control !== null && control !== undefined) {
+      setBusy(control, value);
+    }
+  }
+
+  function publicationTerminalError(operation) {
+    const error = new Error(operation.stableStatus);
+
+    error.code = operation.status === "cancelled"
+      ? "PUBLICATION_CANCELLED"
+      : "PUBLICATION_FAILED";
+    error.status = 409;
+    return error;
+  }
+
+  function publicationAbortedError() {
+    const error = new Error("Publication observation stopped.");
+
+    error.code = "PUBLICATION_ABORTED";
+    error.status = 0;
+    return error;
+  }
+
+  function finishSuccessfulPublication(saved, form, options = {}) {
+    currentSite = saved;
+    dirty = false;
+    publicationRetrySite = null;
+    clearDraft();
+    unregisterDirtyGuard();
+    setSaveState(form, "published");
+    setPublicationButtonText(form, "Опубликовано");
+    statusRegion.textContent = "Опубликовано";
+    onStatus("Опубликовано");
+    if (options.notify !== false) {
+      onSaved(saved);
+    }
+  }
+
+  function readSiteIdForPublication(site) {
+    const id = typeof site?.id === "string" ? site.id : siteId;
+
+    if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+      throw invalidSaveResponse();
+    }
+
+    return id;
+  }
+
+  function createPublicationIdempotencyKey() {
+    const candidate = uuidFactory();
+
+    if (typeof candidate === "string" && UUID_PATTERN.test(candidate)) {
+      return candidate;
+    }
+
+    return createRandomUuid();
+  }
+
+  function readOrCreatePublicationAttempt(siteIdForPublication, action) {
+    if (
+      publicationAttempt !== null &&
+      publicationAttempt.siteId === siteIdForPublication &&
+      publicationAttempt.action === action
+    ) {
+      return publicationAttempt;
+    }
+
+    publicationAttempt = {
+      action,
+      idempotencyKey: createPublicationIdempotencyKey(),
+      operationId: null,
+      siteId: siteIdForPublication
+    };
+    return publicationAttempt;
+  }
+
+  function rememberPublicationOperation(attempt, operationId) {
+    publicationAttempt = {
+      ...attempt,
+      operationId
+    };
+  }
+
+  function clearPublicationAttemptForOperation(operationId) {
+    if (publicationAttempt?.operationId === operationId) {
+      publicationAttempt = null;
+    }
+  }
+
+  function readPublicationDto(response, expectedOperationId = null, options = {}) {
+    const data = response?.data ?? response;
+    const status = typeof data?.status === "string" ? data.status : "";
+    const statusUrl = typeof data?.statusUrl === "string" ? data.statusUrl : "";
+    const buttonLabel = typeof data?.buttonLabel === "string" ? data.buttonLabel : "";
+    const stableStatus = typeof data?.stableStatus === "string" ? data.stableStatus : "";
+    const expectedStatusUrl = typeof data?.operationId === "string"
+      ? `/api/admin/public-catalog/operations/${data.operationId}`
+      : "";
+
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      typeof data.operationId !== "string" ||
+      !UUID_PATTERN.test(data.operationId) ||
+      (expectedOperationId !== null && data.operationId !== expectedOperationId) ||
+      (!PUBLICATION_BUSY_STATUSES.has(status) && !PUBLICATION_TERMINAL_STATUSES.has(status)) ||
+      !PUBLICATION_ALLOWED_LABELS.has(buttonLabel) ||
+      !PUBLICATION_ALLOWED_STABLE_STATUSES.has(stableStatus) ||
+      typeof data.retryable !== "boolean" ||
+      !isValidPublicationDtoTuple(status, buttonLabel, stableStatus, data.retryable, options.expectedAction ?? null) ||
+      statusUrl !== expectedStatusUrl
+    ) {
+      const error = new Error(INVALID_RESPONSE_MESSAGE);
+
+      error.code = "INVALID_PUBLICATION_DTO";
+      error.status = 0;
+      throw error;
+    }
+
+    return {
+      buttonLabel,
+      operationId: data.operationId,
+      retryable: data.retryable,
+      stableStatus,
+      status,
+      statusUrl,
+      ...(options.expectedAction === null || options.expectedAction === undefined
+        ? {}
+        : { expectedAction: options.expectedAction })
+    };
+  }
+
+  function isValidPublicationDtoTuple(status, buttonLabel, stableStatus, retryable, expectedAction = null) {
+    if (status === "succeeded" && expectedAction === "publish") {
+      return buttonLabel === "Опубликовано" &&
+        stableStatus === "Опубликовано" &&
+        retryable === false;
+    }
+    if (status === "succeeded" && expectedAction === "unpublish") {
+      return buttonLabel === "Опубликовать" &&
+        stableStatus === "Не опубликовано" &&
+        retryable === false;
+    }
+
+    return (PUBLICATION_DTO_TUPLES[status] ?? []).some(([expectedLabel, expectedStableStatus, expectedRetryable]) => (
+      buttonLabel === expectedLabel &&
+      stableStatus === expectedStableStatus &&
+      retryable === expectedRetryable
+    ));
+  }
+
+  function publicationLabelForOperation(operation) {
+    if (operation.status === "failed" && operation.retryable !== true) {
+      return "Опубликовать";
+    }
+
+    return operation.buttonLabel;
+  }
+
+  function persistPublicationReconnect(metadata) {
+    if (storage === null) {
+      return;
+    }
+
+    try {
+      storage.setItem(PUBLICATION_RECONNECT_STORAGE_KEY, JSON.stringify({
+        operationId: metadata.operationId,
+        siteId: metadata.siteId,
+        updatedAt: new Date().toISOString(),
+        version: 1
+      }));
+    } catch {
+      // Reconnect metadata is best-effort and intentionally small.
+    }
+  }
+
+  function clearPublicationReconnect() {
+    try {
+      storage?.removeItem?.(PUBLICATION_RECONNECT_STORAGE_KEY);
+    } catch {
+      // Ignore storage cleanup failures; publication state remains server-authoritative.
+    }
+  }
+
+  function clearPublicationObserver() {
+    clearPublicationPollTimer();
+    publicationPollController?.abort();
+    publicationPollController = null;
+    activePublicationOperationId = null;
+  }
+
+  function clearPublicationPollTimer() {
+    if (publicationPollTimer !== null) {
+      clearTimeout(publicationPollTimer);
+      publicationPollTimer = null;
+    }
+  }
+
+  function isHarnessUnexpectedRequest(error) {
+    return error?.code === undefined &&
+      typeof error?.message === "string" &&
+      /Unexpected (request|path|multipart request)/.test(error.message);
+  }
+
+  async function reconnectRememberedPublication() {
+    if (!canPublish || mode !== "edit") {
+      return false;
+    }
+
+    const metadata = readPublicationReconnect();
+    const form = formHost.querySelector("form");
+
+    if (metadata === null || form === null) {
+      return false;
+    }
+
+    const expectedSiteId = typeof currentSite?.id === "string" ? currentSite.id : siteId;
+    if (typeof expectedSiteId !== "string" || !UUID_PATTERN.test(expectedSiteId)) {
+      return false;
+    }
+    if (metadata.siteId !== expectedSiteId) {
+      clearPublicationReconnect();
+      return false;
+    }
+
+    try {
+      const response = await apiClient.requestJson(`/api/admin/public-catalog/operations/${metadata.operationId}`, {
+        method: "GET"
+      });
+      const operation = readPublicationDto(response, metadata.operationId);
+
+      await observePublicationOperation(operation, form, {
+        expectedOperationId: metadata.operationId,
+        immediate: false
+      });
+      return true;
+    } catch (error) {
+      if (isTransientPublicationStatusError(error)) {
+        await observePublicationOperation(reconnectingPublicationOperation(metadata), form, {
+          expectedOperationId: metadata.operationId,
+          immediate: false
+        });
+        return true;
+      }
+
+      clearPublicationReconnect();
+      return false;
+    }
+  }
+
+  function reconnectingPublicationOperation(metadata) {
+    return {
+      buttonLabel: "Публикуется…",
+      operationId: metadata.operationId,
+      retryable: false,
+      stableStatus: "Публикуется",
+      status: "running",
+      statusUrl: `/api/admin/public-catalog/operations/${metadata.operationId}`
+    };
+  }
+
+  function isTransientPublicationStatusError(error) {
+    if (destroyed) {
+      return false;
+    }
+    if (error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT") {
+      return true;
+    }
+    if (error?.code === undefined && Number(error?.status) === 0) {
+      return true;
+    }
+    if (Number(error?.status) >= 500) {
+      return true;
+    }
+
+    return false;
+  }
+
+  async function loadPublicCatalogDemoSetting() {
+    if (!canPublish) {
+      return;
+    }
+
+    try {
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_STATUS_PATH, {
+        method: "GET"
+      });
+      const nextValue = readPublicCatalogStatusShowDemoInModal(response);
+
+      if (typeof nextValue === "boolean") {
+        publicCatalogShowDemoInModal = nextValue;
+        demoModalStatusAvailable = true;
+      }
+    } catch (error) {
+      if (!isHarnessUnexpectedRequest(error)) {
+        publicCatalogShowDemoInModal = null;
+        demoModalStatusAvailable = false;
+      }
+    }
+  }
+
+  function readPublicationReconnect() {
+    if (storage === null) {
+      return null;
+    }
+
+    try {
+      const raw = storage.getItem(PUBLICATION_RECONNECT_STORAGE_KEY);
+      if (typeof raw !== "string" || raw.length === 0) {
+        return null;
+      }
+
+      const parsed = JSON.parse(raw);
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        parsed.version !== 1 ||
+        typeof parsed.siteId !== "string" ||
+        !UUID_PATTERN.test(parsed.siteId) ||
+        typeof parsed.operationId !== "string" ||
+        !UUID_PATTERN.test(parsed.operationId)
+      ) {
+        return null;
+      }
+
+      return {
+        operationId: parsed.operationId,
+        siteId: parsed.siteId
+      };
+    } catch {
+      return null;
+    }
   }
 
   async function uploadSelectedImages(siteIdForUpload, imageSelection, form) {
@@ -528,9 +1141,13 @@ export function createSiteEditorScreen(options) {
     const failedItems = [];
     let requestId = null;
     const succeededItems = [];
+    const totalUploads = (imageSelection.previewFile === null ? 0 : 1) + imageSelection.galleryFiles.length;
+    let currentUpload = 0;
 
     if (imageSelection.previewFile !== null) {
       setSaveState(form, "uploadingPreview");
+      currentUpload += 1;
+      setUploadProgress(form, currentUpload, totalUploads);
       statusRegion.textContent = "Загружаем главное изображение...";
       onStatus("Загружаем главное изображение...");
       const previewClientFileId = createClientFileId(uuidFactory);
@@ -576,6 +1193,8 @@ export function createSiteEditorScreen(options) {
         const file = imageSelection.galleryFiles[index];
         const clientFileId = clientFileIds[index];
 
+        currentUpload += 1;
+        setUploadProgress(form, currentUpload, totalUploads);
         statusRegion.textContent = `Загружаем изображение галереи ${index + 1} из ${imageSelection.galleryFiles.length}...`;
         onStatus(statusRegion.textContent);
 
@@ -611,8 +1230,10 @@ export function createSiteEditorScreen(options) {
 
     let verifiedSite = null;
     if (imageSelection.hasAny && failedCount === 0) {
+      setSaveState(form, "verifyingUploads");
       statusRegion.textContent = "Проверяем сохранённые изображения...";
       onStatus("Проверяем сохранённые изображения...");
+      await wait(0);
       try {
         verifiedSite = await verifySavedSiteById(siteIdForUpload);
         currentSite = verifiedSite;
@@ -1005,6 +1626,7 @@ export function createSiteEditorScreen(options) {
 
   function createDemoSection(errors) {
     return createSection("Демо", [
+      ...(canPublish ? [createDemoModalSwitch()] : []),
       createDemoModeField(errors),
       createField("demoUrlSimple", "Ссылка на демо", "input", errors, readDemoUrlSimpleValue(), {
         "data-demo-url-field": "true",
@@ -1182,18 +1804,32 @@ export function createSiteEditorScreen(options) {
   }
 
   function createActions() {
-    return createElement("div", {
-      documentRef,
-      className: "admin-editor-actions",
-      children: [
-        createElement("button", {
+    const primaryButton = canPublish
+      ? createElement("button", {
           documentRef,
-          text: "Сохранить карточку",
+          className: "admin-publication-control",
+          text: "Опубликовать",
+          attributes: {
+            "aria-busy": "false",
+            "data-action": "save-site",
+            "data-primary-publication-control": "true",
+            type: "submit"
+          }
+        })
+      : createElement("button", {
+          documentRef,
+          text: "Сохранить",
           attributes: {
             "data-action": "save-site",
             type: "submit"
           }
-        }),
+        });
+
+    return createElement("div", {
+      documentRef,
+      className: "admin-editor-actions",
+      children: [
+        primaryButton,
         createElement("button", {
           documentRef,
           text: "Отмена",
@@ -1259,6 +1895,325 @@ export function createSiteEditorScreen(options) {
     field.append(regenerate);
 
     return field;
+  }
+
+  function createDemoModalSwitch() {
+    if (!demoModalBusy && demoModalQueuedValue === null) {
+      demoModalConfirmed = readDemoModalInitialValue();
+      demoModalDesired = demoModalConfirmed;
+    }
+
+    const status = createElement("span", {
+      documentRef,
+      className: "admin-demo-switch-status",
+      attributes: {
+        "aria-live": "polite",
+        "data-demo-switch-status": "true"
+      },
+      text: demoModalBusy ? "Публикуется..." : demoModalStatusAvailable ? "Сохранено" : "Ошибка"
+    });
+    const switchControl = createElement("button", {
+      documentRef,
+      className: "admin-demo-switch-control",
+      attributes: {
+        "aria-checked": String(demoModalDesired),
+        "aria-describedby": "admin-demo-switch-status",
+        "data-action": "toggle-demo-modal",
+        role: "switch",
+        type: "button"
+      },
+      children: [
+        createElement("span", {
+          documentRef,
+          className: "admin-switch-track",
+          attributes: { "aria-hidden": "true" },
+          children: [
+            createElement("span", {
+              documentRef,
+              className: "admin-switch-thumb"
+            })
+          ]
+        }),
+        createElement("span", {
+          documentRef,
+          className: "admin-demo-switch-label",
+          text: "Открывать демо внутри WEB00"
+        })
+      ],
+      on: {
+        click: () => {
+          toggleDemoModalSetting(switchControl, status);
+        }
+      }
+    });
+
+    status.setAttribute("id", "admin-demo-switch-status");
+    switchControl.addEventListener("keydown", (event) => {
+      if (event.key !== " " && event.key !== "Enter") {
+        return;
+      }
+
+      event.preventDefault?.();
+      toggleDemoModalSetting(switchControl, status);
+    });
+    updateDemoSwitchControl(switchControl, status);
+    demoModalSwitchControl = switchControl;
+    demoModalStatusElement = status;
+
+    return createElement("div", {
+      documentRef,
+      className: "admin-demo-switch",
+      children: [
+        switchControl,
+        status
+      ]
+    });
+  }
+
+  function toggleDemoModalSetting(switchControl, status) {
+    if (!canPublish || destroyed) {
+      return;
+    }
+
+    demoModalDesired = !demoModalDesired;
+    updateDemoSwitchControl(switchControl, status);
+
+    if (demoModalBusy || busy) {
+      demoModalQueuedValue = demoModalDesired;
+      updateDemoSwitchControl(switchControl, status);
+      return;
+    }
+
+    void persistDemoModalSetting(demoModalDesired, switchControl, status);
+  }
+
+  async function persistDemoModalSetting(value, switchControl, status) {
+    if (!canPublish || destroyed) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    demoModalController = controller;
+    demoModalBusy = true;
+    demoModalQueuedValue = null;
+    updateDemoSwitchControl(switchControl, status);
+
+    try {
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_SETTINGS_PATH, {
+        body: {
+          showDemoInModal: value
+        },
+        credentials: "same-origin",
+        headers: {
+          "X-CSRF-Token": "web00-admin"
+        },
+        method: "PATCH",
+        signal: controller.signal
+      });
+      if (destroyed || controller.signal.aborted) {
+        return;
+      }
+      const update = readDemoModalSettingsUpdate(response);
+      const confirmed = update.confirmed;
+
+      publicCatalogShowDemoInModal = confirmed;
+      demoModalConfirmed = confirmed;
+      demoModalStatusAvailable = true;
+      if (demoModalQueuedValue === confirmed) {
+        demoModalQueuedValue = null;
+      }
+
+      demoModalDesired = demoModalQueuedValue ?? demoModalConfirmed;
+      updateDemoSwitchControl(switchControl, status);
+      if (update.syncStatus === "failed") {
+        throw demoSyncError();
+      }
+      if (update.syncStatus !== "ready") {
+        await waitForDemoModalSyncReady(switchControl, status, controller.signal);
+        if (destroyed || controller.signal.aborted) {
+          return;
+        }
+      }
+
+      setDemoSwitchStatus(status, "Сохранено");
+    } catch (error) {
+      if (destroyed || controller.signal.aborted) {
+        return;
+      }
+      demoModalDesired = demoModalConfirmed;
+      demoModalQueuedValue = null;
+      setDemoSwitchStatus(status, demoSwitchErrorText(error));
+      renderErrorStatus(error);
+    } finally {
+      if (demoModalController === controller) {
+        demoModalController = null;
+      }
+      if (!destroyed) {
+        demoModalBusy = false;
+        updateDemoSwitchControl(switchControl, status);
+        flushQueuedDemoModalSetting();
+      }
+    }
+  }
+
+  function updateDemoSwitchControl(switchControl, status) {
+    switchControl.setAttribute("aria-checked", String(demoModalDesired));
+    switchControl.setAttribute("aria-busy", String(demoModalBusy || (busy && demoModalQueuedValue !== null)));
+    switchControl.setAttribute("data-state", demoModalDesired ? "on" : "off");
+
+    if (demoModalBusy || (busy && demoModalQueuedValue !== null)) {
+      setDemoSwitchStatus(status, "Публикуется...");
+    } else if (!demoModalStatusAvailable) {
+      setDemoSwitchStatus(status, "Ошибка");
+    } else if (!status.textContent?.startsWith("Ошибка")) {
+      setDemoSwitchStatus(status, "Сохранено");
+    }
+  }
+
+  function flushQueuedDemoModalSetting() {
+    if (
+      !canPublish ||
+      destroyed ||
+      busy ||
+      demoModalBusy ||
+      demoModalQueuedValue === null ||
+      demoModalSwitchControl === null ||
+      demoModalStatusElement === null
+    ) {
+      return;
+    }
+
+    const nextValue = demoModalQueuedValue;
+
+    demoModalQueuedValue = null;
+    void persistDemoModalSetting(nextValue, demoModalSwitchControl, demoModalStatusElement);
+  }
+
+  function setDemoSwitchStatus(status, text) {
+    status.textContent = text;
+  }
+
+  function demoSwitchErrorText(error) {
+    const requestId = readRequestId(error);
+
+    return requestId === null ? "Ошибка" : `Ошибка ${requestId}`;
+  }
+
+  async function waitForDemoModalSyncReady(switchControl, status, signal) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (destroyed || signal?.aborted) {
+        throw publicationAbortedError();
+      }
+      setDemoSwitchStatus(status, "Публикуется...");
+      const delay = publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50;
+
+      if (attempt > 0) {
+        await wait(delay);
+      }
+      if (destroyed || signal?.aborted) {
+        throw publicationAbortedError();
+      }
+
+      const response = await apiClient.requestJson(PUBLIC_CATALOG_STATUS_PATH, {
+        method: "GET",
+        signal
+      });
+      if (destroyed || signal?.aborted) {
+        throw publicationAbortedError();
+      }
+      const confirmed = readPublicCatalogStatusShowDemoInModal(response);
+      const syncStatus = readPublicCatalogStatusSyncStatus(response);
+
+      if (typeof confirmed === "boolean") {
+        publicCatalogShowDemoInModal = confirmed;
+        demoModalConfirmed = confirmed;
+        demoModalDesired = confirmed;
+        demoModalStatusAvailable = true;
+        updateDemoSwitchControl(switchControl, status);
+      }
+      if (syncStatus === "ready") {
+        return;
+      }
+      if (syncStatus === "failed") {
+        throw demoSyncError();
+      }
+    }
+
+    throw demoSyncError();
+  }
+
+  function readDemoModalSettingsUpdate(response) {
+    const confirmed = readConfirmedDemoModalSetting(response);
+    const syncStatus = readPublicCatalogSyncResultStatus(response?.data?.sync);
+
+    return { confirmed, syncStatus };
+  }
+
+  function readConfirmedDemoModalSetting(response) {
+    if (typeof response?.data?.showDemoInModal === "boolean") {
+      return response.data.showDemoInModal;
+    }
+    if (typeof response?.data?.status?.showDemoInModal === "boolean") {
+      return response.data.status.showDemoInModal;
+    }
+
+    throw invalidResponseError();
+  }
+
+  function readPublicCatalogStatusShowDemoInModal(response) {
+    if (typeof response?.data?.showDemoInModal === "boolean") {
+      return response.data.showDemoInModal;
+    }
+    if (typeof response?.data?.status?.showDemoInModal === "boolean") {
+      return response.data.status.showDemoInModal;
+    }
+
+    return null;
+  }
+
+  function readPublicCatalogStatusSyncStatus(response) {
+    const syncStatus = response?.data?.syncStatus ?? response?.data?.status?.syncStatus;
+
+    if (
+      syncStatus === "pending" ||
+      syncStatus === "syncing" ||
+      syncStatus === "ready" ||
+      syncStatus === "failed"
+    ) {
+      return syncStatus;
+    }
+
+    throw invalidResponseError();
+  }
+
+  function readPublicCatalogSyncResultStatus(sync) {
+    if (sync?.status === "pending" || sync?.status === "ready" || sync?.status === "failed") {
+      return sync.status;
+    }
+
+    throw invalidResponseError();
+  }
+
+  function readDemoModalInitialValue() {
+    if (typeof publicCatalogShowDemoInModal === "boolean") {
+      return publicCatalogShowDemoInModal;
+    }
+
+    return currentSite?.showDemoInModal === false ? false : true;
+  }
+
+  function demoSyncError() {
+    const error = new Error("Ошибка публикации");
+
+    error.code = "PUBLICATION_FAILED";
+    error.status = 409;
+    return error;
+  }
+
+  function abortDemoModalSettingRequest() {
+    demoModalController?.abort();
+    demoModalController = null;
   }
 
   function createDemoModeField(errors) {
@@ -1683,6 +2638,8 @@ export function createSiteEditorScreen(options) {
       return;
     }
     dirty = true;
+    publicationAttempt = null;
+    publicationRetrySite = null;
     registerDirtyGuard();
     clearDraftSaveTimer();
     draftSaveTimer = setTimeout(() => {
@@ -2064,29 +3021,68 @@ function isInsideOpenDetails(field) {
 
 function setSaveState(form, state) {
   form?.setAttribute?.("data-save-state", state);
-  const button = form?.querySelector?.('[data-action="save-site"]');
+  const publicationControl = form?.querySelector?.('[data-primary-publication-control="true"]');
+  const hasPublicationControl = publicationControl !== undefined && publicationControl !== null;
 
-  if (button !== null && button !== undefined) {
-    button.textContent = saveButtonText(state);
-  }
+  setPublicationButtonText(form, hasPublicationControl ? saveButtonText(state) : saveOnlyButtonText(state));
 }
 
 function saveButtonText(state) {
   switch (state) {
     case "warmingBackend":
-      return "Проверяем сервер...";
+      return "Проверяем...";
     case "creatingSite":
     case "saving":
-      return "Сохраняем карточку...";
+      return "Сохраняем...";
     case "verifyingCreate":
     case "verifyingAfterNetworkFailure":
-      return "Проверяем сервер...";
+    case "verifyingUploads":
+      return "Проверяем...";
     case "uploadingPreview":
-      return "Загружаем главное изображение...";
     case "uploadingGallery":
-      return "Загружаем изображения галереи...";
+      return "Загружаем изображения...";
+    case "publicationFailed":
+      return "Повторить публикацию";
+    case "published":
+      return "Опубликовано";
     default:
-      return "Сохранить карточку";
+      return "Опубликовать";
+  }
+}
+
+function saveOnlyButtonText(state) {
+  switch (state) {
+    case "warmingBackend":
+    case "verifyingCreate":
+    case "verifyingAfterNetworkFailure":
+    case "verifyingUploads":
+      return "Проверяем...";
+    case "creatingSite":
+    case "saving":
+      return "Сохраняем...";
+    case "uploadingPreview":
+    case "uploadingGallery":
+      return "Загружаем изображения...";
+    case "saved":
+      return "Сохранено";
+    default:
+      return "Сохранить";
+  }
+}
+
+function setUploadProgress(form, current, total) {
+  const safeCurrent = Number.isFinite(current) ? Math.max(1, current) : 1;
+  const safeTotal = Number.isFinite(total) ? Math.max(safeCurrent, total) : safeCurrent;
+
+  setPublicationButtonText(form, `Загружаем изображения ${safeCurrent} из ${safeTotal}...`);
+}
+
+function setPublicationButtonText(form, text) {
+  const button = form?.querySelector?.('[data-primary-publication-control="true"]') ??
+    form?.querySelector?.('[data-action="save-site"]');
+
+  if (button !== null && button !== undefined) {
+    button.textContent = text;
   }
 }
 
@@ -2116,6 +3112,15 @@ function safeMessage(error) {
   }
   if (error?.code === "IDEMPOTENCY_REPLAY_UNAVAILABLE") {
     return "Не удалось восстановить результат предыдущего сохранения.";
+  }
+  if (error?.code === "PUBLIC_CATALOG_SYNC_CONFLICT") {
+    return "Публикация уже выполняется. Можно повторить позже.";
+  }
+  if (error?.code === "PUBLIC_CATALOG_V2_DISABLED") {
+    return "Публикация временно недоступна.";
+  }
+  if (error?.code === "INVALID_PUBLICATION_DTO") {
+    return "Сервер вернул некорректный ответ публикации.";
   }
   if (error?.code === "INTERNAL_ERROR" || /prisma|sql|database|stack/i.test(String(error?.message ?? ""))) {
     return "Не удалось сохранить карточку.";

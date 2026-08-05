@@ -12,7 +12,6 @@ const CANONICAL_ASSETS_DRY_RUN_PATH = "/api/admin/maintenance/canonical-assets";
 const CANONICAL_ASSETS_APPLY_PATH =
   "/api/admin/maintenance/canonical-assets/reconcile";
 const PUBLIC_CATALOG_STATUS_PATH = "/api/admin/public-catalog/status";
-const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
 const PUBLIC_CATALOG_SYNC_PATH = "/api/admin/public-catalog/sync";
 const PUBLIC_CATALOG_DRY_RUN_PATH = "/api/admin/public-catalog/dry-run";
 const CANONICAL_ASSETS_CONFIRMATION = "WEB00-CANONICAL-ASSETS-15-7";
@@ -96,13 +95,6 @@ export function createMaintenanceScreen(options) {
       "data-region": "public-catalog-status"
     }
   });
-  const publicCatalogToggle = createElement("input", {
-    documentRef,
-    attributes: {
-      "data-field": "show-demo-in-modal",
-      type: "checkbox"
-    }
-  });
   const publicCatalogCheckButton = createElement("button", {
     documentRef,
     text: "Обновить статус каталога",
@@ -113,19 +105,6 @@ export function createMaintenanceScreen(options) {
     on: {
       click: () => {
         void loadPublicCatalogStatus();
-      }
-    }
-  });
-  const publicCatalogSaveButton = createElement("button", {
-    documentRef,
-    text: "Сохранить настройку демо",
-    attributes: {
-      "data-action": "save-public-catalog-settings",
-      type: "button"
-    },
-    on: {
-      click: () => {
-        void submitPublicCatalogSettings();
       }
     }
   });
@@ -172,22 +151,18 @@ export function createMaintenanceScreen(options) {
         documentRef,
         text: "Проверяет будущий snapshot. Ничего не публикует и не изменяет."
       }),
-      createElement("label", {
+      createElement("p", {
         documentRef,
-        children: [
-          publicCatalogToggle,
-          createElement("span", {
-            documentRef,
-            text: "Показать демо в модальном окне"
-          })
-        ]
+        attributes: {
+          "data-field": "show-demo-in-modal-readonly"
+        },
+        text: "Показ демо в модальном окне управляется autosave-switch в редакторе карточки."
       }),
       createElement("div", {
         documentRef,
         className: "admin-form-actions",
         children: [
           publicCatalogCheckButton,
-          publicCatalogSaveButton,
           publicCatalogDryRunButton,
           publicCatalogSyncButton
         ]
@@ -203,6 +178,9 @@ export function createMaintenanceScreen(options) {
   const element = createElement("section", {
     documentRef,
     className: "admin-maintenance-screen",
+    attributes: {
+      "data-expert-recovery-screen": "true"
+    },
     children: [
       createElement("div", {
         documentRef,
@@ -218,7 +196,7 @@ export function createMaintenanceScreen(options) {
               }),
               createElement("h2", {
                 documentRef,
-                text: "Восстановление канонических изображений"
+                text: "Восстановление и диагностика"
               })
             ]
           })
@@ -226,7 +204,7 @@ export function createMaintenanceScreen(options) {
       }),
       createElement("p", {
         documentRef,
-        text: "Действие доступно только администратору и не публикует карточки."
+        text: "Восстановление канонических изображений доступно только администратору и не публикует карточки."
       }),
       ...(role === "admin" ? [actionPanel] : []),
       ...(role === "admin" ? [publicCatalogPanel] : []),
@@ -289,35 +267,6 @@ export function createMaintenanceScreen(options) {
     } catch (error) {
       renderError(publicCatalogStatus, documentRef, error);
       statusRegion.textContent = "Не удалось загрузить публичный каталог.";
-    } finally {
-      publicCatalogBusy = false;
-      setPublicCatalogButtonsBusy(false);
-    }
-  }
-
-  async function submitPublicCatalogSettings() {
-    if (role !== "admin" || publicCatalogBusy) {
-      return;
-    }
-
-    publicCatalogBusy = true;
-    setPublicCatalogButtonsBusy(true);
-
-    try {
-      const response = await apiClient.requestJson(PUBLIC_CATALOG_SETTINGS_PATH, {
-        body: {
-          showDemoInModal: publicCatalogToggle.checked === true
-        },
-        method: "PATCH",
-        timeoutMs: ADMIN_REQUEST_TIMEOUTS.jsonMutation
-      });
-      const payload = parsePublicCatalogSettingsResult(response?.data);
-
-      renderPublicCatalogStatus(payload.status, payload.sync);
-      statusRegion.textContent = publicCatalogSyncMessage(payload.sync);
-    } catch (error) {
-      renderError(publicCatalogStatus, documentRef, error);
-      statusRegion.textContent = "Не удалось сохранить настройку публичного каталога.";
     } finally {
       publicCatalogBusy = false;
       setPublicCatalogButtonsBusy(false);
@@ -689,13 +638,11 @@ export function createMaintenanceScreen(options) {
 
   function setPublicCatalogButtonsBusy(busy) {
     setBusy(publicCatalogCheckButton, busy);
-    setBusy(publicCatalogSaveButton, busy);
     setBusy(publicCatalogDryRunButton, busy);
     setBusy(publicCatalogSyncButton, busy);
   }
 
   function renderPublicCatalogStatus(status, sync) {
-    publicCatalogToggle.checked = status.showDemoInModal === true;
     replaceContent(publicCatalogStatus, createElement("div", {
       documentRef,
       className: "admin-maintenance-summary",
@@ -711,6 +658,10 @@ export function createMaintenanceScreen(options) {
         createElement("p", {
           documentRef,
           text: `Snapshot: ${status.currentSnapshotPath ?? "ещё не опубликован"}`
+        }),
+        createElement("p", {
+          documentRef,
+          text: `Demo modal: ${status.showDemoInModal === true ? "ON" : "OFF"}`
         }),
         ...(sync === undefined ? [] : [publicCatalogSyncElement(sync)])
       ]
@@ -939,17 +890,6 @@ function parsePublicCatalogStatus(value) {
     publishedRevision,
     showDemoInModal: value.showDemoInModal === true,
     syncStatus
-  };
-}
-
-function parsePublicCatalogSettingsResult(value) {
-  if (!isRecord(value)) {
-    throw invalidResponseError();
-  }
-
-  return {
-    status: parsePublicCatalogStatus(value.status),
-    sync: parsePublicCatalogSyncResult(value.sync)
   };
 }
 

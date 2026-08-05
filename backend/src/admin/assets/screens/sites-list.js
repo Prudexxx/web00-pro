@@ -37,7 +37,7 @@ const LIFECYCLE_ACTIONS = {
   unpublish: {
     confirmLabel: "Снять с публикации",
     description: "Сайт вернётся в черновик после подтверждения сервером.",
-    label: "Снять",
+    label: "Снять с публикации",
     method: "POST",
     path: (siteId) => `/api/admin/sites/${siteId}/unpublish`,
     success: "Сайт снят с публикации."
@@ -595,6 +595,13 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
     );
   }
 
+  const lifecycleOverflow = createSiteLifecycleOverflow({
+    documentRef,
+    onLifecycleAction,
+    role,
+    site
+  });
+
   cells.push(createElement("td", {
     documentRef,
     attributes: {
@@ -633,20 +640,9 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
                 })
               ]
             : []),
-          ...getAvailableLifecycleActions(site, role).map((action) => createElement("button", {
-            documentRef,
-            text: action.label,
-            attributes: {
-              "data-lifecycle-action": action.id,
-              "data-site-id": site.id,
-              type: "button"
-            },
-            on: {
-              click: (event) => onLifecycleAction(site, action.id, event.currentTarget ?? event.target)
-            }
-          }))
         ]
-      })
+      }),
+      ...(lifecycleOverflow === null ? [] : [lifecycleOverflow])
     ]
   }));
 
@@ -654,6 +650,121 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
     documentRef,
     children: cells
   });
+}
+
+function createSiteLifecycleOverflow({ documentRef, onLifecycleAction, role, site }) {
+  const actions = getAvailableLifecycleActions(site, role);
+
+  if (actions.length === 0) {
+    return null;
+  }
+
+  const menuId = `admin-site-overflow-${site.id}`;
+  const menu = createElement("div", {
+    documentRef,
+    className: "admin-site-overflow-menu",
+    attributes: {
+      "data-overflow-menu": "true",
+      hidden: "",
+      id: menuId,
+      role: "menu"
+    },
+    children: actions.map((action) => createElement("button", {
+      documentRef,
+      text: action.label,
+      attributes: {
+        "data-lifecycle-action": action.id,
+        "data-site-id": site.id,
+        role: "menuitem",
+        type: "button"
+      },
+      on: {
+        click: (event) => {
+          closeSiteOverflowMenu(toggle, menu);
+          onLifecycleAction(site, action.id, event.currentTarget ?? event.target);
+        }
+      }
+    }))
+  });
+  const toggle = createElement("button", {
+    documentRef,
+    className: "admin-site-overflow-toggle",
+    text: "⋯",
+    attributes: {
+      "aria-controls": menuId,
+      "aria-expanded": "false",
+      "aria-haspopup": "menu",
+      "aria-label": `Действия сайта: ${site.title}`,
+      "data-action": "site-row-overflow",
+      type: "button"
+    },
+    on: {
+      click: () => {
+        setSiteOverflowMenuOpen(toggle, menu, menu.hasAttribute("hidden"));
+      }
+    }
+  });
+
+  toggle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+
+    event.preventDefault?.();
+    setSiteOverflowMenuOpen(toggle, menu, true);
+    menu.querySelector("button")?.focus?.();
+  });
+  menu.addEventListener("keydown", (event) => {
+    const items = Array.from(menu.querySelectorAll("button"));
+    const currentIndex = items.indexOf(event.target);
+
+    if (event.key === "Escape") {
+      event.preventDefault?.();
+      closeSiteOverflowMenu(toggle, menu);
+      toggle.focus?.();
+      return;
+    }
+
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault?.();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const nextIndex = currentIndex < 0
+        ? 0
+        : (currentIndex + direction + items.length) % items.length;
+
+      items[nextIndex]?.focus?.();
+      return;
+    }
+
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault?.();
+      const nextIndex = event.key === "Home" ? 0 : items.length - 1;
+
+      items[nextIndex]?.focus?.();
+    }
+  });
+
+  return createElement("div", {
+    documentRef,
+    className: "admin-site-overflow",
+    children: [
+      toggle,
+      menu
+    ]
+  });
+}
+
+function setSiteOverflowMenuOpen(toggle, menu, open) {
+  if (open) {
+    menu.removeAttribute("hidden");
+  } else {
+    menu.setAttribute("hidden", "");
+  }
+  toggle.setAttribute("aria-expanded", String(open));
+}
+
+function closeSiteOverflowMenu(toggle, menu) {
+  setSiteOverflowMenuOpen(toggle, menu, false);
 }
 
 function tableCell(documentRef, label, text) {

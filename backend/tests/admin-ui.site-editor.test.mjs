@@ -224,6 +224,14 @@ describe("admin site editor screen", () => {
         if (options.method === "GET") {
           return Promise.resolve({ data: siteFixture() });
         }
+        if (requestPath.endsWith("/publication") && options.method === "POST") {
+          return Promise.resolve({ data: publicationDto({
+            buttonLabel: "Опубликовано",
+            retryable: false,
+            stableStatus: "Опубликовано",
+            status: "succeeded"
+          }) });
+        }
         return Promise.resolve({ data: { ...siteFixture(), ...options.body } });
       })
     };
@@ -873,7 +881,7 @@ describe("admin site editor screen", () => {
     expect(apiClient.requestMultipart).not.toHaveBeenCalled();
   });
 
-  it("creates once, uploads selected preview/five gallery files, and shows a completed one-click success", async () => {
+  it("creates once, uploads selected preview/five gallery files, and shows a completed editor save", async () => {
     const documentRef = createFakeDocument();
     const requests = [];
     const apiClient = {
@@ -996,6 +1004,7 @@ describe("admin site editor screen", () => {
       "00000000-0000-4000-8000-000000000406"
     ]);
     expect(requests.at(-1).requestPath).toBe("/api/admin/sites/00000000-0000-4000-8000-000000000777");
+    expect(requests.some((request) => request.requestPath.endsWith("/publication"))).toBe(false);
     expect(onSaved).toHaveBeenCalledTimes(1);
 
     screen.element.querySelector('[data-action="manage-images"]').dispatchEvent(fakeEvent("click"));
@@ -1784,6 +1793,18 @@ function siteFixture(overrides = {}) {
     status: "draft",
     tags: ["cms"],
     title: "CRM Site",
+    ...overrides
+  };
+}
+
+function publicationDto(overrides = {}) {
+  return {
+    buttonLabel: "Публикуется…",
+    operationId: "00000000-0000-4000-8000-00000000feed",
+    retryable: false,
+    stableStatus: "Публикуется",
+    status: "queued",
+    statusUrl: "/api/admin/public-catalog/operations/00000000-0000-4000-8000-00000000feed",
     ...overrides
   };
 }

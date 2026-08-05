@@ -96,7 +96,9 @@ describe("admin maintenance canonical assets screen", () => {
 
     expect(screen.element.textContent).toContain("Revision: desired 7, published 7");
     expect(screen.element.textContent).toContain("Snapshot: public-catalog/v1/revisions/7/catalog.json");
-    expect(screen.element.querySelector('[data-field="show-demo-in-modal"]').checked).toBe(true);
+    expect(screen.element.textContent).toContain("Demo modal: ON");
+    expect(screen.element.querySelector('[data-field="show-demo-in-modal"]')).toBeNull();
+    expect(screen.element.querySelector('[data-field="show-demo-in-modal-readonly"]')).not.toBeNull();
     expect(apiClient.requestJson.mock.calls.map(([path]) => path)).toEqual([
       "/api/admin/maintenance/canonical-assets",
       "/api/admin/public-catalog/status"
