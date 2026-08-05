@@ -82,26 +82,70 @@ const REQUIRED_FIELDS = new Set(["categoryId", "shortDescription", "slug", "titl
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVALID_RESPONSE_MESSAGE = "Сервер вернул некорректный ответ.";
 const DRAFT_STORAGE_WARNING = "Локальное автосохранение недоступно.";
-const PUBLICATION_BUSY_STATUSES = new Set(["queued", "running", "retry_wait"]);
-const PUBLICATION_TERMINAL_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
+const PUBLICATION_BUSY_STATUSES = new Set([
+  "deploying",
+  "merge_queued",
+  "merged",
+  "preparing",
+  "pull_request_open",
+  "queued",
+  "retry_wait",
+  "running",
+  "validating"
+]);
+const PUBLICATION_TERMINAL_STATUSES = new Set([
+  "cancelled",
+  "failed",
+  "published",
+  "setup_required",
+  "succeeded",
+  "version_conflict"
+]);
 const PUBLICATION_ALLOWED_LABELS = new Set([
+  "Конфликт версии",
   "Опубликовать",
+  "Ошибка публикации",
   "Публикуется…",
+  "Публикуется",
   "Опубликовано",
-  "Повторить публикацию"
+  "Повторить публикацию",
+  "Проверяется",
+  "Развёртывается"
 ]);
 const PUBLICATION_ALLOWED_STABLE_STATUSES = new Set([
+  "Конфликт версии",
   "Не опубликовано",
   "Опубликовано",
   "Ошибка публикации",
-  "Публикуется"
+  "Публикуется",
+  "Проверяется",
+  "Развёртывается"
 ]);
 const PUBLICATION_DTO_TUPLES = Object.freeze({
   cancelled: [
     ["Опубликовать", "Не опубликовано", true]
   ],
+  deploying: [
+    ["Развёртывается", "Развёртывается", false]
+  ],
   failed: [
+    ["Ошибка публикации", "Ошибка публикации", true],
     ["Повторить публикацию", "Ошибка публикации", true]
+  ],
+  merge_queued: [
+    ["Проверяется", "Проверяется", false]
+  ],
+  merged: [
+    ["Развёртывается", "Развёртывается", false]
+  ],
+  preparing: [
+    ["Публикуется", "Публикуется", false]
+  ],
+  published: [
+    ["Опубликовано", "Опубликовано", false]
+  ],
+  pull_request_open: [
+    ["Публикуется", "Публикуется", false]
   ],
   queued: [
     ["Публикуется…", "Публикуется", false]
@@ -115,6 +159,15 @@ const PUBLICATION_DTO_TUPLES = Object.freeze({
   succeeded: [
     ["Опубликовано", "Опубликовано", false],
     ["Опубликовать", "Не опубликовано", false]
+  ],
+  setup_required: [
+    ["Ошибка публикации", "Ошибка публикации", true]
+  ],
+  validating: [
+    ["Проверяется", "Проверяется", false]
+  ],
+  version_conflict: [
+    ["Конфликт версии", "Конфликт версии", false]
   ]
 });
 
@@ -623,9 +676,9 @@ export function createSiteEditorScreen(options) {
 
   async function finishPublicationSaga(saved, form, options = {}) {
     try {
-      const result = await startPublication(saved, form, "publish");
+      const result = await startPublication(saved, form, mode === "create" ? "create" : "update");
 
-      if (result.status === "succeeded") {
+      if (result.status === "succeeded" || result.status === "published") {
         finishSuccessfulPublication(saved, form, {
           notify: options.preNotified !== true
         });
@@ -644,6 +697,9 @@ export function createSiteEditorScreen(options) {
       }
 
       setSaveState(form, "publicationFailed");
+      if (typeof error?.publicationButtonLabel === "string") {
+        setPublicationButtonText(form, error.publicationButtonLabel);
+      }
       renderFormLevelError(form, safeMessage(error), readRequestId(error));
       renderErrorStatus(error);
       return null;
@@ -664,11 +720,18 @@ export function createSiteEditorScreen(options) {
     statusRegion.textContent = "Публикуем...";
     onStatus("Публикуем...");
 
-    const response = await apiClient.requestJson(`/api/admin/sites/${siteIdForPublication}/publication`, {
-      body: { action },
+    const cardId = readCardIdForPublication(saved);
+    const currentCard = await readCurrentPagesCatalogCard(cardId);
+    const response = await apiClient.requestJson("/api/admin/publication/pages", {
+      body: {
+        action,
+        card: action === "delete" ? null : buildDirectPagesCatalogCard(saved),
+        cardId,
+        expectedBlobSha: action === "create" ? null : currentCard.blobSha,
+        requestId: attempt.idempotencyKey
+      },
       credentials: "same-origin",
       headers: {
-        "Idempotency-Key": attempt.idempotencyKey,
         "X-CSRF-Token": "web00-admin"
       },
       method: "POST",
@@ -682,6 +745,8 @@ export function createSiteEditorScreen(options) {
 
     persistPublicationReconnect({
       operationId: operation.operationId,
+      prNumber: operation.prNumber,
+      requestId: operation.requestId,
       siteId: siteIdForPublication
     });
 
@@ -806,6 +871,7 @@ export function createSiteEditorScreen(options) {
     error.code = operation.status === "cancelled"
       ? "PUBLICATION_CANCELLED"
       : "PUBLICATION_FAILED";
+    error.publicationButtonLabel = operation.buttonLabel;
     error.status = 409;
     return error;
   }
@@ -841,6 +907,139 @@ export function createSiteEditorScreen(options) {
     }
 
     return id;
+  }
+
+  function readCardIdForPublication(site) {
+    const slug = typeof site?.slug === "string" ? site.slug.trim() : "";
+
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      throw invalidSaveResponse();
+    }
+
+    return slug;
+  }
+
+  async function readCurrentPagesCatalogCard(cardId) {
+    const response = await apiClient.requestJson(`/api/admin/publication/pages/card/${cardId}`, {
+      method: "GET",
+      signal: publicationPollController?.signal
+    });
+    const data = response?.data ?? response;
+
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      data.cardId !== cardId ||
+      !(typeof data.blobSha === "string" || data.blobSha === null) ||
+      !(typeof data.card === "object" || data.card === null)
+    ) {
+      const error = new Error(INVALID_RESPONSE_MESSAGE);
+
+      error.code = "INVALID_PUBLICATION_CARD_DTO";
+      error.status = 0;
+      throw error;
+    }
+
+    return data;
+  }
+
+  function buildDirectPagesCatalogCard(site) {
+    const cardId = readCardIdForPublication(site);
+    const category = site?.category && typeof site.category === "object"
+      ? site.category
+      : categories.find((item) => item.id === site?.categoryId) ?? {};
+    const categoryTitle = typeof category.title === "string" && category.title.trim()
+      ? category.title.trim()
+      : "Каталог";
+    const categorySlug = typeof category.slug === "string" && category.slug.trim()
+      ? category.slug.trim()
+      : "";
+    const previewImage = readPublicationImageUrl(site?.previewImageUrl);
+    const galleryImages = readPublicationGalleryUrls(site?.galleryImages);
+
+    return {
+      id: cardId,
+      slug: cardId,
+      sortOrder: Number.isFinite(Number(site?.sortOrder)) ? Number(site.sortOrder) : Number.MAX_SAFE_INTEGER,
+      legacyTitle: optionalPublicationText(site?.legacyTitle) ?? optionalPublicationText(site?.title),
+      title: requiredPublicationText(site?.title),
+      editableTitle: true,
+      category: categoryTitle,
+      description: requiredPublicationText(site?.shortDescription),
+      priceFrom: optionalPublicationText(site?.priceLabel) ?? formatPublicationPrice(site?.priceAmountCents),
+      deliveryTime: optionalPublicationText(site?.deliveryLabel),
+      features: readPublicationTextArray(site?.features),
+      tags: readPublicationTextArray(site?.tags),
+      previewImage,
+      previewType: optionalPublicationText(site?.previewType),
+      filter: categorySlug || undefined,
+      demoMode: optionalPublicationText(site?.demoMode),
+      demoLocalUrl: site?.demoLocalUrl ?? null,
+      externalDemoUrl: optionalPublicationUrl(site?.externalDemoUrl),
+      originalDemoUrl: optionalPublicationUrl(site?.originalDemoUrl),
+      demoUrl: optionalPublicationUrl(site?.demoUrl),
+      siteUrl: optionalPublicationUrl(site?.siteUrl),
+      galleryImages: galleryImages.length > 0 ? galleryImages : [previewImage],
+      aliases: [cardId],
+      active: site?.active !== false && (site?.deletedAt === undefined || site.deletedAt === null)
+    };
+  }
+
+  function readPublicationImageUrl(value) {
+    const url = optionalPublicationUrl(value);
+
+    if (!url) {
+      throw invalidSaveResponse();
+    }
+
+    return url;
+  }
+
+  function readPublicationGalleryUrls(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => typeof item === "string" ? item : item?.url)
+      .map(optionalPublicationUrl)
+      .filter(Boolean);
+  }
+
+  function readPublicationTextArray(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return [...new Set(value.map(optionalPublicationText).filter(Boolean))];
+  }
+
+  function requiredPublicationText(value) {
+    const text = optionalPublicationText(value);
+
+    if (!text) {
+      throw invalidSaveResponse();
+    }
+
+    return text;
+  }
+
+  function optionalPublicationText(value) {
+    const text = String(value ?? "").trim();
+
+    return text || undefined;
+  }
+
+  function optionalPublicationUrl(value) {
+    const text = optionalPublicationText(value);
+
+    return text ?? "";
+  }
+
+  function formatPublicationPrice(value) {
+    return Number.isFinite(Number(value)) && Number(value) > 0
+      ? formatCentsToRubles(Number(value))
+      : undefined;
   }
 
   function createPublicationIdempotencyKey() {
@@ -890,9 +1089,12 @@ export function createSiteEditorScreen(options) {
     const statusUrl = typeof data?.statusUrl === "string" ? data.statusUrl : "";
     const buttonLabel = typeof data?.buttonLabel === "string" ? data.buttonLabel : "";
     const stableStatus = typeof data?.stableStatus === "string" ? data.stableStatus : "";
-    const expectedStatusUrl = typeof data?.operationId === "string"
-      ? `/api/admin/public-catalog/operations/${data.operationId}`
-      : "";
+    const expectedStatusUrls = typeof data?.operationId === "string"
+      ? new Set([
+          `/api/admin/public-catalog/operations/${data.operationId}`,
+          `/api/admin/publication/pages/${data.operationId}`
+        ])
+      : new Set();
 
     if (
       typeof data !== "object" ||
@@ -905,7 +1107,7 @@ export function createSiteEditorScreen(options) {
       !PUBLICATION_ALLOWED_STABLE_STATUSES.has(stableStatus) ||
       typeof data.retryable !== "boolean" ||
       !isValidPublicationDtoTuple(status, buttonLabel, stableStatus, data.retryable, options.expectedAction ?? null) ||
-      statusUrl !== expectedStatusUrl
+      !expectedStatusUrls.has(statusUrl)
     ) {
       const error = new Error(INVALID_RESPONSE_MESSAGE);
 
@@ -917,6 +1119,10 @@ export function createSiteEditorScreen(options) {
     return {
       buttonLabel,
       operationId: data.operationId,
+      prNumber: Number.isInteger(data.prNumber) ? data.prNumber : null,
+      requestId: typeof data.requestId === "string" && UUID_PATTERN.test(data.requestId)
+        ? data.requestId
+        : data.operationId,
       retryable: data.retryable,
       stableStatus,
       status,
@@ -960,12 +1166,25 @@ export function createSiteEditorScreen(options) {
     }
 
     try {
-      storage.setItem(PUBLICATION_RECONNECT_STORAGE_KEY, JSON.stringify({
-        operationId: metadata.operationId,
-        siteId: metadata.siteId,
-        updatedAt: new Date().toISOString(),
-        version: 1
-      }));
+      const isDirectPagesMetadata = typeof metadata.requestId === "string" &&
+        UUID_PATTERN.test(metadata.requestId);
+      const payload = isDirectPagesMetadata
+        ? {
+            operationId: metadata.operationId,
+            prNumber: Number.isInteger(metadata.prNumber) ? metadata.prNumber : null,
+            requestId: metadata.requestId,
+            siteId: metadata.siteId,
+            updatedAt: new Date().toISOString(),
+            version: 2
+          }
+        : {
+            operationId: metadata.operationId,
+            siteId: metadata.siteId,
+            updatedAt: new Date().toISOString(),
+            version: 1
+          };
+
+      storage.setItem(PUBLICATION_RECONNECT_STORAGE_KEY, JSON.stringify(payload));
     } catch {
       // Reconnect metadata is best-effort and intentionally small.
     }
@@ -1021,7 +1240,7 @@ export function createSiteEditorScreen(options) {
     }
 
     try {
-      const response = await apiClient.requestJson(`/api/admin/public-catalog/operations/${metadata.operationId}`, {
+      const response = await apiClient.requestJson(publicationReconnectStatusUrl(metadata), {
         method: "GET"
       });
       const operation = readPublicationDto(response, metadata.operationId);
@@ -1047,13 +1266,21 @@ export function createSiteEditorScreen(options) {
 
   function reconnectingPublicationOperation(metadata) {
     return {
-      buttonLabel: "Публикуется…",
+      buttonLabel: metadata.version === 2 ? "Проверяется" : "Публикуется…",
       operationId: metadata.operationId,
+      prNumber: metadata.prNumber ?? null,
+      requestId: metadata.requestId ?? metadata.operationId,
       retryable: false,
-      stableStatus: "Публикуется",
-      status: "running",
-      statusUrl: `/api/admin/public-catalog/operations/${metadata.operationId}`
+      stableStatus: metadata.version === 2 ? "Проверяется" : "Публикуется",
+      status: metadata.version === 2 ? "validating" : "running",
+      statusUrl: publicationReconnectStatusUrl(metadata)
     };
+  }
+
+  function publicationReconnectStatusUrl(metadata) {
+    return metadata.version === 2
+      ? `/api/admin/publication/pages/${metadata.requestId}`
+      : `/api/admin/public-catalog/operations/${metadata.operationId}`;
   }
 
   function isTransientPublicationStatusError(error) {
@@ -1111,17 +1338,32 @@ export function createSiteEditorScreen(options) {
       if (
         typeof parsed !== "object" ||
         parsed === null ||
-        parsed.version !== 1 ||
+        (parsed.version !== 1 && parsed.version !== 2) ||
         typeof parsed.siteId !== "string" ||
         !UUID_PATTERN.test(parsed.siteId) ||
         typeof parsed.operationId !== "string" ||
-        !UUID_PATTERN.test(parsed.operationId)
+        !UUID_PATTERN.test(parsed.operationId) ||
+        (
+          parsed.version === 2 &&
+          (
+            typeof parsed.requestId !== "string" ||
+            !UUID_PATTERN.test(parsed.requestId) ||
+            !(Number.isInteger(parsed.prNumber) || parsed.prNumber === null)
+          )
+        )
       ) {
         return null;
       }
 
       return {
         operationId: parsed.operationId,
+        ...(parsed.version === 2
+          ? {
+              prNumber: parsed.prNumber,
+              requestId: parsed.requestId,
+              version: 2
+            }
+          : { version: 1 }),
         siteId: parsed.siteId
       };
     } catch {

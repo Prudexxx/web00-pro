@@ -249,6 +249,20 @@ export function createSitesListScreen(options) {
     const action = LIFECYCLE_ACTIONS[actionId];
 
     try {
+      if (actionId === "soft-delete") {
+        const operation = await startDirectPagesDeletePublication(site);
+        if (destroyed) {
+          return;
+        }
+        const status = typeof operation?.stableStatus === "string" && operation.stableStatus.length > 0
+          ? operation.stableStatus
+          : "Публикуется";
+
+        statusRegion.textContent = status;
+        onStatus(status);
+        return;
+      }
+
       await apiClient.requestJson(action.path(validateUuid(site.id, "site")), {
         allowNoContent: actionId === "permanent-delete",
         method: action.method
@@ -273,6 +287,50 @@ export function createSitesListScreen(options) {
 
       throw dialogError(error);
     }
+  }
+
+  async function startDirectPagesDeletePublication(site) {
+    const cardId = readCatalogCardId(site);
+    if (cardId === null) {
+      return;
+    }
+
+    const current = await apiClient.requestJson(`/api/admin/publication/pages/card/${cardId}`, {
+      method: "GET"
+    });
+    const data = current?.data ?? current;
+    const expectedBlobSha = typeof data?.blobSha === "string" ? data.blobSha : null;
+    const response = await apiClient.requestJson("/api/admin/publication/pages", {
+      body: {
+        action: "delete",
+        card: null,
+        cardId,
+        expectedBlobSha,
+        requestId: createPublicationRequestId()
+      },
+      credentials: "same-origin",
+      headers: {
+        "X-CSRF-Token": "web00-admin"
+      },
+      method: "POST"
+    });
+    return response?.data ?? response;
+  }
+
+  function readCatalogCardId(site) {
+    const slug = typeof site?.slug === "string" ? site.slug.trim() : "";
+
+    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ? slug : null;
+  }
+
+  function createPublicationRequestId() {
+    if (typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+
+    return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (value) => (
+      (Number(value) ^ Math.trunc(Math.random() * 16) >> Number(value) / 4).toString(16)
+    ));
   }
 
   function renderImageCleanupDeleteBlock(site, error, message) {
