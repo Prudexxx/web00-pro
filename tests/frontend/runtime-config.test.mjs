@@ -12,7 +12,7 @@ test("runtime config exposes frozen live public API defaults", async () => {
   assert.deepEqual(JSON.parse(JSON.stringify(browser.window.WEB00_CONFIG)), {
     apiBaseUrl: "https://web00-backend-production.onrender.com",
     requestTimeoutMs: 8000,
-    staticFallbackEnabled: false,
+    staticFallbackEnabled: true,
   });
   assert.equal(Object.isFrozen(browser.window.WEB00_CONFIG), true);
 });

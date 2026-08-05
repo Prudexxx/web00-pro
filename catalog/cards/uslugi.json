@@ -1,0 +1,38 @@
+{
+  "id": "uslugi",
+  "slug": "uslugi",
+  "sortOrder": 70,
+  "legacyTitle": "Услуга муж на час",
+  "title": "Услуга муж на час",
+  "editableTitle": true,
+  "category": "Услуги",
+  "description": "Сайт для мастера или небольшой команды: список работ, преимущества, цены и заявка.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 2 дней",
+  "features": [
+    "Список работ",
+    "Преимущества",
+    "Цены",
+    "Форма заявки"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/mug-na-chas-home.png",
+  "previewType": "services",
+  "filter": "services",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/MugNaChas/",
+  "originalDemoUrl": "https://prudexxx.github.io/MugNaChas/",
+  "demoUrl": "https://prudexxx.github.io/MugNaChas/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/uslugi-01.png",
+    "assets/img/solution-gallery/uslugi-02.png",
+    "assets/img/solution-gallery/uslugi-03.png",
+    "assets/img/solution-gallery/uslugi-04.png"
+  ],
+  "aliases": [
+    "uslugi"
+  ],
+  "active": true
+}

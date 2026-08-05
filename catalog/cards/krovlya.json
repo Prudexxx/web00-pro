@@ -1,0 +1,38 @@
+{
+  "id": "krovlya",
+  "slug": "krovlya",
+  "sortOrder": 100,
+  "legacyTitle": "Услуга кровли",
+  "title": "Услуга кровли",
+  "editableTitle": true,
+  "category": "Строительство",
+  "description": "Сайт для кровельной бригады или компании: услуги, этапы, гарантии и заявка на замер.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Виды работ",
+    "Портфолио",
+    "Расчёт работ",
+    "Заявка на замер"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/krovlya-home.png",
+  "previewType": "construction",
+  "filter": "construction",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/Krovla/",
+  "originalDemoUrl": "https://prudexxx.github.io/Krovla/",
+  "demoUrl": "https://prudexxx.github.io/Krovla/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/krovlya-01.png",
+    "assets/img/solution-gallery/krovlya-02.png",
+    "assets/img/solution-gallery/krovlya-03.png",
+    "assets/img/solution-gallery/krovlya-04.png"
+  ],
+  "aliases": [
+    "krovlya"
+  ],
+  "active": true
+}

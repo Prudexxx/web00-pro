@@ -1,0 +1,38 @@
+{
+  "id": "odezhda",
+  "slug": "odezhda",
+  "sortOrder": 30,
+  "legacyTitle": "Магазин одежды",
+  "title": "Магазин одежды",
+  "editableTitle": true,
+  "category": "Товары",
+  "description": "Мини-магазин для одежды, шоурума или локального бренда с коллекциями и быстрым заказом.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Коллекции",
+    "Карточки товаров",
+    "Размеры",
+    "Заказ через форму"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/odezhda-home.png",
+  "previewType": "goods",
+  "filter": "goods",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/OdegdaPlanet/",
+  "originalDemoUrl": "https://prudexxx.github.io/OdegdaPlanet/",
+  "demoUrl": "https://prudexxx.github.io/OdegdaPlanet/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/odezhda-01.png",
+    "assets/img/solution-gallery/odezhda-02.png",
+    "assets/img/solution-gallery/odezhda-03.png",
+    "assets/img/solution-gallery/odezhda-04.png"
+  ],
+  "aliases": [
+    "odezhda"
+  ],
+  "active": true
+}

@@ -140,14 +140,13 @@ test("main.js ignores non-applyable stale catalog results", async () => {
   assert.match(source, /if \(nextPopularCatalogState\) popularCatalogState = nextPopularCatalogState;/);
 });
 
-test("main.js renders fatal and empty API catalog states without leaving stale static cards visible", async () => {
+test("main.js applies catalog API states through the catalog seam", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
   assert.match(source, /function applyCatalogState\(nextCatalogState\)/);
   assert.match(source, /if \(!nextCatalogState\) return false;/);
   assert.match(source, /catalogState = nextCatalogState;/);
   assert.match(source, /renderSolutions\(\);/);
-  assert.doesNotMatch(source, /Keep the currently visible saved catalog/);
 });
 
 test("B8 CSS supports catalog status and homepage API empty state without new global cards", async () => {

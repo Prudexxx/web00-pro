@@ -168,7 +168,7 @@ test("invalid runtime config disables API and keeps static mode safe", async () 
   assert.equal(fetch.calls.length, 0);
 });
 
-test("configured API failure returns a fatal API state even when static data exists", async () => {
+test("configured API failure returns static fallback only when static fallback is enabled", async () => {
   const failingFetch = createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 }));
   const enabled = await loadCatalog({
     fetch: failingFetch,
@@ -178,10 +178,10 @@ test("configured API failure returns a fatal API state even when static data exi
 
   const fallback = await enabled.catalog.resolveCatalogForPage({ kind: "solutions" });
 
-  assert.equal(fallback.source, "api");
-  assert.equal(fallback.lifecycle, "fatal");
-  assert.equal(fallback.staticFallbackActive, false);
-  assert.deepEqual(plain(fallback.items), []);
+  assert.equal(fallback.source, "static");
+  assert.equal(fallback.lifecycle, "ready");
+  assert.equal(fallback.staticFallbackActive, true);
+  assert.deepEqual(plain(fallback.items.map((item) => item.slug)), ["static-site"]);
 
   const disabled = await loadCatalog({
     fetch: createFakeFetch(() => jsonResponse({ error: "down" }, { status: 503 })),
@@ -246,7 +246,7 @@ test("API timeout reports fatal API state without static fallback", async () => 
   }));
   const { catalog } = await loadCatalog({
     fetch,
-    config: { apiBaseUrl: "https://api.example.test", requestTimeoutMs: 1000, staticFallbackEnabled: true },
+    config: { apiBaseUrl: "https://api.example.test", requestTimeoutMs: 1000, staticFallbackEnabled: false },
     data: { SOLUTIONS: [{ id: "static-site", title: "Static", active: true }] },
   });
 

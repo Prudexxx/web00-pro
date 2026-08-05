@@ -1,0 +1,38 @@
+{
+  "id": "site-custom",
+  "slug": "site-custom",
+  "sortOrder": 10,
+  "legacyTitle": "Сайт под заказ",
+  "title": "Сайт под заказ",
+  "editableTitle": true,
+  "category": "Индивидуально",
+  "description": "Индивидуальный сайт под задачу клиента: структура, дизайн, формы заявок и подготовка к запуску.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "по оценке задачи",
+  "features": [
+    "Индивидуальная структура",
+    "Адаптив",
+    "Форма заявки",
+    "Подбор решения"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/site-custom-home.png",
+  "previewType": "individual",
+  "filter": "individual",
+  "demoMode": "none",
+  "demoLocalUrl": null,
+  "externalDemoUrl": null,
+  "originalDemoUrl": null,
+  "demoUrl": "",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/site-custom-01.png",
+    "assets/img/solution-gallery/site-custom-02.png",
+    "assets/img/solution-gallery/site-custom-03.png",
+    "assets/img/solution-gallery/site-custom-04.png"
+  ],
+  "aliases": [
+    "site-custom"
+  ],
+  "active": true
+}
