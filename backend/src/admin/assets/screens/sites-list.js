@@ -330,20 +330,22 @@ export function createSitesListScreen(options) {
     const current = await readCurrentPagesCatalogCard(cardId);
     const pagesAction = actionId === "soft-delete"
       ? "delete"
-      : current.blobSha === null
-        ? "create"
-        : "update";
+      : actionId === "unpublish" || current.blobSha !== null
+        ? "update"
+        : "create";
+    const card = pagesAction === "delete" || (actionId === "unpublish" && current.blobSha === null)
+      ? null
+      : buildDirectPagesCatalogCard(fullSite, {
+          active: actionId !== "unpublish"
+        });
     const requestId = createPublicationRequestId();
     const response = await apiClient.requestJson("/api/admin/publication/pages", {
       body: {
         action: pagesAction,
-        card: pagesAction === "delete"
-          ? null
-          : buildDirectPagesCatalogCard(fullSite, {
-              active: actionId !== "unpublish"
-            }),
+        card,
         cardId,
         expectedBlobSha: pagesAction === "create" ? null : current.blobSha,
+        lifecycleAction: actionId === "soft-delete" ? "delete" : actionId,
         requestId,
         siteId: validateUuid(fullSite.id, "site")
       },

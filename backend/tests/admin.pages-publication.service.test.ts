@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 const publicationServiceModulePath = "../src/modules/admin/publication/publication.service.js";
 
 describe("Direct Pages catalog publication service", () => {
-  it("CREATE / UPDATE / DELETE mutates exactly one canonical card JSON and returns no-op for identical content", async () => {
+  it("CREATE / UPDATE / DELETE mutates exactly one canonical card JSON and keeps only version-grounded no-ops", async () => {
     const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
     const { serializeCanonicalCatalogCard } = await loadPagesCatalogGenerator();
     const github = createGitHubProviderFake({
@@ -60,7 +60,7 @@ describe("Direct Pages catalog publication service", () => {
       expectedBlobSha: null,
       requestId: "00000000-0000-4000-8000-000000000201"
     }));
-    const createNoop = await service.startPagesPublication(startInput({
+    await expect(service.startPagesPublication(startInput({
       action: "create",
       card: canonicalCard({
         id: "phase-two-identical",
@@ -70,7 +70,10 @@ describe("Direct Pages catalog publication service", () => {
       cardId: "phase-two-identical",
       expectedBlobSha: null,
       requestId: "00000000-0000-4000-8000-000000000202"
-    }));
+    }))).rejects.toMatchObject({
+      code: "VERSION_CONFLICT",
+      statusCode: 409
+    });
     const updateResult = await service.startPagesPublication(startInput({
       action: "update",
       card: updatedCard,
@@ -110,7 +113,6 @@ describe("Direct Pages catalog publication service", () => {
       operationId: "00000000-0000-4000-8000-000000000201",
       status: "merge_queued"
     });
-    expect(createNoop).toMatchObject({ noOp: true, status: "published" });
     expect(updateResult).toMatchObject({
       action: "update",
       cardId: "phase-two-existing",
@@ -145,8 +147,8 @@ describe("Direct Pages catalog publication service", () => {
         path: "catalog/cards/phase-two-delete.json"
       })
     ]);
-    expect(github.createdBranches).toHaveLength(6);
-    expect(github.markerCommits).toHaveLength(6);
+    expect(github.createdBranches).toHaveLength(5);
+    expect(github.markerCommits).toHaveLength(5);
     expect(github.pullRequests.map((pullRequest) => pullRequest.body)).toEqual([
       expect.stringContaining("WEB00-REQUEST-ID: 00000000-0000-4000-8000-000000000201"),
       expect.stringContaining("WEB00-REQUEST-ID: 00000000-0000-4000-8000-000000000203"),
@@ -394,6 +396,204 @@ describe("Direct Pages catalog publication service", () => {
     expect(github.pullRequests).toHaveLength(2);
   });
 
+  it("PHASE 2.3 same-card race for create, update, delete and no-op fails with VERSION_CONFLICT before GitHub mutation", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const { serializeCanonicalCatalogCard } = await loadPagesCatalogGenerator();
+
+    async function expectRaceConflict(input: Record<string, unknown>, setup: (github: ReturnType<typeof createGitHubProviderFake>) => void) {
+      const github = createGitHubProviderFake({
+        requiredCheckConfigured: true,
+        requiredCheckStatus: "success"
+      });
+      setup(github);
+      const service = createPagesCatalogPublicationService({
+        allowedMediaOrigin: "https://storage.example.test",
+        github,
+        lifecycleFinalizer: lifecycleFinalizerFake(),
+        now: fixedNow
+      });
+
+      await expect(service.startPagesPublication(input)).rejects.toMatchObject({
+        code: "VERSION_CONFLICT",
+        statusCode: 409
+      });
+      expect(github.createdBranches).toHaveLength(0);
+      expect(github.markerCommits).toHaveLength(0);
+      expect(github.commits).toHaveLength(0);
+      expect(github.pullRequests).toHaveLength(0);
+    }
+
+    const createRaceCard = canonicalCard({
+      id: "phase-two-race-create",
+      slug: "phase-two-race-create",
+      title: "Phase Two Race Create"
+    });
+    await expectRaceConflict(startInput({
+      action: "create",
+      card: createRaceCard,
+      cardId: "phase-two-race-create",
+      expectedBlobSha: null,
+      requestId: "00000000-0000-4000-8000-000000002301"
+    }), (github) => {
+      github.onGetBaseBranchHead(() => {
+        github.setMainCard("phase-two-race-create", {
+          blobSha: "sha-raced-create",
+          content: serializeCanonicalCatalogCard(canonicalCard({
+            id: "phase-two-race-create",
+            slug: "phase-two-race-create",
+            title: "Phase Two Race Create Already Exists"
+          }))
+        });
+      });
+    });
+
+    const createRaceSameBytesCard = canonicalCard({
+      id: "phase-two-race-create-same-bytes",
+      slug: "phase-two-race-create-same-bytes",
+      title: "Phase Two Race Create"
+    });
+    await expectRaceConflict(startInput({
+      action: "create",
+      card: createRaceSameBytesCard,
+      cardId: "phase-two-race-create-same-bytes",
+      expectedBlobSha: null,
+      requestId: "00000000-0000-4000-8000-00000000230a"
+    }), (github) => {
+      github.onGetBaseBranchHead(() => {
+        github.setMainCard("phase-two-race-create-same-bytes", {
+          blobSha: "sha-raced-create-same-bytes",
+          content: serializeCanonicalCatalogCard(createRaceSameBytesCard)
+        });
+      });
+    });
+
+    await expectRaceConflict(startInput({
+      action: "update",
+      card: canonicalCard({
+        id: "phase-two-race-update",
+        slug: "phase-two-race-update",
+        title: "Phase Two Race Update New"
+      }),
+      cardId: "phase-two-race-update",
+      expectedBlobSha: "sha-race-update-old",
+      requestId: "00000000-0000-4000-8000-000000002302"
+    }), (github) => {
+      github.setMainCard("phase-two-race-update", {
+        blobSha: "sha-race-update-old",
+        content: serializeCanonicalCatalogCard(canonicalCard({
+          id: "phase-two-race-update",
+          slug: "phase-two-race-update",
+          title: "Phase Two Race Update Old"
+        }))
+      });
+      github.onGetBaseBranchHead(() => {
+        github.setMainCard("phase-two-race-update", {
+          blobSha: "sha-race-update-new",
+          content: serializeCanonicalCatalogCard(canonicalCard({
+            id: "phase-two-race-update",
+            slug: "phase-two-race-update",
+            title: "Phase Two Race Update Changed Elsewhere"
+          }))
+        });
+      });
+    });
+
+    await expectRaceConflict(startInput({
+      action: "delete",
+      card: null,
+      cardId: "phase-two-race-delete",
+      expectedBlobSha: "sha-race-delete-old",
+      requestId: "00000000-0000-4000-8000-000000002303"
+    }), (github) => {
+      github.setMainCard("phase-two-race-delete", {
+        blobSha: "sha-race-delete-old",
+        content: serializeCanonicalCatalogCard(canonicalCard({
+          id: "phase-two-race-delete",
+          slug: "phase-two-race-delete",
+          title: "Phase Two Race Delete Old"
+        }))
+      });
+      github.onGetBaseBranchHead(() => {
+        github.setMainCard("phase-two-race-delete", {
+          blobSha: "sha-race-delete-new",
+          content: serializeCanonicalCatalogCard(canonicalCard({
+            id: "phase-two-race-delete",
+            slug: "phase-two-race-delete",
+            title: "Phase Two Race Delete Changed Elsewhere"
+          }))
+        });
+      });
+    });
+
+    await expectRaceConflict(startInput({
+      action: "delete",
+      card: null,
+      cardId: "phase-two-race-delete-missing",
+      expectedBlobSha: "sha-race-delete-missing-old",
+      requestId: "00000000-0000-4000-8000-000000002309"
+    }), (github) => {
+      github.setMainCard("phase-two-race-delete-missing", {
+        blobSha: "sha-race-delete-missing-old",
+        content: serializeCanonicalCatalogCard(canonicalCard({
+          id: "phase-two-race-delete-missing",
+          slug: "phase-two-race-delete-missing",
+          title: "Phase Two Race Delete Missing Old"
+        }))
+      });
+      github.onGetBaseBranchHead(() => {
+        github.deleteMainCard("phase-two-race-delete-missing");
+      });
+    });
+
+    await expectRaceConflict(startInput({
+      action: "update",
+      card: null,
+      cardId: "phase-two-race-unpublish-missing",
+      expectedBlobSha: "sha-race-unpublish-missing-old",
+      lifecycleAction: "unpublish",
+      requestId: "00000000-0000-4000-8000-00000000230b"
+    }), (github) => {
+      github.setMainCard("phase-two-race-unpublish-missing", {
+        blobSha: "sha-race-unpublish-missing-old",
+        content: serializeCanonicalCatalogCard(canonicalCard({
+          id: "phase-two-race-unpublish-missing",
+          slug: "phase-two-race-unpublish-missing",
+          title: "Phase Two Race Unpublish Missing Old"
+        }))
+      });
+      github.onGetBaseBranchHead(() => {
+        github.deleteMainCard("phase-two-race-unpublish-missing");
+      });
+    });
+
+    const noOpCard = canonicalCard({
+      id: "phase-two-race-noop",
+      slug: "phase-two-race-noop",
+      title: "Phase Two Race Noop Old"
+    });
+    await expectRaceConflict(startInput({
+      action: "update",
+      card: noOpCard,
+      cardId: "phase-two-race-noop",
+      expectedBlobSha: "sha-race-noop-old",
+      requestId: "00000000-0000-4000-8000-000000002304"
+    }), (github) => {
+      github.setMainCard("phase-two-race-noop", {
+        blobSha: "sha-race-noop-old",
+        content: serializeCanonicalCatalogCard(noOpCard)
+      });
+      github.onGetBaseBranchHead(() => {
+        github.setMainCard("phase-two-race-noop", {
+          blobSha: "sha-race-noop-new",
+          content: serializeCanonicalCatalogCard({
+            ...noOpCard,
+            title: "Phase Two Race Noop Changed Elsewhere"
+          })
+        });
+      });
+    });
+  });
+
   it("AUTO-MERGE SAFETY enables squash auto-merge only after the required catalog validation check is successful", async () => {
     const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
     const pendingGithub = createGitHubProviderFake({
@@ -601,6 +801,131 @@ describe("Direct Pages catalog publication service", () => {
       code: "BACKEND_LIFECYCLE_FINALIZATION_FAILED",
       status: "failed"
     });
+  });
+
+  it("PHASE 2.3 missing-card unpublish is a safe no-op and finalizes backend lifecycle as unpublish", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const lifecycleFinalize = vi.fn(async () => undefined);
+    const github = createGitHubProviderFake({
+      currentPagesStatus: "success",
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const service = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      lifecycleFinalizer: { finalize: lifecycleFinalize },
+      now: fixedNow
+    });
+    const input = startInput({
+      action: "update",
+      card: null,
+      cardId: "phase-two-missing-unpublish",
+      expectedBlobSha: null,
+      lifecycleAction: "unpublish",
+      requestId: "00000000-0000-4000-8000-000000002305"
+    });
+
+    await expect(service.startPagesPublication(input)).resolves.toMatchObject({
+      action: "update",
+      cardId: "phase-two-missing-unpublish",
+      noOp: true,
+      status: "published"
+    });
+    expect(github.commits).toHaveLength(0);
+    expect(github.pullRequests).toHaveLength(0);
+    expect(github.markerCommits).toEqual([
+      expect.objectContaining({
+        lifecycleAction: "unpublish",
+        requestFingerprint: await expectedRequestFingerprint(input)
+      })
+    ]);
+    expect(lifecycleFinalize).toHaveBeenCalledWith(expect.objectContaining({
+      cardId: "phase-two-missing-unpublish",
+      lifecycleAction: "unpublish",
+      requestId: "00000000-0000-4000-8000-000000002305"
+    }));
+
+    await expect(service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        active: false,
+        id: "phase-two-inactive-create",
+        slug: "phase-two-inactive-create",
+        title: "Phase Two Inactive Create"
+      }),
+      cardId: "phase-two-inactive-create",
+      expectedBlobSha: null,
+      lifecycleAction: "publish",
+      requestId: "00000000-0000-4000-8000-000000002306"
+    }))).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      statusCode: 400
+    });
+  });
+
+  it("PHASE 2.3 server-owned reconciler finalizes lifecycle after Pages success when the browser is closed", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const lifecycleFinalize = vi.fn(async () => undefined);
+    const github = createGitHubProviderFake({
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const service = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      lifecycleFinalizer: { finalize: lifecycleFinalize },
+      now: fixedNow
+    });
+    github.setRecentPublicationRequests([
+      {
+        action: "update",
+        branch: "catalog/publish/00000000-0000-4000-8000-000000002307",
+        cardId: "phase-two-reconcile-unpublish",
+        lifecycleAction: "unpublish",
+        mergeCommitSha: "e".repeat(40),
+        pagesStatus: "success",
+        requestFingerprint: "f".repeat(64),
+        requestId: "00000000-0000-4000-8000-000000002307",
+        siteId: "00000000-0000-4000-8000-000000000101",
+        state: "merged"
+      },
+      {
+        action: "create",
+        branch: "feature/not-direct-pages",
+        cardId: "phase-two-reconcile-ignored",
+        lifecycleAction: "publish",
+        pagesStatus: "success",
+        requestFingerprint: "f".repeat(64),
+        requestId: "00000000-0000-4000-8000-000000002308",
+        siteId: "00000000-0000-4000-8000-000000000101",
+        state: "merged"
+      }
+    ]);
+
+    await expect(service.reconcilePagesPublicationLifecycle({
+      actor: systemActor(),
+      limit: 5,
+      now: fixedNow()
+    })).resolves.toMatchObject({
+      failed: 0,
+      finalized: 1,
+      scanned: 2
+    });
+    expect(lifecycleFinalize).toHaveBeenCalledTimes(1);
+    expect(lifecycleFinalize).toHaveBeenCalledWith(expect.objectContaining({
+      actor: expect.objectContaining({
+        email: "system@web00.local",
+        role: "admin"
+      }),
+      cardId: "phase-two-reconcile-unpublish",
+      lifecycleAction: "unpublish",
+      requestId: "00000000-0000-4000-8000-000000002307",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    }));
+    expect(github.deletedBranches).toEqual([
+      { branch: "catalog/publish/00000000-0000-4000-8000-000000002307" }
+    ]);
   });
 
   it("RECOVERY resumes an existing request branch and NO-OP does not claim published before Pages success", async () => {
@@ -1021,11 +1346,13 @@ function createGitHubProviderFake(options: {
   requiredCheckStatus: "failure" | "pending" | "success";
 }) {
   let currentPagesStatus = options.currentPagesStatus ?? "success";
+  let getBaseBranchHeadHook: (() => void) | null = null;
   let requiredCheckStatus = options.requiredCheckStatus;
   const branchCards = new Map<string, { blobSha: string; content: string }>();
   const branchHeads = new Map<string, string>();
   const branchPublicationRequests = new Map<string, Record<string, unknown>>();
   const mainCards = new Map<string, { blobSha: string; content: string }>();
+  let recentPublicationRequests: Record<string, unknown>[] = [];
   const requests = new Map<string, Record<string, unknown>>();
   const github = {
     autoMergeRequests: [] as Record<string, unknown>[],
@@ -1080,13 +1407,16 @@ function createGitHubProviderFake(options: {
       github.autoMergeRequests.push(input);
     }),
     findPublicationRequest: vi.fn(async (requestId: string) => requests.get(requestId) ?? null),
-    getBaseBranchHead: vi.fn(async () => "main-sha"),
+    getBaseBranchHead: vi.fn(async () => {
+      getBaseBranchHeadHook?.();
+      return "main-sha";
+    }),
     getBranchHead: vi.fn(async (input: Record<string, unknown>) => branchHeads.get(String(input.branch)) ?? null),
     getPublicationBranchRequest: vi.fn(async (requestId: string) => branchPublicationRequests.get(requestId) ?? null),
     getCatalogCard: vi.fn(async (cardId: string, readOptions?: Record<string, unknown>) => {
       const ref = typeof readOptions?.ref === "string" ? readOptions.ref : null;
 
-      return ref === null
+      return ref === null || ref === "main-sha"
         ? mainCards.get(cardId) ?? null
         : branchCards.get(`${ref}:${cardId}`) ?? null;
     }),
@@ -1098,6 +1428,13 @@ function createGitHubProviderFake(options: {
       configured: options.requiredCheckConfigured,
       status: requiredCheckStatus
     })),
+    listRecentPublicationRequests: vi.fn(async (input: Record<string, unknown>) => {
+      const limit = typeof input.limit === "number" ? input.limit : recentPublicationRequests.length;
+      return recentPublicationRequests.slice(0, limit);
+    }),
+    onGetBaseBranchHead(callback: () => void) {
+      getBaseBranchHeadHook = callback;
+    },
     setBranchCard(branch: string, cardId: string, value: { blobSha: string; content: string }) {
       branchCards.set(`${branch}:${cardId}`, value);
     },
@@ -1128,6 +1465,12 @@ function createGitHubProviderFake(options: {
     },
     setMainCard(cardId: string, value: { blobSha: string; content: string }) {
       mainCards.set(cardId, value);
+    },
+    deleteMainCard(cardId: string) {
+      mainCards.delete(cardId);
+    },
+    setRecentPublicationRequests(value: Record<string, unknown>[]) {
+      recentPublicationRequests = value;
     }
   };
 
@@ -1135,6 +1478,7 @@ function createGitHubProviderFake(options: {
 }
 
 function startInput(overrides: Record<string, unknown>): Record<string, unknown> {
+  const lifecycleAction = overrides.lifecycleAction ?? defaultLifecycleAction(overrides);
   return {
     actor: {
       email: "admin@example.test",
@@ -1143,16 +1487,44 @@ function startInput(overrides: Record<string, unknown>): Record<string, unknown>
       sessionId: "00000000-0000-4000-8000-000000000002",
       tokenId: "00000000-0000-4000-8000-000000000003"
     },
+    lifecycleAction,
     now: fixedNow(),
     siteId: "00000000-0000-4000-8000-000000000101",
     ...overrides
   };
 }
 
+function defaultLifecycleAction(overrides: Record<string, unknown>): "delete" | "publish" | "unpublish" {
+  if (overrides.action === "delete") {
+    return "delete";
+  }
+  if (
+    overrides.action === "update" &&
+    typeof overrides.card === "object" &&
+    overrides.card !== null &&
+    !Array.isArray(overrides.card) &&
+    (overrides.card as { active?: unknown }).active === false
+  ) {
+    return "unpublish";
+  }
+
+  return "publish";
+}
+
 function statusContext(): Record<string, unknown> {
   return {
     actor: startInput({}).actor,
     now: fixedNow()
+  };
+}
+
+function systemActor(): Record<string, unknown> {
+  return {
+    email: "system@web00.local",
+    id: "00000000-0000-4000-8000-000000000901",
+    role: "admin",
+    sessionId: "00000000-0000-4000-8000-000000000902",
+    tokenId: "00000000-0000-4000-8000-000000000903"
   };
 }
 
@@ -1209,6 +1581,7 @@ async function expectedRequestFingerprint(input: Record<string, unknown>): Promi
         ? null
         : createHash("sha256").update(serializeCanonicalCatalogCard(input.card as Record<string, unknown>)).digest("hex"),
       expectedBlobSha: input.expectedBlobSha,
+      lifecycleAction: input.lifecycleAction,
       requestContract: "web00-direct-pages-catalog-publication-v1",
       siteId: input.siteId
     }))

@@ -7,6 +7,7 @@ import { parseSiteIdParams } from "../sites/site.schemas.js";
 import type { AdminPublicationService } from "./publication.service.js";
 import type {
   PagesCatalogPublicationAction,
+  PagesCatalogPublicationLifecycleAction,
   PagesCatalogPublicationService
 } from "./pages-publication.service.js";
 
@@ -21,6 +22,7 @@ const pagesPublicationInputSchema = z.object({
   card: z.record(z.string(), z.unknown()).nullable(),
   cardId: cardIdSchema,
   expectedBlobSha: z.string().min(1).nullable(),
+  lifecycleAction: z.enum(["publish", "unpublish", "delete"]),
   requestId: z.string().uuid(),
   siteId: z.string().uuid()
 }).strict();
@@ -123,6 +125,7 @@ export function createAdminPublicationController(options: {
             card: input.card,
             cardId: input.cardId,
             expectedBlobSha: input.expectedBlobSha,
+            lifecycleAction: input.lifecycleAction,
             now: now(),
             requestId: input.requestId,
             siteId: input.siteId
@@ -173,6 +176,7 @@ function parsePagesPublicationInput(input: unknown): {
   card: Record<string, unknown> | null;
   cardId: string;
   expectedBlobSha: string | null;
+  lifecycleAction: PagesCatalogPublicationLifecycleAction;
   requestId: string;
   siteId: string;
 } {

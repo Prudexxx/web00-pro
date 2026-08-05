@@ -43,7 +43,7 @@ jobs:
 
           changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
           printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -Ev '^(catalog/cards/[^/]+\.json|scripts/build-pages-catalog\.mjs|tests/frontend/(pages-catalog-generator|catalog-api-client|catalog-normalization|catalog-source-policy)\.test\.mjs)$' | grep -q .; then
+          if printf '%s\n' "$changed" | grep -Ev '^(catalog/cards/[^/]+\.json|assets/js/data\.js)$' | grep -q .; then
             echo "Catalog PR contains changes outside the approved scope." >&2
             exit 1
           fi
@@ -57,14 +57,13 @@ jobs:
           node scripts/build-pages-catalog.mjs
           node scripts/build-pages-catalog.mjs --check
 
-      - name: Run Phase 1 catalog tests
+      - name: Run mutable catalog PR tests
         if: ${{ startsWith(github.head_ref, 'catalog/publish/') }}
         shell: bash
         run: |
           set -euo pipefail
 
           node --test \
-            tests/frontend/pages-catalog-generator.test.mjs \
+            tests/frontend/pages-catalog-pr-validation.test.mjs \
             tests/frontend/catalog-api-client.test.mjs \
-            tests/frontend/catalog-normalization.test.mjs \
             tests/frontend/catalog-source-policy.test.mjs

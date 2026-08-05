@@ -52,6 +52,45 @@ describe("admin site repository query helpers", () => {
     expect(tx.publicCatalogControl.findUnique).not.toHaveBeenCalled();
     expect(tx.publicCatalogControl.upsert).not.toHaveBeenCalled();
   });
+
+  it("records nullable audit actor ids for Direct Pages system recovery lifecycle mutations", async () => {
+    const before = siteRecord();
+    const after = siteRecord({
+      publishedAt: null,
+      status: "draft"
+    });
+    const tx = {
+      auditLog: { create: vi.fn().mockResolvedValue({}) },
+      publicCatalogControl: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        upsert: vi.fn().mockResolvedValue({})
+      },
+      site: {
+        findUnique: vi.fn().mockResolvedValue(before),
+        findUniqueOrThrow: vi.fn().mockResolvedValue(after),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 })
+      }
+    };
+    const prisma = {
+      $transaction: vi.fn(async (callback) => callback(tx))
+    };
+    const repository = createPrismaAdminSiteRepository({ prisma: prisma as never });
+
+    await repository.unpublishSite(before.id, systemRecoveryContext());
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: "site.unpublish",
+        actorUserId: null
+      })
+    }));
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: "public_catalog.dirty",
+        actorUserId: null
+      })
+    }));
+  });
 });
 
 function adminContext(): AdminMutationContext {
@@ -65,6 +104,20 @@ function adminContext(): AdminMutationContext {
     },
     now: new Date("2026-08-01T12:00:00.000Z"),
     requestId: "req_admin_site_noop"
+  };
+}
+
+function systemRecoveryContext(): AdminMutationContext {
+  return {
+    actor: {
+      email: "system@web00.local",
+      id: "00000000-0000-4000-8000-000000000901",
+      role: "admin",
+      sessionId: "00000000-0000-4000-8000-000000000902",
+      tokenId: "00000000-0000-4000-8000-000000000903"
+    },
+    now: new Date("2026-08-05T12:00:00.000Z"),
+    requestId: "00000000-0000-4000-8000-000000002310"
   };
 }
 

@@ -24,6 +24,7 @@ import type { PrismaClient } from "./generated/prisma/client.js";
 import { createLogger, type AppLogger } from "./lib/logger.js";
 import { CATALOG_PUBLIC_ASSET_ORIGIN } from "./lib/catalog-asset-url.js";
 import { createAccessTokenService } from "./modules/auth/access-token.service.js";
+import type { AuthenticatedPrincipal } from "./modules/auth/auth.types.js";
 import { createAuthAuditService } from "./modules/auth/auth-audit.js";
 import { createAuthCookieService } from "./modules/auth/auth-cookie.js";
 import { createCredentialVerifier } from "./modules/auth/auth-credentials.service.js";
@@ -42,6 +43,7 @@ import { createAdminPublicCatalogService } from "./modules/admin/public-catalog/
 import { createPrismaAdminPublicationRepository } from "./modules/admin/publication/publication.repository.js";
 import {
   createAdminPublicationService,
+  createPagesCatalogPublicationReconciliationWorker,
   createPagesCatalogPublicationService
 } from "./modules/admin/publication/publication.service.js";
 import { createGitHubPagesCatalogProviderFromEnv } from "./modules/admin/publication/pages-publication.github.js";
@@ -110,6 +112,14 @@ export interface StartedServer {
   publicCatalogV2Runtime?: PublicCatalogV2Runtime;
   server: Server;
 }
+
+const DIRECT_PAGES_SYSTEM_ACTOR: AuthenticatedPrincipal = {
+  email: "system@web00.local",
+  id: "00000000-0000-4000-8000-000000000901",
+  role: "admin",
+  sessionId: "00000000-0000-4000-8000-000000000902",
+  tokenId: "00000000-0000-4000-8000-000000000903"
+};
 
 export function startServer(options: StartServerOptions): StartedServer {
   const logger = options.logger ?? createLogger({ env: options.env });
@@ -210,6 +220,46 @@ export function startServer(options: StartServerOptions): StartedServer {
       prisma
     })
   });
+  const pagesPublicationService = createPagesCatalogPublicationService({
+    allowedMediaOrigin: new URL(options.storageConfig.publicBaseUrl).origin,
+    github: createGitHubPagesCatalogProviderFromEnv(process.env),
+    lifecycleFinalizer: {
+      async finalize(input) {
+        const context = {
+          actor: input.actor,
+          now: input.now,
+          requestId: input.requestId
+        };
+        const current = await adminSiteService.getSite(input.siteId, input.actor);
+
+        if (input.lifecycleAction === "delete") {
+          if (typeof current.deletedAt === "string" && current.deletedAt.length > 0) {
+            return;
+          }
+          await adminSiteService.deleteSite(input.siteId, context);
+          return;
+        }
+        if (input.lifecycleAction === "unpublish") {
+          if (current.status === "draft" && current.publishedAt === null) {
+            return;
+          }
+          await adminSiteService.unpublishSite(input.siteId, context);
+          return;
+        }
+
+        if (current.status === "published" && current.publishedAt !== null && current.deletedAt === null) {
+          return;
+        }
+        await adminSiteService.publishSite(input.siteId, context);
+      }
+    },
+    now: options.now ?? (() => new Date())
+  });
+  const pagesPublicationReconciliationWorker = createPagesCatalogPublicationReconciliationWorker({
+    actor: DIRECT_PAGES_SYSTEM_ACTOR,
+    now: options.now ?? (() => new Date()),
+    service: pagesPublicationService
+  });
   const adminRouterOptions = {
     auditLogService: createAdminAuditLogService({
       repository: createPrismaAdminAuditLogRepository({ prisma })
@@ -248,41 +298,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     publicationService: createAdminPublicationService({
       repository: createPrismaAdminPublicationRepository({ prisma })
     }),
-    pagesPublicationService: createPagesCatalogPublicationService({
-      allowedMediaOrigin: new URL(options.storageConfig.publicBaseUrl).origin,
-      github: createGitHubPagesCatalogProviderFromEnv(process.env),
-      lifecycleFinalizer: {
-        async finalize(input) {
-          const context = {
-            actor: input.actor,
-            now: input.now,
-            requestId: input.requestId
-          };
-          const current = await adminSiteService.getSite(input.siteId, input.actor);
-
-          if (input.lifecycleAction === "delete") {
-            if (typeof current.deletedAt === "string" && current.deletedAt.length > 0) {
-              return;
-            }
-            await adminSiteService.deleteSite(input.siteId, context);
-            return;
-          }
-          if (input.lifecycleAction === "unpublish") {
-            if (current.status === "draft" && current.publishedAt === null) {
-              return;
-            }
-            await adminSiteService.unpublishSite(input.siteId, context);
-            return;
-          }
-
-          if (current.status === "published" && current.publishedAt !== null && current.deletedAt === null) {
-            return;
-          }
-          await adminSiteService.publishSite(input.siteId, context);
-        }
-      },
-      now: options.now ?? (() => new Date())
-    }),
+    pagesPublicationService,
     publicCatalogService: createAdminPublicCatalogService({
       dryRunService: publicCatalogDryRunService,
       repository: createPrismaAdminPublicCatalogRepository({ prisma }),
@@ -325,6 +341,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     storageCleanupWorker.start();
   }
   publicCatalogV2Runtime?.start();
+  pagesPublicationReconciliationWorker.start();
 
   server.listen(options.env.PORT, "0.0.0.0", () => {
     logLifecycle({
@@ -341,6 +358,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       createShutdownHandler(server, {
         disconnect: async () => {
           await Promise.all([
+            pagesPublicationReconciliationWorker.stop(),
             publicCatalogV2Runtime?.stop(),
             storageCleanupWorker.stop()
           ]);
@@ -357,6 +375,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       createShutdownHandler(server, {
         disconnect: async () => {
           await Promise.all([
+            pagesPublicationReconciliationWorker.stop(),
             publicCatalogV2Runtime?.stop(),
             storageCleanupWorker.stop()
           ]);

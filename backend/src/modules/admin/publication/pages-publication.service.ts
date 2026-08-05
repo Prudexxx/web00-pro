@@ -87,6 +87,7 @@ export interface PagesCatalogGitHubProvider {
     cardId: string;
     expectedBlobSha: string | null;
     fromSha: string;
+    lifecycleAction: PagesCatalogPublicationLifecycleAction;
     message: string;
     requestFingerprint: string;
     requestId: string;
@@ -102,6 +103,7 @@ export interface PagesCatalogGitHubProvider {
   getPublicationBranchRequest?(requestId: string): Promise<PagesCatalogPublicationRecord | null>;
   getRepositorySetup?(): Promise<{ configured: boolean; code?: "GITHUB_REPOSITORY_SETUP_REQUIRED" }>;
   getRequiredCatalogCheckStatus(request: PagesCatalogPublicationRecord): Promise<PagesCatalogRequiredCheckStatus>;
+  listRecentPublicationRequests?(input: { limit: number }): Promise<PagesCatalogPublicationRecord[]>;
 }
 
 export interface PagesCatalogPublicationStartInput {
@@ -110,6 +112,7 @@ export interface PagesCatalogPublicationStartInput {
   card: Record<string, unknown> | null;
   cardId: string;
   expectedBlobSha: string | null;
+  lifecycleAction: PagesCatalogPublicationLifecycleAction;
   now: Date;
   requestId: string;
   siteId?: string | undefined;
@@ -141,10 +144,27 @@ export interface PagesCatalogPublicationService {
     requestId: string,
     context?: { actor: AuthenticatedPrincipal; now: Date }
   ): Promise<PagesCatalogPublicationDto>;
+  reconcilePagesPublicationLifecycle(input: {
+    actor: AuthenticatedPrincipal;
+    limit?: number | undefined;
+    now: Date;
+  }): Promise<PagesCatalogPublicationReconciliationDto>;
   startPagesPublication(input: PagesCatalogPublicationStartInput): Promise<PagesCatalogPublicationDto>;
 }
 
 export type PagesCatalogPublicationLifecycleAction = "delete" | "publish" | "unpublish";
+
+export interface PagesCatalogPublicationReconciliationDto {
+  failed: number;
+  finalized: number;
+  scanned: number;
+}
+
+export interface PagesCatalogPublicationReconciliationWorker {
+  reconcileOnce(): Promise<PagesCatalogPublicationReconciliationDto>;
+  start(): void;
+  stop(): Promise<void>;
+}
 
 export interface PagesCatalogPublicationLifecycleFinalizer {
   finalize(input: {
@@ -155,6 +175,57 @@ export interface PagesCatalogPublicationLifecycleFinalizer {
     requestId: string;
     siteId: string;
   }): Promise<void> | void;
+}
+
+export function createPagesCatalogPublicationReconciliationWorker(options: {
+  actor: AuthenticatedPrincipal;
+  intervalMs?: number | undefined;
+  limit?: number | undefined;
+  now?: () => Date;
+  service: PagesCatalogPublicationService;
+}): PagesCatalogPublicationReconciliationWorker {
+  const intervalMs = Number.isFinite(options.intervalMs) && options.intervalMs !== undefined
+    ? Math.max(60_000, Math.trunc(options.intervalMs))
+    : 300_000;
+  const limit = normalizeReconciliationLimit(options.limit);
+  const now = options.now ?? (() => new Date());
+  let interval: ReturnType<typeof setInterval> | null = null;
+  let running = false;
+
+  async function reconcileOnce(): Promise<PagesCatalogPublicationReconciliationDto> {
+    if (running) {
+      return { failed: 0, finalized: 0, scanned: 0 };
+    }
+    running = true;
+    try {
+      return await options.service.reconcilePagesPublicationLifecycle({
+        actor: options.actor,
+        limit,
+        now: now()
+      });
+    } finally {
+      running = false;
+    }
+  }
+
+  return {
+    reconcileOnce,
+    start() {
+      if (interval !== null) {
+        return;
+      }
+      interval = setInterval(() => {
+        void reconcileOnce();
+      }, intervalMs);
+      interval.unref?.();
+    },
+    async stop() {
+      if (interval !== null) {
+        clearInterval(interval);
+        interval = null;
+      }
+    }
+  };
 }
 
 const CARD_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -229,10 +300,47 @@ export function createPagesCatalogPublicationService(options: {
       });
     },
 
+    async reconcilePagesPublicationLifecycle(input) {
+      const limit = normalizeReconciliationLimit(input.limit);
+      const recent = options.github.listRecentPublicationRequests === undefined
+        ? []
+        : await options.github.listRecentPublicationRequests({ limit });
+      let failed = 0;
+      let finalized = 0;
+
+      for (const request of recent) {
+        if (!isRecoverablePublicationRequest(request)) {
+          continue;
+        }
+
+        try {
+          const result = await reconcileGitHubPublicationStatus(options.github, request.requestId!, request, {
+            actor: input.actor,
+            lifecycleFinalizer: options.lifecycleFinalizer,
+            now: input.now,
+            siteId: request.siteId
+          });
+          if (result.status === "published") {
+            finalized += 1;
+          } else if (result.status === "failed") {
+            failed += 1;
+          }
+        } catch {
+          failed += 1;
+        }
+      }
+
+      return {
+        failed,
+        finalized,
+        scanned: recent.length
+      };
+    },
+
     async startPagesPublication(input) {
       assertStartInput(input);
       assertCardIdentity(input);
-      const lifecycleAction = lifecycleActionForStartInput(input);
+      const lifecycleAction = input.lifecycleAction;
       const requestFingerprint = await createPagesPublicationRequestFingerprint(input, serializeCanonicalCatalogCard);
       const branch = `catalog/publish/${input.requestId}`;
       const existing = await options.github.findPublicationRequest(input.requestId);
@@ -253,11 +361,11 @@ export function createPagesCatalogPublicationService(options: {
       await assertRepositoryConfigured(options.github);
 
       const path = catalogCardPath(input.cardId);
-      const current = await options.github.getCatalogCard(input.cardId);
+      const mainSha = await options.github.getBaseBranchHead();
+      const current = await options.github.getCatalogCard(input.cardId, { ref: mainSha });
       assertCardMedia(input.card, allowedMediaOrigin, current, input.cardId);
       const mutation = await planCardMutation(input, current, serializeCanonicalCatalogCard);
 
-      const mainSha = await options.github.getBaseBranchHead();
       const branchState = branchRequest === null
         ? await createPublicationMarkerBranch(options.github, {
             branch,
@@ -294,7 +402,7 @@ export function createPagesCatalogPublicationService(options: {
         requestId: input.requestId,
         siteId: input.siteId
       });
-      const commit = planBranchCommit(mutation, branchCurrent);
+      const commit = planBranchCommit(mutation, branchCurrent, branchState.existed);
       if (commit?.kind === "delete") {
         await options.github.deleteCardCommit({
           branch,
@@ -405,6 +513,7 @@ async function createPagesPublicationRequestFingerprint(
         ? null
         : createHash("sha256").update(await serializeCanonicalCatalogCard(input.card)).digest("hex"),
       expectedBlobSha: input.expectedBlobSha,
+      lifecycleAction: input.lifecycleAction,
       requestContract: "web00-direct-pages-catalog-publication-v1",
       siteId: input.siteId
     }))
@@ -455,6 +564,9 @@ async function planCardMutation(
 > {
   if (input.action === "delete") {
     if (current === null) {
+      if (input.expectedBlobSha !== null) {
+        throw versionConflict();
+      }
       return { kind: "noop" };
     }
     if (input.expectedBlobSha === null || input.expectedBlobSha !== current.blobSha) {
@@ -467,6 +579,16 @@ async function planCardMutation(
     };
   }
 
+  if (input.lifecycleAction === "unpublish" && input.card === null) {
+    if (current === null) {
+      if (input.expectedBlobSha !== null) {
+        throw versionConflict();
+      }
+      return { kind: "noop" };
+    }
+    throw validationError("card", "Inactive card is required to unpublish an existing catalog card.");
+  }
+
   if (input.card === null) {
     throw validationError("card", "Card is required for create/update.");
   }
@@ -475,9 +597,6 @@ async function planCardMutation(
 
   if (input.action === "create") {
     if (current !== null) {
-      if (current.content === content) {
-        return { kind: "noop" };
-      }
       throw versionConflict();
     }
 
@@ -560,11 +679,12 @@ async function createPublicationMarkerCommit(
     cardId: input.input.cardId,
     expectedBlobSha: input.input.expectedBlobSha,
     fromSha: input.fromSha,
+    lifecycleAction: input.input.lifecycleAction,
     message: renderCommitMessage({
       action: input.input.action,
       cardId: input.input.cardId,
       expectedBlobSha: input.input.expectedBlobSha,
-      lifecycleAction: lifecycleActionForStartInput(input.input),
+      lifecycleAction: input.input.lifecycleAction,
       requestFingerprint: input.requestFingerprint,
       requestId: input.input.requestId,
       siteId: input.input.siteId
@@ -591,24 +711,46 @@ function planBranchCommit(
   mutation:
     | { kind: "delete"; expectedBlobSha: string }
     | { content: string; expectedBlobSha: string | null; kind: "write" },
-  current: PagesCatalogCardFile | null
+  current: PagesCatalogCardFile | null,
+  branchExisted: boolean
 ):
   | { content: string; expectedBlobSha: string | null; kind: "write" }
   | { expectedBlobSha: string; kind: "delete" }
   | null {
+  if (!branchExisted) {
+    return mutation;
+  }
+
   if (mutation.kind === "delete") {
-    return current === null
-      ? null
-      : { expectedBlobSha: current.blobSha, kind: "delete" };
+    if (current === null) {
+      return null;
+    }
+    if (current.blobSha !== mutation.expectedBlobSha) {
+      throw idempotencyKeyReused();
+    }
+
+    return mutation;
   }
 
   if (current?.content === mutation.content) {
     return null;
   }
 
+  if (mutation.expectedBlobSha === null) {
+    if (current !== null) {
+      throw idempotencyKeyReused();
+    }
+
+    return mutation;
+  }
+
+  if (current === null || current.blobSha !== mutation.expectedBlobSha) {
+    throw idempotencyKeyReused();
+  }
+
   return {
     content: mutation.content,
-    expectedBlobSha: current?.blobSha ?? mutation.expectedBlobSha,
+    expectedBlobSha: mutation.expectedBlobSha,
     kind: "write"
   };
 }
@@ -833,21 +975,6 @@ function lifecycleActionForPublication(action: PagesCatalogPublicationAction): P
   return "publish";
 }
 
-function lifecycleActionForStartInput(input: PagesCatalogPublicationStartInput): PagesCatalogPublicationLifecycleAction {
-  if (input.action === "delete") {
-    return "delete";
-  }
-  if (
-    input.action === "update" &&
-    input.card !== null &&
-    input.card.active === false
-  ) {
-    return "unpublish";
-  }
-
-  return "publish";
-}
-
 function publicationDto(input: {
   action: PagesCatalogPublicationAction;
   cardId: string;
@@ -882,6 +1009,47 @@ function isConflictedPullRequest(request: PagesCatalogPublicationRecord): boolea
   return request.mergeableState === "dirty" ||
     request.mergeableState === "conflicting" ||
     request.mergeableState === "unknown_conflict";
+}
+
+function isRecoverablePublicationRequest(request: PagesCatalogPublicationRecord): boolean {
+  return typeof request.branch === "string" &&
+    typeof request.requestId === "string" &&
+    UUID_RE.test(request.requestId) &&
+    request.branch === `catalog/publish/${request.requestId}` &&
+    typeof request.requestFingerprint === "string" &&
+    /^[a-f0-9]{64}$/i.test(request.requestFingerprint) &&
+    request.state === "merged" &&
+    request.pagesStatus === "success" &&
+    isRecoverableActionPair(request.action, request.lifecycleAction) &&
+    typeof request.cardId === "string" &&
+    CARD_ID_RE.test(request.cardId) &&
+    typeof request.siteId === "string" &&
+    UUID_RE.test(request.siteId);
+}
+
+function isRecoverableActionPair(
+  action: PagesCatalogPublicationAction | undefined,
+  lifecycleAction: PagesCatalogPublicationLifecycleAction | undefined
+): boolean {
+  if (action === "delete") {
+    return lifecycleAction === "delete";
+  }
+  if (action === "create") {
+    return lifecycleAction === "publish";
+  }
+  if (action === "update") {
+    return lifecycleAction === "publish" || lifecycleAction === "unpublish";
+  }
+
+  return false;
+}
+
+function normalizeReconciliationLimit(value: number | undefined): number {
+  if (!Number.isFinite(value) || value === undefined) {
+    return 10;
+  }
+
+  return Math.max(1, Math.min(20, Math.trunc(value)));
 }
 
 function labelsForStatus(status: PagesCatalogPublicationStatus): {
@@ -992,9 +1160,45 @@ function assertStartInput(input: PagesCatalogPublicationStartInput): void {
   if (input.action !== "create" && input.action !== "update" && input.action !== "delete") {
     throw validationError("action", "Unsupported publication action.");
   }
+  if (input.lifecycleAction !== "publish" && input.lifecycleAction !== "unpublish" && input.lifecycleAction !== "delete") {
+    throw validationError("lifecycleAction", "Unsupported publication lifecycle action.");
+  }
   if (input.action !== "create" && input.expectedBlobSha !== null && !/^[a-zA-Z0-9_-]+$/.test(input.expectedBlobSha)) {
     throw validationError("expectedBlobSha", "Invalid expected blob SHA.");
   }
+  assertLifecycleActionContract(input);
+}
+
+function assertLifecycleActionContract(input: PagesCatalogPublicationStartInput): void {
+  if (input.action === "delete") {
+    if (input.lifecycleAction !== "delete" || input.card !== null) {
+      throw validationError("lifecycleAction", "Delete publication must use delete lifecycle action.");
+    }
+    return;
+  }
+
+  if (input.action === "create") {
+    if (input.lifecycleAction !== "publish" || input.card === null || input.card.active === false) {
+      throw validationError("lifecycleAction", "Create publication must publish an active catalog card.");
+    }
+    return;
+  }
+
+  if (input.lifecycleAction === "publish") {
+    if (input.card === null || input.card.active === false) {
+      throw validationError("lifecycleAction", "Publish lifecycle requires an active catalog card.");
+    }
+    return;
+  }
+
+  if (input.lifecycleAction === "unpublish") {
+    if (input.card !== null && input.card.active !== false) {
+      throw validationError("lifecycleAction", "Unpublish lifecycle requires an inactive card or missing-card no-op.");
+    }
+    return;
+  }
+
+  throw validationError("lifecycleAction", "Update publication cannot use delete lifecycle action.");
 }
 
 function assertCardIdentity(input: PagesCatalogPublicationStartInput): void {

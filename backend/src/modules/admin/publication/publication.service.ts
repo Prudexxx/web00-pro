@@ -7,9 +7,11 @@ import {
   type PublicationOperationDto
 } from "../../public-catalog-v2/public-catalog-v2.publication.js";
 export {
+  createPagesCatalogPublicationReconciliationWorker,
   createPagesCatalogPublicationService,
   type PagesCatalogGitHubProvider,
   type PagesCatalogPublicationDto,
+  type PagesCatalogPublicationReconciliationWorker,
   type PagesCatalogPublicationService
 } from "./pages-publication.service.js";
 

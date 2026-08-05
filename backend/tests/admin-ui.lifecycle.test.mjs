@@ -157,7 +157,8 @@ describe("admin site lifecycle UI", () => {
       body: expect.objectContaining({
         action: "create",
         cardId: "crm-site",
-        expectedBlobSha: null
+        expectedBlobSha: null,
+        lifecycleAction: "publish"
       }),
       method: "POST"
     });

@@ -78,6 +78,7 @@ describe("Direct Pages GitHub provider", () => {
                 "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b001",
                 "WEB00-CARD-ID: phase-two-pages-status",
                 "WEB00-ACTION: update",
+                "WEB00-LIFECYCLE-ACTION: publish",
                 `WEB00-FINGERPRINT: ${"c".repeat(64)}`
               ].join("\n"),
               head: { ref: "catalog/publish/00000000-0000-4000-8000-00000000b001" },
@@ -117,6 +118,41 @@ describe("Direct Pages GitHub provider", () => {
       pagesStatus: "success",
       state: "merged"
     });
+  });
+
+  it("RECOVERY ignores catalog publication PRs without an explicit lifecycle marker", async () => {
+    const provider = createGitHubPagesCatalogProvider({
+      config,
+      fetchFn: async (url) => {
+        const text = String(url);
+
+        if (text.includes("/pulls?")) {
+          return jsonResponse(200, [
+            {
+              auto_merge: null,
+              body: [
+                "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b002",
+                "WEB00-CARD-ID: phase-two-missing-lifecycle",
+                "WEB00-ACTION: update",
+                `WEB00-FINGERPRINT: ${"d".repeat(64)}`
+              ].join("\n"),
+              head: { ref: "catalog/publish/00000000-0000-4000-8000-00000000b002" },
+              html_url: "https://github.example.test/pull/78",
+              merge_commit_sha: "a".repeat(40),
+              merged_at: "2026-08-05T12:00:00Z",
+              node_id: "PR_node_missing_lifecycle",
+              number: 78,
+              state: "closed"
+            }
+          ]);
+        }
+
+        throw new Error(`Unexpected GitHub URL ${text}`);
+      }
+    });
+
+    await expect(provider.findPublicationRequest("00000000-0000-4000-8000-00000000b002")).resolves.toBeNull();
+    await expect(provider.listRecentPublicationRequests?.({ limit: 5 })).resolves.toEqual([]);
   });
 });
 

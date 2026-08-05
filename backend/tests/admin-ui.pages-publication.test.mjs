@@ -83,6 +83,7 @@ describe("Direct Pages publication admin UI", () => {
       action: "update",
       cardId: "synthetic-site",
       expectedBlobSha: "sha-main-card",
+      lifecycleAction: "publish",
       requestId: REQUEST_ID
     });
     expect(post.options.body.card).toMatchObject({
@@ -204,7 +205,8 @@ describe("Direct Pages publication admin UI", () => {
       action: "delete",
       card: null,
       cardId: "synthetic-site",
-      expectedBlobSha: "sha-main-card"
+      expectedBlobSha: "sha-main-card",
+      lifecycleAction: "delete"
     });
     await waitFor(() => expect(onDeleteStatus).toHaveBeenLastCalledWith("Опубликовано"));
   });
@@ -274,7 +276,8 @@ describe("Direct Pages publication admin UI", () => {
     expect(publishRequests.find((request) => request.requestPath === "/api/admin/publication/pages").options.body).toMatchObject({
       action: "create",
       cardId: "synthetic-site",
-      expectedBlobSha: null
+      expectedBlobSha: null,
+      lifecycleAction: "publish"
     });
 
     const unpublishRequests = [];
@@ -340,7 +343,61 @@ describe("Direct Pages publication admin UI", () => {
       action: "update",
       card: expect.objectContaining({ active: false }),
       cardId: "synthetic-site",
-      expectedBlobSha: "sha-main-card"
+      expectedBlobSha: "sha-main-card",
+      lifecycleAction: "unpublish"
+    });
+
+    const missingUnpublishRequests = [];
+    const missingUnpublishScreen = createSitesListScreen({
+      apiClient: createLifecycleApi({
+        onRequest(requestPath, options = {}) {
+          missingUnpublishRequests.push({ options, requestPath });
+          if (requestPath === "/api/admin/sites") {
+            return Promise.resolve({ data: [siteFixture({ status: "published" })], meta: metaFixture(1) });
+          }
+          if (requestPath === `/api/admin/sites/${SITE_ID}` && options.method === "GET") {
+            return Promise.resolve({ data: siteFixture({ status: "published" }) });
+          }
+          if (requestPath === "/api/admin/publication/pages/card/synthetic-site" && options.method === "GET") {
+            return Promise.resolve({ data: { blobSha: null, card: null, cardId: "synthetic-site" } });
+          }
+          if (requestPath === "/api/admin/publication/pages" && options.method === "POST") {
+            return Promise.resolve({
+              data: publicationDto({
+                action: "update",
+                buttonLabel: "Опубликовано",
+                operationId: "00000000-0000-4000-8000-000000000608",
+                requestId: "00000000-0000-4000-8000-000000000608",
+                stableStatus: "Опубликовано",
+                status: "published",
+                statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000608"
+              })
+            });
+          }
+          throw new Error(`Unexpected request ${requestPath}`);
+        }
+      }),
+      documentRef: createFakeDocument(),
+      onCreate: vi.fn(),
+      onEdit: vi.fn(),
+      onImages: vi.fn(),
+      onStatus: vi.fn(),
+      pollIntervalMs: 0,
+      role: "admin",
+      storage: createMemoryStorage()
+    });
+
+    await missingUnpublishScreen.load();
+    missingUnpublishScreen.element.querySelector('[data-lifecycle-action="unpublish"]').dispatchEvent(fakeEvent("click"));
+    missingUnpublishScreen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+    await waitFor(() => missingUnpublishRequests.some((request) => request.requestPath === "/api/admin/publication/pages"));
+
+    expect(missingUnpublishRequests.find((request) => request.requestPath === "/api/admin/publication/pages").options.body).toMatchObject({
+      action: "update",
+      card: null,
+      cardId: "synthetic-site",
+      expectedBlobSha: null,
+      lifecycleAction: "unpublish"
     });
 
     storage.setItem("web00_admin_publication_reconnect_v1", JSON.stringify({

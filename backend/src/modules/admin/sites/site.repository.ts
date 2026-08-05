@@ -27,6 +27,8 @@ import {
 } from "./site-create-observability.js";
 
 const SITE_CREATE_DRAFT_ACTION = "site.create_draft";
+const DIRECT_PAGES_SYSTEM_ACTOR_ID = "00000000-0000-4000-8000-000000000901";
+const DIRECT_PAGES_SYSTEM_ACTOR_EMAIL = "system@web00.local";
 const CREATE_FINGERPRINT_FIELDS = [
   "categoryId",
   "deliveryLabel",
@@ -289,11 +291,11 @@ export function createPrismaAdminSiteRepository(
           context,
           entityId: id
         });
-        await markPublicCatalogDirty(tx, "site.permanentDelete", {
-          actorUserId: context.actor.id,
-          reasonContext: { siteId: id },
-          requestId: context.requestId
-        });
+        await markPublicCatalogDirty(
+          tx,
+          "site.permanentDelete",
+          publicCatalogDirtyContext(context, { siteId: id })
+        );
       });
     },
     async publishSite(id, context) {
@@ -423,11 +425,11 @@ export function createPrismaAdminSiteRepository(
               after as AdminSiteRecord
             )
           ) {
-            await markPublicCatalogDirty(tx, "site.update", {
-              actorUserId: context.actor.id,
-              reasonContext: { siteId: id, slug: after.slug },
-              requestId: context.requestId
-            });
+            await markPublicCatalogDirty(
+              tx,
+              "site.update",
+              publicCatalogDirtyContext(context, { siteId: id, slug: after.slug })
+            );
           }
 
           return after as AdminSiteRecord;
@@ -492,11 +494,11 @@ async function lifecycleUpdate(
     });
 
     if (hasPublicProjection(before) || hasPublicProjection(after)) {
-      await markPublicCatalogDirty(tx, options.action, {
-        actorUserId: context.actor.id,
-        reasonContext: { siteId: id, slug: after.slug },
-        requestId: context.requestId
-      });
+      await markPublicCatalogDirty(
+        tx,
+        options.action,
+        publicCatalogDirtyContext(context, { siteId: id, slug: after.slug })
+      );
     }
 
     return after;
@@ -587,7 +589,7 @@ async function createSiteAudit(
   await tx.auditLog.create({
     data: {
       action: input.action,
-      actorUserId: input.context.actor.id,
+      actorUserId: auditActorUserId(input.context),
       afterJson: input.afterJson,
       beforeJson: input.beforeJson,
       entityId: input.entityId,
@@ -633,6 +635,28 @@ function malformedCreateDraftIdempotencyLockResult(): AppError {
     message: "Internal server error.",
     statusCode: 500
   });
+}
+
+function auditActorUserId(context: AdminMutationContext): string | null {
+  return isDirectPagesSystemActor(context) ? null : context.actor.id;
+}
+
+function publicCatalogDirtyContext(
+  context: AdminMutationContext,
+  reasonContext: Record<string, unknown>
+): { actorUserId?: string; reasonContext: Record<string, unknown>; requestId: string } {
+  const actorUserId = auditActorUserId(context);
+
+  return {
+    ...(actorUserId === null ? {} : { actorUserId }),
+    reasonContext,
+    requestId: context.requestId
+  };
+}
+
+function isDirectPagesSystemActor(context: AdminMutationContext): boolean {
+  return context.actor.id === DIRECT_PAGES_SYSTEM_ACTOR_ID &&
+    context.actor.email === DIRECT_PAGES_SYSTEM_ACTOR_EMAIL;
 }
 
 async function resolveCreateDraftReplay(

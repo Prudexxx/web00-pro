@@ -162,7 +162,9 @@ describe("admin publication routes", () => {
         },
         cardId: "direct-pages-unpublish",
         expectedBlobSha: "sha-existing",
-        requestId: "00000000-0000-4000-8000-000000000991"
+        lifecycleAction: "unpublish",
+        requestId: "00000000-0000-4000-8000-000000000991",
+        siteId: "00000000-0000-4000-8000-000000000101"
       })
       .expect(403);
 
@@ -178,6 +180,7 @@ describe("admin publication routes", () => {
         card: null,
         cardId: "direct-pages-delete",
         expectedBlobSha: "sha-existing",
+        lifecycleAction: "delete",
         requestId: "00000000-0000-4000-8000-000000000992",
         siteId: "00000000-0000-4000-8000-000000000101"
       })
@@ -242,6 +245,7 @@ function createPagesPublicationServiceFake() {
   return {
     getCatalogCard: vi.fn(),
     getPagesPublicationStatus: vi.fn(),
+    reconcilePagesPublicationLifecycle: vi.fn(),
     startPagesPublication: vi.fn(async () => ({
       action: "update",
       buttonLabel: "Проверяется",

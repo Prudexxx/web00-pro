@@ -744,6 +744,7 @@ export function createSiteEditorScreen(options) {
         card: action === "delete" ? null : buildDirectPagesCatalogCard(saved),
         cardId,
         expectedBlobSha: action === "create" ? null : currentCard.blobSha,
+        lifecycleAction: action === "delete" ? "delete" : "publish",
         requestId: attempt.idempotencyKey,
         siteId: siteIdForPublication
       },

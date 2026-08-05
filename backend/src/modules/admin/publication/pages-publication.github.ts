@@ -3,6 +3,7 @@ import { AppError, type ErrorCode } from "../../../lib/errors.js";
 import type {
   PagesCatalogGitHubProvider,
   PagesCatalogPublicationAction,
+  PagesCatalogPublicationLifecycleAction,
   PagesCatalogPublicationRecord,
   PagesCatalogRequiredCheckStatus
 } from "./pages-publication.service.js";
@@ -29,7 +30,18 @@ type FetchLike = typeof fetch;
 
 const GITHUB_API = "https://api.github.com";
 const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 15_000;
+const CARD_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const WEB00_CATALOG_REQUIRED_CHECK = "web00-catalog-validate";
+
+interface PullRequestMarkers {
+  action: PagesCatalogPublicationAction;
+  cardId: string;
+  lifecycleAction: PagesCatalogPublicationLifecycleAction;
+  requestFingerprint: string;
+  requestId: string;
+  siteId?: string | undefined;
+}
 
 export function createGitHubPagesCatalogProviderFromEnv(
   env: PagesCatalogGitHubEnv,
@@ -193,8 +205,15 @@ export function createGitHubPagesCatalogProvider(options: {
       if (pull === undefined) {
         return null;
       }
+      const markers = readValidPullRequestMarkers(String((pull as { body?: unknown }).body ?? ""), {
+        branch,
+        requestId
+      });
+      if (markers === null) {
+        return null;
+      }
 
-      return mapPullRequestToPublicationRecord(pull, requestId, options.config.pagesWorkflow, options.config.baseBranch, client);
+      return mapPullRequestToPublicationRecord(pull, markers, options.config.pagesWorkflow, options.config.baseBranch, client);
     },
 
     async getBaseBranchHead() {
@@ -251,11 +270,13 @@ export function createGitHubPagesCatalogProvider(options: {
       }
       const headSha = requireString((ref as { object?: { sha?: unknown } }).object?.sha, "object.sha");
       const commit = await client.request(`/git/commits/${encodeURIComponent(headSha)}`) as { message?: unknown };
-      const markers = readPullRequestMarkers(String(commit.message ?? ""));
+      const markers = readValidPullRequestMarkers(String(commit.message ?? ""), {
+        branch,
+        requestId
+      });
 
       if (
-        markers.requestId !== requestId ||
-        !/^[a-f0-9]{64}$/i.test(markers.requestFingerprint)
+        markers === null
       ) {
         throw new AppError({
           code: "IDEMPOTENCY_KEY_REUSED",
@@ -294,6 +315,28 @@ export function createGitHubPagesCatalogProvider(options: {
         configured: true,
         status: checkStatus
       };
+    },
+
+    async listRecentPublicationRequests(input) {
+      const limit = Math.max(1, Math.min(20, Math.trunc(input.limit)));
+      const pulls = await client.request(`/pulls?state=all&base=${encodeURIComponent(options.config.baseBranch)}&sort=updated&direction=desc&per_page=${limit}`) as unknown[];
+      const records: PagesCatalogPublicationRecord[] = [];
+
+      for (const pull of pulls) {
+        const markers = readCatalogPublicationPullRequestMarkers(pull);
+        if (markers === null) {
+          continue;
+        }
+        records.push(await mapPullRequestToPublicationRecord(
+          pull,
+          markers,
+          options.config.pagesWorkflow,
+          options.config.baseBranch,
+          client
+        ));
+      }
+
+      return records;
     }
   };
 }
@@ -539,7 +582,7 @@ async function readPullRequestCheckStatus(
 
 async function mapPullRequestToPublicationRecord(
   pull: unknown,
-  requestId: string,
+  markers: PullRequestMarkers,
   pagesWorkflow: string,
   baseBranch: string,
   client: ReturnType<typeof createGitHubClient>
@@ -557,7 +600,6 @@ async function mapPullRequestToPublicationRecord(
     number?: unknown;
     state?: unknown;
   };
-  const markers = readPullRequestMarkers(String(value.body ?? ""));
   const merged = typeof value.merged_at === "string" && value.merged_at.length > 0;
   const mergeCommitSha = typeof value.merge_commit_sha === "string" ? value.merge_commit_sha : null;
 
@@ -578,7 +620,7 @@ async function mapPullRequestToPublicationRecord(
       : null,
     prNumber: requireNumber(value.number, "number"),
     pullRequestNodeId: requireString(value.node_id, "node_id"),
-    requestId,
+    requestId: markers.requestId,
     requestFingerprint: markers.requestFingerprint,
     siteId: markers.siteId,
     state: merged ? "merged" : value.state === "open" ? "open" : "closed",
@@ -653,14 +695,28 @@ function isMarkedPullRequest(value: unknown, requestId: string): boolean {
     return false;
   }
   const body = (value as { body?: unknown }).body;
+  const branch = `catalog/publish/${requestId}`;
 
-  return typeof body === "string" && body.includes(`WEB00-REQUEST-ID: ${requestId}`);
+  return typeof body === "string" &&
+    readValidPullRequestMarkers(body, { branch, requestId }) !== null;
+}
+
+function readCatalogPublicationPullRequestMarkers(value: unknown): PullRequestMarkers | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const body = String((value as { body?: unknown }).body ?? "");
+  const headRef = (value as { head?: { ref?: unknown } }).head?.ref;
+
+  return typeof headRef === "string"
+    ? readValidPullRequestMarkers(body, { branch: headRef })
+    : null;
 }
 
 function readPullRequestMarkers(body: string): {
-  action: PagesCatalogPublicationAction;
+  action: string;
   cardId: string;
-  lifecycleAction: "delete" | "publish" | "unpublish";
+  lifecycleAction: string;
   requestFingerprint: string;
   requestId: string;
   siteId?: string | undefined;
@@ -673,17 +729,76 @@ function readPullRequestMarkers(body: string): {
   const siteId = marker(body, "WEB00-SITE-ID");
 
   return {
-    action: action === "create" || action === "delete" || action === "update" ? action : "update",
-    cardId: cardId || "unknown-card",
-    lifecycleAction: lifecycleAction === "delete" || lifecycleAction === "publish" || lifecycleAction === "unpublish"
-      ? lifecycleAction
-      : action === "delete"
-        ? "delete"
-        : "publish",
+    action,
+    cardId,
+    lifecycleAction,
     requestFingerprint,
     requestId,
     ...(siteId.length === 0 ? {} : { siteId })
   };
+}
+
+function readValidPullRequestMarkers(
+  body: string,
+  expected: { branch?: string; requestId?: string } = {}
+): PullRequestMarkers | null {
+  const markers = readPullRequestMarkers(body);
+
+  if (!UUID_RE.test(markers.requestId)) {
+    return null;
+  }
+  if (expected.requestId !== undefined && markers.requestId !== expected.requestId) {
+    return null;
+  }
+  if (expected.branch !== undefined && expected.branch !== `catalog/publish/${markers.requestId}`) {
+    return null;
+  }
+  if (!CARD_ID_RE.test(markers.cardId)) {
+    return null;
+  }
+  if (!/^[a-f0-9]{64}$/i.test(markers.requestFingerprint)) {
+    return null;
+  }
+  if (!isPublicationAction(markers.action) || !isPublicationLifecycleAction(markers.lifecycleAction)) {
+    return null;
+  }
+  if (!isValidActionLifecyclePair(markers.action, markers.lifecycleAction)) {
+    return null;
+  }
+  if (markers.siteId !== undefined && !UUID_RE.test(markers.siteId)) {
+    return null;
+  }
+
+  return {
+    action: markers.action,
+    cardId: markers.cardId,
+    lifecycleAction: markers.lifecycleAction,
+    requestFingerprint: markers.requestFingerprint,
+    requestId: markers.requestId,
+    ...(markers.siteId === undefined ? {} : { siteId: markers.siteId })
+  };
+}
+
+function isPublicationAction(value: string): value is PagesCatalogPublicationAction {
+  return value === "create" || value === "delete" || value === "update";
+}
+
+function isPublicationLifecycleAction(value: string): value is PagesCatalogPublicationLifecycleAction {
+  return value === "delete" || value === "publish" || value === "unpublish";
+}
+
+function isValidActionLifecyclePair(
+  action: PagesCatalogPublicationAction,
+  lifecycleAction: PagesCatalogPublicationLifecycleAction
+): boolean {
+  if (action === "delete") {
+    return lifecycleAction === "delete";
+  }
+  if (action === "create") {
+    return lifecycleAction === "publish";
+  }
+
+  return lifecycleAction === "publish" || lifecycleAction === "unpublish";
 }
 
 function marker(body: string, key: string): string {

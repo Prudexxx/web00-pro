@@ -90,42 +90,29 @@ function readPublicationActionPermission(body: unknown): B5Permission {
 }
 
 function readPagesPublicationActionPermission(body: unknown): B5Permission {
-  if (isDirectPagesSoftDelete(body)) {
+  if (readDirectPagesLifecycleAction(body) === "delete") {
     return "site.softDelete";
   }
-  if (isDirectPagesUnpublish(body)) {
+  if (readDirectPagesLifecycleAction(body) === "unpublish") {
     return "site.unpublish";
   }
 
   return "site.publish";
 }
 
-function isDirectPagesSoftDelete(body: unknown): boolean {
-  return typeof body === "object" &&
-    body !== null &&
-    !Array.isArray(body) &&
-    (body as { action?: unknown }).action === "delete";
-}
-
-function isDirectPagesUnpublish(body: unknown): boolean {
+function readDirectPagesLifecycleAction(body: unknown): "delete" | "publish" | "unpublish" {
   if (
     typeof body === "object" &&
     body !== null &&
     !Array.isArray(body)
   ) {
-    const record = body as { action?: unknown; card?: unknown };
-    if (
-      record.action === "update" &&
-      typeof record.card === "object" &&
-      record.card !== null &&
-      !Array.isArray(record.card) &&
-      (record.card as { active?: unknown }).active === false
-    ) {
-      return true;
+    const action = (body as { lifecycleAction?: unknown }).lifecycleAction;
+    if (action === "delete" || action === "publish" || action === "unpublish") {
+      return action;
     }
   }
 
-  return false;
+  return "publish";
 }
 
 function createPermissionMiddleware(policy: PermissionPolicy, permission: B5Permission): RequestHandler {
