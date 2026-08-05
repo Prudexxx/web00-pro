@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { AppError, type ErrorCode } from "../../../lib/errors.js";
 import type {
   PagesCatalogGitHubProvider,
   PagesCatalogPublicationAction,
@@ -27,6 +28,7 @@ export interface PagesCatalogGitHubConfig {
 type FetchLike = typeof fetch;
 
 const GITHUB_API = "https://api.github.com";
+const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 15_000;
 
 export function createGitHubPagesCatalogProviderFromEnv(
   env: PagesCatalogGitHubEnv,
@@ -68,6 +70,7 @@ export function readGitHubPagesCatalogConfig(env: PagesCatalogGitHubEnv): PagesC
 export function createGitHubPagesCatalogProvider(options: {
   config: PagesCatalogGitHubConfig;
   fetchFn: FetchLike;
+  requestTimeoutMs?: number;
 }): PagesCatalogGitHubProvider {
   const client = createGitHubClient(options);
 
@@ -79,6 +82,8 @@ export function createGitHubPagesCatalogProvider(options: {
           sha: input.fromSha
         }),
         method: "POST"
+      }, {
+        operation: "create_branch"
       });
     },
 
@@ -164,7 +169,7 @@ export function createGitHubPagesCatalogProvider(options: {
         return null;
       }
 
-      return mapPullRequestToPublicationRecord(pull, requestId, options.config.pagesWorkflow, client);
+      return mapPullRequestToPublicationRecord(pull, requestId, options.config.pagesWorkflow, options.config.baseBranch, client);
     },
 
     async getBaseBranchHead() {
@@ -175,8 +180,18 @@ export function createGitHubPagesCatalogProvider(options: {
       return requireString(response.object?.sha, "object.sha");
     },
 
-    async getCatalogCard(cardId) {
-      const response = await client.requestOptional(`/contents/${encodeURIComponentPath(`catalog/cards/${cardId}.json`)}?ref=${encodeURIComponent(options.config.baseBranch)}`);
+    async getBranchHead(input) {
+      const response = await client.requestOptional(`/git/ref/heads/${encodeURIComponentPath(input.branch)}`);
+      if (response === null) {
+        return null;
+      }
+
+      return requireString((response as { object?: { sha?: unknown } }).object?.sha, "object.sha");
+    },
+
+    async getCatalogCard(cardId, readOptions) {
+      const ref = readOptions?.ref ?? options.config.baseBranch;
+      const response = await client.requestOptional(`/contents/${encodeURIComponentPath(`catalog/cards/${cardId}.json`)}?ref=${encodeURIComponent(ref)}`);
       if (response === null) {
         return null;
       }
@@ -188,6 +203,18 @@ export function createGitHubPagesCatalogProvider(options: {
       return {
         blobSha: requireString(file.sha, "sha"),
         content: Buffer.from(requireString(file.content, "content").replace(/\s/g, ""), "base64").toString("utf8")
+      };
+    },
+
+    async getCurrentPagesDeploymentStatus() {
+      const response = await client.request(`/git/ref/heads/${encodeURIComponentPath(options.config.baseBranch)}`) as {
+        object?: { sha?: unknown };
+      };
+      const headSha = requireString(response.object?.sha, "object.sha");
+
+      return {
+        headSha,
+        status: await readPagesWorkflowStatus(client, options.config.pagesWorkflow, options.config.baseBranch, headSha)
       };
     },
 
@@ -242,10 +269,13 @@ function createUnavailableGitHubPagesCatalogProvider(): PagesCatalogGitHubProvid
 function createGitHubClient(options: {
   config: PagesCatalogGitHubConfig;
   fetchFn: FetchLike;
+  requestTimeoutMs?: number;
 }) {
+  const requestTimeoutMs = normalizeRequestTimeoutMs(options.requestTimeoutMs);
+
   return {
-    async request(path: string, init: RequestInit = {}): Promise<unknown> {
-      const response = await options.fetchFn(`${GITHUB_API}/repos/${options.config.owner}/${options.config.repo}${path}`, {
+    async request(path: string, init: RequestInit = {}, requestOptions: { operation?: string } = {}): Promise<unknown> {
+      const response = await fetchWithTimeout(options, `${GITHUB_API}/repos/${options.config.owner}/${options.config.repo}${path}`, {
         ...init,
         headers: {
           Accept: "application/vnd.github+json",
@@ -255,35 +285,35 @@ function createGitHubClient(options: {
           "X-GitHub-Api-Version": "2022-11-28",
           ...init.headers
         }
-      });
+      }, requestTimeoutMs);
       if (!response.ok) {
-        throw new Error(`GitHub request failed with status ${response.status}.`);
+        throw await classifyGitHubHttpError(response, requestOptions.operation);
       }
 
       return response.status === 204 ? {} : response.json();
     },
 
     async requestOptional(path: string): Promise<unknown | null> {
-      const response = await options.fetchFn(`${GITHUB_API}/repos/${options.config.owner}/${options.config.repo}${path}`, {
+      const response = await fetchWithTimeout(options, `${GITHUB_API}/repos/${options.config.owner}/${options.config.repo}${path}`, {
         headers: {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${options.config.token}`,
           "User-Agent": "WEB00-Direct-Pages-Publisher",
           "X-GitHub-Api-Version": "2022-11-28"
         }
-      });
+      }, requestTimeoutMs);
       if (response.status === 404) {
         return null;
       }
       if (!response.ok) {
-        throw new Error(`GitHub request failed with status ${response.status}.`);
+        throw await classifyGitHubHttpError(response);
       }
 
       return response.json();
     },
 
     async deleteOptional(path: string): Promise<void> {
-      const response = await options.fetchFn(`${GITHUB_API}/repos/${options.config.owner}/${options.config.repo}${path}`, {
+      const response = await fetchWithTimeout(options, `${GITHUB_API}/repos/${options.config.owner}/${options.config.repo}${path}`, {
         headers: {
           Accept: "application/vnd.github+json",
           Authorization: `Bearer ${options.config.token}`,
@@ -291,23 +321,23 @@ function createGitHubClient(options: {
           "X-GitHub-Api-Version": "2022-11-28"
         },
         method: "DELETE"
-      });
+      }, requestTimeoutMs);
       if (response.status === 404 || response.status === 422) {
         return;
       }
       if (!response.ok) {
-        throw new Error(`GitHub request failed with status ${response.status}.`);
+        throw await classifyGitHubHttpError(response);
       }
     }
   };
 }
 
 async function graphQlRequest(
-  options: { config: PagesCatalogGitHubConfig; fetchFn: FetchLike },
+  options: { config: PagesCatalogGitHubConfig; fetchFn: FetchLike; requestTimeoutMs?: number },
   query: string,
   variables: Record<string, unknown>
 ): Promise<unknown> {
-  const response = await options.fetchFn(`${GITHUB_API}/graphql`, {
+  const response = await fetchWithTimeout(options, `${GITHUB_API}/graphql`, {
     body: JSON.stringify({ query, variables }),
     headers: {
       Accept: "application/vnd.github+json",
@@ -317,16 +347,83 @@ async function graphQlRequest(
       "X-GitHub-Api-Version": "2022-11-28"
     },
     method: "POST"
-  });
+  }, normalizeRequestTimeoutMs(options.requestTimeoutMs));
   if (!response.ok) {
-    throw new Error(`GitHub GraphQL request failed with status ${response.status}.`);
+    throw await classifyGitHubHttpError(response, "graphql");
   }
   const payload = await response.json() as { errors?: unknown[] };
   if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-    throw new Error("GitHub GraphQL request failed.");
+    throw githubError("GITHUB_API_FAILED", "GitHub GraphQL request failed.", 502);
   }
 
   return payload;
+}
+
+async function fetchWithTimeout(
+  options: { fetchFn: FetchLike },
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await options.fetchFn(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw githubError("GITHUB_API_TIMEOUT", "GitHub request timed out.", 503);
+    }
+
+    throw githubError("GITHUB_API_RETRYABLE", "GitHub request failed before a response was received.", 503);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function normalizeRequestTimeoutMs(value: number | undefined): number {
+  return Number.isFinite(value) && value !== undefined && value > 0
+    ? Math.min(value, DEFAULT_GITHUB_REQUEST_TIMEOUT_MS)
+    : DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    ((error as { name?: unknown }).name === "AbortError" || (error as { code?: unknown }).code === "ABORT_ERR");
+}
+
+async function classifyGitHubHttpError(response: Response, operation?: string): Promise<AppError> {
+  const body = await response.text().catch(() => "");
+  const status = response.status;
+
+  if (operation === "create_branch" && status === 422 && /already exists|reference/i.test(body)) {
+    return githubError("GITHUB_BRANCH_ALREADY_EXISTS", "GitHub publication branch already exists.", 409);
+  }
+  if (status === 401 || status === 403) {
+    return githubError("GITHUB_REPOSITORY_SETUP_REQUIRED", "GitHub repository publication is not authorized.", 503);
+  }
+  if (status === 408 || status === 429 || status >= 500) {
+    return githubError("GITHUB_API_RETRYABLE", "GitHub request failed with a retryable status.", 503);
+  }
+  if (status === 409) {
+    return githubError("GITHUB_API_CONFLICT", "GitHub request conflicted with current repository state.", 409);
+  }
+
+  return githubError("GITHUB_API_FAILED", "GitHub request failed.", 502);
+}
+
+function githubError(code: ErrorCode, message: string, statusCode: number): AppError {
+  return new AppError({
+    code,
+    message,
+    statusCode
+  });
 }
 
 async function readRequiredStatusChecks(
@@ -384,6 +481,7 @@ async function mapPullRequestToPublicationRecord(
   pull: unknown,
   requestId: string,
   pagesWorkflow: string,
+  baseBranch: string,
   client: ReturnType<typeof createGitHubClient>
 ): Promise<PagesCatalogPublicationRecord> {
   const value = pull as {
@@ -394,6 +492,7 @@ async function mapPullRequestToPublicationRecord(
     html_url?: unknown;
     merge_commit_sha?: unknown;
     merged_at?: unknown;
+    mergeable_state?: unknown;
     node_id?: unknown;
     number?: unknown;
     state?: unknown;
@@ -410,10 +509,11 @@ async function mapPullRequestToPublicationRecord(
     cardId: markers.cardId,
     checkStatus: "pending",
     mergeCommitSha,
+    mergeableState: typeof value.mergeable_state === "string" ? value.mergeable_state : undefined,
     nodeId: requireString(value.node_id, "node_id"),
     number: requireNumber(value.number, "number"),
     pagesStatus: merged && mergeCommitSha !== null
-      ? await readPagesWorkflowStatus(client, pagesWorkflow, mergeCommitSha)
+      ? await readPagesWorkflowStatus(client, pagesWorkflow, baseBranch, mergeCommitSha)
       : null,
     prNumber: requireNumber(value.number, "number"),
     pullRequestNodeId: requireString(value.node_id, "node_id"),
@@ -427,15 +527,56 @@ async function mapPullRequestToPublicationRecord(
 async function readPagesWorkflowStatus(
   client: ReturnType<typeof createGitHubClient>,
   pagesWorkflow: string,
+  baseBranch: string,
   mergeCommitSha: string
 ): Promise<"failure" | "pending" | "success"> {
   const runs = await client.requestOptional(`/actions/workflows/${encodeURIComponentPath(pagesWorkflow)}/runs?head_sha=${encodeURIComponent(mergeCommitSha)}&per_page=10`);
-  if (runs === null) {
-    return "pending";
+  const exactStatus = readWorkflowRunsStatus(runs);
+  if (exactStatus === "success") {
+    return "success";
   }
-  const workflowRuns = (runs as { workflow_runs?: unknown }).workflow_runs;
+  if (await hasSuccessfulMainDeploymentContainingCommit(client, pagesWorkflow, baseBranch, mergeCommitSha)) {
+    return "success";
+  }
+
+  return exactStatus ?? "pending";
+}
+
+async function hasSuccessfulMainDeploymentContainingCommit(
+  client: ReturnType<typeof createGitHubClient>,
+  pagesWorkflow: string,
+  baseBranch: string,
+  mergeCommitSha: string
+): Promise<boolean> {
+  const runs = await client.requestOptional(`/actions/workflows/${encodeURIComponentPath(pagesWorkflow)}/runs?branch=${encodeURIComponent(baseBranch)}&status=success&per_page=10`);
+  const workflowRuns = (runs as { workflow_runs?: unknown } | null)?.workflow_runs;
+  if (!Array.isArray(workflowRuns)) {
+    return false;
+  }
+
+  for (const value of workflowRuns) {
+    const run = value as { conclusion?: unknown; head_sha?: unknown; status?: unknown };
+    if (run.status !== "completed" || run.conclusion !== "success" || typeof run.head_sha !== "string") {
+      continue;
+    }
+    if (run.head_sha === mergeCommitSha) {
+      return true;
+    }
+
+    const comparison = await client.requestOptional(`/compare/${encodeURIComponent(mergeCommitSha)}...${encodeURIComponent(run.head_sha)}`);
+    const status = (comparison as { status?: unknown } | null)?.status;
+    if (status === "ahead" || status === "identical") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function readWorkflowRunsStatus(runs: unknown | null): "failure" | "pending" | "success" | null {
+  const workflowRuns = (runs as { workflow_runs?: unknown } | null)?.workflow_runs;
   if (!Array.isArray(workflowRuns) || workflowRuns.length === 0) {
-    return "pending";
+    return null;
   }
   const run = workflowRuns[0] as { conclusion?: unknown; status?: unknown };
   if (run.status !== "completed") {

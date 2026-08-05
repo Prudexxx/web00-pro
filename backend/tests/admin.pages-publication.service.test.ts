@@ -360,6 +360,235 @@ describe("Direct Pages catalog publication service", () => {
     });
     expect(mismatchGithub.enableAutoMerge).not.toHaveBeenCalled();
   });
+
+  it("RECOVERY resumes an existing request branch and NO-OP does not claim published before Pages success", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const { serializeCanonicalCatalogCard } = await loadPagesCatalogGenerator();
+    const github = createGitHubProviderFake({
+      currentPagesStatus: "pending",
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const service = createPagesCatalogPublicationService({
+      github,
+      now: fixedNow
+    });
+    const card = canonicalCard({
+      id: "phase-two-recovered",
+      slug: "phase-two-recovered",
+      title: "Phase Two Recovered"
+    });
+    const content = serializeCanonicalCatalogCard(card);
+    github.setMainCard("phase-two-recovered", {
+      blobSha: "sha-recovered-main",
+      content
+    });
+    const noOp = await service.startPagesPublication(startInput({
+      action: "update",
+      card,
+      cardId: "phase-two-recovered",
+      expectedBlobSha: "sha-recovered-main",
+      requestId: "00000000-0000-4000-8000-000000000701"
+    }));
+
+    expect(noOp).toMatchObject({
+      noOp: true,
+      status: "failed"
+    });
+    expect(noOp.status).not.toBe("published");
+    expect(github.createdBranches).toHaveLength(0);
+    expect(github.pullRequests).toHaveLength(0);
+
+    github.setCurrentPagesStatus("success");
+    const verifiedNoOp = await service.startPagesPublication(startInput({
+      action: "update",
+      card,
+      cardId: "phase-two-recovered",
+      expectedBlobSha: "sha-recovered-main",
+      requestId: "00000000-0000-4000-8000-000000000702"
+    }));
+
+    expect(verifiedNoOp).toMatchObject({
+      noOp: true,
+      status: "published"
+    });
+
+    const recoveredRequestId = "00000000-0000-4000-8000-000000000703";
+    const recoveredBranch = `catalog/publish/${recoveredRequestId}`;
+    const newCard = canonicalCard({
+      id: "phase-two-recovered-new",
+      slug: "phase-two-recovered-new",
+      title: "Phase Two Recovered New"
+    });
+    const newContent = serializeCanonicalCatalogCard(newCard);
+    github.setBranchHead(recoveredBranch, "branch-sha-recovered");
+    github.setBranchCard(recoveredBranch, "phase-two-recovered-new", {
+      blobSha: "sha-branch-card",
+      content: newContent
+    });
+
+    const recovered = await service.startPagesPublication(startInput({
+      action: "create",
+      card: newCard,
+      cardId: "phase-two-recovered-new",
+      expectedBlobSha: null,
+      requestId: recoveredRequestId
+    }));
+
+    expect(recovered).toMatchObject({
+      cardId: "phase-two-recovered-new",
+      status: "merge_queued"
+    });
+    expect(github.createBranch).not.toHaveBeenCalledWith({
+      branch: recoveredBranch,
+      fromSha: expect.any(String)
+    });
+    expect(github.commits.filter((commit) => commit.path === "catalog/cards/phase-two-recovered-new.json")).toHaveLength(0);
+    expect(github.pullRequests.at(-1)).toMatchObject({
+      branch: recoveredBranch,
+      requestId: recoveredRequestId
+    });
+
+    github.setPublicationRequest(recoveredRequestId, {
+      requestFingerprint: "f".repeat(64)
+    });
+    await expect(service.startPagesPublication(startInput({
+      action: "create",
+      card: {
+        ...newCard,
+        title: "Phase Two Recovered Different"
+      },
+      cardId: "phase-two-recovered-new",
+      expectedBlobSha: null,
+      requestId: recoveredRequestId
+    }))).rejects.toMatchObject({
+      code: "IDEMPOTENCY_KEY_REUSED",
+      statusCode: 409
+    });
+  });
+
+  it("VALIDATION rejects mutable card identity and unsafe absolute media before creating GitHub mutations", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const github = createGitHubProviderFake({
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const service = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      now: fixedNow
+    });
+
+    await expect(service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        galleryImages: [
+          "assets/img/solution-gallery/legacy-a.png",
+          "https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/site/gallery/asset/1200.webp"
+        ],
+        id: "phase-two-valid-media",
+        previewImage: "https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/site/preview/asset/1200.webp",
+        slug: "phase-two-valid-media",
+        title: "Phase Two Valid Media"
+      }),
+      cardId: "phase-two-valid-media",
+      expectedBlobSha: null,
+      requestId: "00000000-0000-4000-8000-000000000801"
+    }))).resolves.toMatchObject({
+      status: "merge_queued"
+    });
+
+    const githubCallsBeforeInvalid = github.createdBranches.length + github.commits.length + github.pullRequests.length;
+
+    await expect(service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        id: "phase-two-wrong-id",
+        slug: "phase-two-wrong-id",
+        title: "Phase Two Wrong ID"
+      }),
+      cardId: "phase-two-public-id",
+      expectedBlobSha: null,
+      requestId: "00000000-0000-4000-8000-000000000802"
+    }))).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      statusCode: 400
+    });
+    await expect(service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        galleryImages: [
+          "https://storage.example.test/storage/v1/object/public/other-bucket/sites/site/gallery/asset/1200.webp"
+        ],
+        id: "phase-two-unsafe-media",
+        previewImage: "https://evil.example.test/storage/v1/object/public/web00-catalog-images/sites/site/preview/asset/1200.webp",
+        slug: "phase-two-unsafe-media",
+        title: "Phase Two Unsafe Media"
+      }),
+      cardId: "phase-two-unsafe-media",
+      expectedBlobSha: null,
+      requestId: "00000000-0000-4000-8000-000000000803"
+    }))).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      statusCode: 400
+    });
+    expect(github.createdBranches.length + github.commits.length + github.pullRequests.length).toBe(githubCallsBeforeInvalid);
+  });
+
+  it("CONCURRENCY treats closed and conflicted pull requests as terminal failures", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const github = createGitHubProviderFake({
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const service = createPagesCatalogPublicationService({
+      github,
+      now: fixedNow
+    });
+    const closedRequestId = "00000000-0000-4000-8000-000000000901";
+    const conflictRequestId = "00000000-0000-4000-8000-000000000902";
+
+    await service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        id: "phase-two-closed-pr",
+        slug: "phase-two-closed-pr",
+        title: "Phase Two Closed PR"
+      }),
+      cardId: "phase-two-closed-pr",
+      expectedBlobSha: null,
+      requestId: closedRequestId
+    }));
+    github.setPublicationRequest(closedRequestId, {
+      state: "closed"
+    });
+    await expect(service.getPagesPublicationStatus(closedRequestId)).resolves.toMatchObject({
+      code: "PULL_REQUEST_CLOSED",
+      retryable: false,
+      status: "failed"
+    });
+
+    await service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        id: "phase-two-conflicted-pr",
+        slug: "phase-two-conflicted-pr",
+        title: "Phase Two Conflicted PR"
+      }),
+      cardId: "phase-two-conflicted-pr",
+      expectedBlobSha: null,
+      requestId: conflictRequestId
+    }));
+    github.setPublicationRequest(conflictRequestId, {
+      mergeableState: "dirty"
+    });
+    await expect(service.getPagesPublicationStatus(conflictRequestId)).resolves.toMatchObject({
+      code: "PULL_REQUEST_CONFLICTED",
+      retryable: false,
+      status: "failed"
+    });
+    expect(github.enableAutoMerge).toHaveBeenCalledTimes(2);
+  });
 });
 
 async function loadPublicationServiceExports(): Promise<Record<string, any>> {
@@ -388,10 +617,14 @@ async function loadPagesCatalogGenerator(): Promise<{
 }
 
 function createGitHubProviderFake(options: {
+  currentPagesStatus?: "failure" | "pending" | "success";
   requiredCheckConfigured: boolean;
   requiredCheckStatus: "failure" | "pending" | "success";
 }) {
+  let currentPagesStatus = options.currentPagesStatus ?? "success";
   let requiredCheckStatus = options.requiredCheckStatus;
+  const branchCards = new Map<string, { blobSha: string; content: string }>();
+  const branchHeads = new Map<string, string>();
   const mainCards = new Map<string, { blobSha: string; content: string }>();
   const requests = new Map<string, Record<string, unknown>>();
   const github = {
@@ -402,6 +635,7 @@ function createGitHubProviderFake(options: {
     pullRequests: [] as Record<string, unknown>[],
     createBranch: vi.fn(async (input: Record<string, unknown>) => {
       github.createdBranches.push(input);
+      branchHeads.set(String(input.branch), String(input.fromSha));
     }),
     createCatalogPullRequest: vi.fn(async (input: Record<string, unknown>) => {
       const pullRequest = {
@@ -438,11 +672,31 @@ function createGitHubProviderFake(options: {
     }),
     findPublicationRequest: vi.fn(async (requestId: string) => requests.get(requestId) ?? null),
     getBaseBranchHead: vi.fn(async () => "main-sha"),
-    getCatalogCard: vi.fn(async (cardId: string) => mainCards.get(cardId) ?? null),
+    getBranchHead: vi.fn(async (input: Record<string, unknown>) => branchHeads.get(String(input.branch)) ?? null),
+    getCatalogCard: vi.fn(async (cardId: string, readOptions?: Record<string, unknown>) => {
+      const ref = typeof readOptions?.ref === "string" ? readOptions.ref : null;
+
+      return ref === null
+        ? mainCards.get(cardId) ?? null
+        : branchCards.get(`${ref}:${cardId}`) ?? null;
+    }),
+    getCurrentPagesDeploymentStatus: vi.fn(async () => ({
+      headSha: "main-sha",
+      status: currentPagesStatus
+    })),
     getRequiredCatalogCheckStatus: vi.fn(async () => ({
       configured: options.requiredCheckConfigured,
       status: requiredCheckStatus
     })),
+    setBranchCard(branch: string, cardId: string, value: { blobSha: string; content: string }) {
+      branchCards.set(`${branch}:${cardId}`, value);
+    },
+    setBranchHead(branch: string, sha: string) {
+      branchHeads.set(branch, sha);
+    },
+    setCurrentPagesStatus(status: "failure" | "pending" | "success") {
+      currentPagesStatus = status;
+    },
     setRequiredCheckStatus(status: "failure" | "pending" | "success") {
       requiredCheckStatus = status;
       for (const request of requests.values()) {

@@ -36,6 +36,7 @@ export interface PagesCatalogPublicationRecord {
   code?: string | undefined;
   body?: string | undefined;
   mergeCommitSha?: string | null;
+  mergeableState?: string | undefined;
   nodeId?: string | undefined;
   number?: number | undefined;
   pagesStatus?: "failure" | "pending" | "success" | null;
@@ -77,7 +78,12 @@ export interface PagesCatalogGitHubProvider {
   }): Promise<void>;
   findPublicationRequest(requestId: string): Promise<PagesCatalogPublicationRecord | null>;
   getBaseBranchHead(): Promise<string>;
-  getCatalogCard(cardId: string): Promise<PagesCatalogCardFile | null>;
+  getBranchHead?(input: { branch: string }): Promise<string | null>;
+  getCatalogCard(cardId: string, options?: { ref?: string }): Promise<PagesCatalogCardFile | null>;
+  getCurrentPagesDeploymentStatus?(): Promise<{
+    headSha?: string | null;
+    status: "failure" | "pending" | "success";
+  }>;
   getRepositorySetup?(): Promise<{ configured: boolean; code?: "GITHUB_REPOSITORY_SETUP_REQUIRED" }>;
   getRequiredCatalogCheckStatus(request: PagesCatalogPublicationRecord): Promise<PagesCatalogRequiredCheckStatus>;
 }
@@ -123,12 +129,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const CATALOG_CARDS_ROOT = "catalog/cards";
 
 export function createPagesCatalogPublicationService(options: {
+  allowedMediaOrigin?: string;
   github: PagesCatalogGitHubProvider;
   now?: () => Date;
   serializeCanonicalCatalogCard?: (card: Record<string, unknown>) => Promise<string> | string;
 }): PagesCatalogPublicationService {
   const serializeCanonicalCatalogCard =
     options.serializeCanonicalCatalogCard ?? defaultSerializeCanonicalCatalogCard;
+  const allowedMediaOrigin = normalizeAllowedMediaOrigin(options.allowedMediaOrigin);
 
   return {
     async getCatalogCard(cardId) {
@@ -167,6 +175,8 @@ export function createPagesCatalogPublicationService(options: {
 
     async startPagesPublication(input) {
       assertStartInput(input);
+      assertCardIdentity(input);
+      assertCardMedia(input.card, allowedMediaOrigin);
       const requestFingerprint = await createPagesPublicationRequestFingerprint(input, serializeCanonicalCatalogCard);
       const existing = await options.github.findPublicationRequest(input.requestId);
       if (existing !== null) {
@@ -181,35 +191,38 @@ export function createPagesCatalogPublicationService(options: {
       const mutation = await planCardMutation(input, current, serializeCanonicalCatalogCard);
 
       if (mutation.kind === "noop") {
-        return publicationDto({
+        return noOpPublicationDto(options.github, {
           action: input.action,
           cardId: input.cardId,
           noOp: true,
-          requestId: input.requestId,
-          status: "published"
+          requestId: input.requestId
         });
       }
 
       const mainSha = await options.github.getBaseBranchHead();
       const branch = `catalog/publish/${input.requestId}`;
-      await options.github.createBranch({
+      const branchExisted = await ensurePublicationBranch(options.github, {
         branch,
         fromSha: mainSha
       });
+      const branchCurrent = branchExisted
+        ? await options.github.getCatalogCard(input.cardId, { ref: branch })
+        : current;
 
       const commitMessage = `catalog: ${input.action} ${input.cardId}`;
-      if (mutation.kind === "delete") {
+      const commit = planBranchCommit(mutation, branchCurrent);
+      if (commit?.kind === "delete") {
         await options.github.deleteCardCommit({
           branch,
-          expectedBlobSha: mutation.expectedBlobSha,
+          expectedBlobSha: commit.expectedBlobSha,
           message: commitMessage,
           path
         });
-      } else {
+      } else if (commit?.kind === "write") {
         await options.github.createOrUpdateCardCommit({
           branch,
-          content: mutation.content,
-          expectedBlobSha: mutation.expectedBlobSha,
+          content: commit.content,
+          expectedBlobSha: commit.expectedBlobSha,
           message: commitMessage,
           path
         });
@@ -246,6 +259,33 @@ export function createPagesCatalogPublicationService(options: {
       return reconcileGitHubPublicationStatus(options.github, input.requestId, request);
     }
   };
+}
+
+async function noOpPublicationDto(
+  github: PagesCatalogGitHubProvider,
+  input: {
+    action: PagesCatalogPublicationAction;
+    cardId: string;
+    noOp: true;
+    requestId: string;
+  }
+): Promise<PagesCatalogPublicationDto> {
+  const pages = github.getCurrentPagesDeploymentStatus === undefined
+    ? { status: "pending" as const }
+    : await github.getCurrentPagesDeploymentStatus();
+
+  if (pages.status === "success") {
+    return publicationDto({
+      ...input,
+      status: "published"
+    });
+  }
+
+  return publicationDto({
+    ...input,
+    code: pages.status === "failure" ? "PAGES_DEPLOYMENT_FAILED" : "PAGES_DEPLOYMENT_NOT_VERIFIED",
+    status: "failed"
+  });
 }
 
 async function createPagesPublicationRequestFingerprint(
@@ -352,6 +392,61 @@ async function planCardMutation(
   };
 }
 
+async function ensurePublicationBranch(
+  github: PagesCatalogGitHubProvider,
+  input: { branch: string; fromSha: string }
+): Promise<boolean> {
+  const existingHead = github.getBranchHead === undefined
+    ? null
+    : await github.getBranchHead({ branch: input.branch });
+  if (existingHead !== null) {
+    return true;
+  }
+
+  try {
+    await github.createBranch(input);
+    return false;
+  } catch (error) {
+    if (isBranchAlreadyExists(error)) {
+      return true;
+    }
+
+    throw error;
+  }
+}
+
+function isBranchAlreadyExists(error: unknown): boolean {
+  return typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "GITHUB_BRANCH_ALREADY_EXISTS";
+}
+
+function planBranchCommit(
+  mutation:
+    | { kind: "delete"; expectedBlobSha: string }
+    | { content: string; expectedBlobSha: string | null; kind: "write" },
+  current: PagesCatalogCardFile | null
+):
+  | { content: string; expectedBlobSha: string | null; kind: "write" }
+  | { expectedBlobSha: string; kind: "delete" }
+  | null {
+  if (mutation.kind === "delete") {
+    return current === null
+      ? null
+      : { expectedBlobSha: current.blobSha, kind: "delete" };
+  }
+
+  if (current?.content === mutation.content) {
+    return null;
+  }
+
+  return {
+    content: mutation.content,
+    expectedBlobSha: current?.blobSha ?? mutation.expectedBlobSha,
+    kind: "write"
+  };
+}
+
 async function reconcileGitHubPublicationStatus(
   github: PagesCatalogGitHubProvider,
   requestId: string,
@@ -364,6 +459,31 @@ async function reconcileGitHubPublicationStatus(
     : typeof request.number === "number"
       ? request.number
       : undefined;
+
+  if (request.state === "closed") {
+    return publicationDto({
+      action,
+      cardId,
+      code: "PULL_REQUEST_CLOSED",
+      noOp: false,
+      prNumber,
+      requestId,
+      retryable: false,
+      status: "failed"
+    });
+  }
+  if (isConflictedPullRequest(request)) {
+    return publicationDto({
+      action,
+      cardId,
+      code: "PULL_REQUEST_CONFLICTED",
+      noOp: false,
+      prNumber,
+      requestId,
+      retryable: false,
+      status: "failed"
+    });
+  }
 
   if (request.state === "merged") {
     await deleteMergedTemporaryBranch(github, request);
@@ -473,6 +593,7 @@ function publicationDto(input: {
   noOp: boolean;
   prNumber?: number | undefined;
   requestId: string;
+  retryable?: boolean | undefined;
   status: PagesCatalogPublicationStatus;
 }): PagesCatalogPublicationDto {
   const labels = labelsForStatus(input.status);
@@ -487,11 +608,17 @@ function publicationDto(input: {
     operationId: input.requestId,
     ...(input.prNumber === undefined ? {} : { prNumber: input.prNumber }),
     requestId: input.requestId,
-    retryable: input.status === "failed" || input.status === "setup_required",
+    retryable: input.retryable ?? (input.status === "failed" || input.status === "setup_required"),
     stableStatus: labels.stableStatus,
     status: input.status,
     statusUrl: `/api/admin/publication/pages/${input.requestId}`
   };
+}
+
+function isConflictedPullRequest(request: PagesCatalogPublicationRecord): boolean {
+  return request.mergeableState === "dirty" ||
+    request.mergeableState === "conflicting" ||
+    request.mergeableState === "unknown_conflict";
 }
 
 function labelsForStatus(status: PagesCatalogPublicationStatus): {
@@ -579,6 +706,112 @@ function assertStartInput(input: PagesCatalogPublicationStartInput): void {
   if (input.action !== "create" && input.expectedBlobSha !== null && !/^[a-zA-Z0-9_-]+$/.test(input.expectedBlobSha)) {
     throw validationError("expectedBlobSha", "Invalid expected blob SHA.");
   }
+}
+
+function assertCardIdentity(input: PagesCatalogPublicationStartInput): void {
+  if (input.action === "delete") {
+    return;
+  }
+  if (input.card === null) {
+    return;
+  }
+  if (input.card.id !== input.cardId) {
+    throw validationError("card.id", "Catalog card id must match the immutable card id.");
+  }
+  if (input.card.slug !== input.cardId) {
+    throw validationError("card.slug", "Catalog card slug must match the immutable card id.");
+  }
+}
+
+function assertCardMedia(card: Record<string, unknown> | null, allowedMediaOrigin: string | null): void {
+  if (card === null) {
+    return;
+  }
+
+  assertMediaUrl(card.previewImage, "card.previewImage", allowedMediaOrigin);
+  if (Array.isArray(card.galleryImages)) {
+    card.galleryImages.forEach((url, index) => {
+      assertMediaUrl(url, `card.galleryImages.${index}`, allowedMediaOrigin);
+    });
+  }
+}
+
+function assertMediaUrl(value: unknown, path: string, allowedMediaOrigin: string | null): void {
+  const text = String(value ?? "").trim();
+  if (text.length === 0) {
+    throw validationError(path, "Catalog media URL is required.");
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(text)) {
+    assertAbsoluteMediaUrl(text, path, allowedMediaOrigin);
+    return;
+  }
+
+  assertRelativeMediaUrl(text, path);
+}
+
+function assertAbsoluteMediaUrl(value: string, path: string, allowedMediaOrigin: string | null): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw validationError(path, "Catalog media URL is invalid.");
+  }
+
+  if (
+    allowedMediaOrigin === null ||
+    parsed.protocol !== "https:" ||
+    parsed.origin !== allowedMediaOrigin ||
+    parsed.username.length > 0 ||
+    parsed.password.length > 0 ||
+    !parsed.pathname.startsWith("/storage/v1/object/public/web00-catalog-images/") ||
+    repeatedlyDecode(parsed.pathname).split("/").includes("..")
+  ) {
+    throw validationError(path, "Catalog media URL must use the configured public image bucket.");
+  }
+}
+
+function assertRelativeMediaUrl(value: string, path: string): void {
+  const decoded = repeatedlyDecode(value);
+
+  if (
+    value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(decoded) ||
+    !/^[a-z0-9][a-z0-9/_.,+@%=-]*(?:#[a-z0-9._%=-]+)?$/i.test(value)
+  ) {
+    throw validationError(path, "Catalog media URL is invalid.");
+  }
+}
+
+function normalizeAllowedMediaOrigin(value: string | undefined): string | null {
+  if (value === undefined || value.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function repeatedlyDecode(value: string): string {
+  let current = value;
+  for (let index = 0; index < 3; index += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) {
+        return decoded;
+      }
+      current = decoded;
+    } catch {
+      return current;
+    }
+  }
+
+  return current;
 }
 
 function assertRequestId(requestId: string): void {

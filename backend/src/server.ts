@@ -248,6 +248,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       repository: createPrismaAdminPublicationRepository({ prisma })
     }),
     pagesPublicationService: createPagesCatalogPublicationService({
+      allowedMediaOrigin: new URL(options.storageConfig.publicBaseUrl).origin,
       github: createGitHubPagesCatalogProviderFromEnv(process.env),
       now: options.now ?? (() => new Date())
     }),

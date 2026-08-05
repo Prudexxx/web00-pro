@@ -430,6 +430,7 @@ export function createSiteEditorScreen(options) {
       try {
         formState = readFormState(form);
         lastFormState = formState;
+        assertImmutableEditSlug(formState);
         const payload = mode === "create"
           ? buildCreateSitePayload(formState)
           : buildUpdateSitePayload(formState, role);
@@ -601,6 +602,21 @@ export function createSiteEditorScreen(options) {
     }
 
     return site;
+  }
+
+  function assertImmutableEditSlug(formState) {
+    if (mode !== "edit") {
+      return;
+    }
+    const originalSlug = String(currentSite?.slug ?? "").trim();
+    const nextSlug = String(formState?.slug ?? "").trim();
+
+    if (originalSlug.length > 0 && nextSlug.length > 0 && originalSlug !== nextSlug) {
+      throw new FormValidationError([{
+        message: "Адрес карточки нельзя менять после создания.",
+        path: "slug"
+      }]);
+    }
   }
 
   function readSiteResponseEntity(response) {

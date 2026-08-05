@@ -6,6 +6,7 @@ import {
   setBusy
 } from "../dom.js";
 import { createConfirmationDialog } from "../dialog.js";
+import { formatCentsToRubles } from "../forms.js";
 
 const QUERY_ORDER = [
   "search",
@@ -25,6 +26,22 @@ const DELETED_VALUES = new Set(["without", "with", "only"]);
 const SORT_VALUES = new Set(["updatedAt", "createdAt", "title", "sortOrder"]);
 const DIRECTION_VALUES = new Set(["asc", "desc"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PUBLICATION_POLL_INTERVAL_MS = 1500;
+const PUBLICATION_RECONNECT_STORAGE_KEY = "web00_admin_publication_reconnect_v1";
+const PUBLICATION_BUSY_STATUSES = new Set([
+  "deploying",
+  "merge_queued",
+  "merged",
+  "preparing",
+  "pull_request_open",
+  "validating"
+]);
+const PUBLICATION_TERMINAL_STATUSES = new Set([
+  "failed",
+  "published",
+  "setup_required",
+  "version_conflict"
+]);
 const LIFECYCLE_ACTIONS = {
   publish: {
     confirmLabel: "Опубликовать",
@@ -84,11 +101,18 @@ export function createSitesListScreen(options) {
   const onEdit = typeof options?.onEdit === "function" ? options.onEdit : () => {};
   const onImages = typeof options?.onImages === "function" ? options.onImages : () => {};
   const onStatus = typeof options?.onStatus === "function" ? options.onStatus : () => {};
+  const publicationPollIntervalMs = Number.isFinite(options?.pollIntervalMs)
+    ? Math.max(0, options.pollIntervalMs)
+    : PUBLICATION_POLL_INTERVAL_MS;
+  const storage = options?.storage ?? globalThis.localStorage ?? null;
   let activeController = null;
   let categories = [];
   let currentDialog = null;
   let filters = {};
   let destroyed = false;
+  let activePublicationOperationId = null;
+  let publicationPollController = null;
+  let publicationPollTimer = null;
 
   const statusRegion = createLiveRegion({
     className: "admin-screen-status",
@@ -196,8 +220,11 @@ export function createSitesListScreen(options) {
         sites: Array.isArray(siteResponse?.data) ? siteResponse.data : [],
         meta: siteResponse?.meta ?? null
       });
-      statusRegion.textContent = "Список сайтов обновлён.";
-      onStatus("Список сайтов обновлён.");
+      const reconnected = await reconnectRememberedPublication();
+      if (!reconnected) {
+        statusRegion.textContent = "Список сайтов обновлён.";
+        onStatus("Список сайтов обновлён.");
+      }
     } catch (error) {
       if (controller.signal.aborted || destroyed) {
         return;
@@ -212,6 +239,7 @@ export function createSitesListScreen(options) {
   function destroy() {
     destroyed = true;
     abortActiveRequest();
+    clearPublicationObserver();
     currentDialog?.destroy();
     currentDialog = null;
   }
@@ -249,17 +277,19 @@ export function createSitesListScreen(options) {
     const action = LIFECYCLE_ACTIONS[actionId];
 
     try {
-      if (actionId === "soft-delete") {
-        const operation = await startDirectPagesDeletePublication(site);
+      if (actionId === "publish" || actionId === "unpublish" || actionId === "soft-delete") {
+        const operation = await startDirectPagesLifecyclePublication(site, actionId);
         if (destroyed) {
           return;
         }
-        const status = typeof operation?.stableStatus === "string" && operation.stableStatus.length > 0
-          ? operation.stableStatus
-          : "Публикуется";
-
-        statusRegion.textContent = status;
-        onStatus(status);
+        const terminal = await observeDirectPagesPublication(operation, { waitForTerminal: true });
+        if (!destroyed && terminal.status === "published") {
+          await load();
+          if (!destroyed) {
+            statusRegion.textContent = terminal.stableStatus;
+            onStatus(terminal.stableStatus);
+          }
+        }
         return;
       }
 
@@ -289,24 +319,32 @@ export function createSitesListScreen(options) {
     }
   }
 
-  async function startDirectPagesDeletePublication(site) {
-    const cardId = readCatalogCardId(site);
+  async function startDirectPagesLifecyclePublication(site, actionId) {
+    const fullSite = actionId === "soft-delete"
+      ? site
+      : await readLifecycleSite(site);
+    const cardId = readCatalogCardId(fullSite);
     if (cardId === null) {
-      return;
+      throw new Error("Invalid catalog card id.");
     }
-
-    const current = await apiClient.requestJson(`/api/admin/publication/pages/card/${cardId}`, {
-      method: "GET"
-    });
-    const data = current?.data ?? current;
-    const expectedBlobSha = typeof data?.blobSha === "string" ? data.blobSha : null;
+    const current = await readCurrentPagesCatalogCard(cardId);
+    const pagesAction = actionId === "soft-delete"
+      ? "delete"
+      : current.blobSha === null
+        ? "create"
+        : "update";
+    const requestId = createPublicationRequestId();
     const response = await apiClient.requestJson("/api/admin/publication/pages", {
       body: {
-        action: "delete",
-        card: null,
+        action: pagesAction,
+        card: pagesAction === "delete"
+          ? null
+          : buildDirectPagesCatalogCard(fullSite, {
+              active: actionId !== "unpublish"
+            }),
         cardId,
-        expectedBlobSha,
-        requestId: createPublicationRequestId()
+        expectedBlobSha: pagesAction === "create" ? null : current.blobSha,
+        requestId
       },
       credentials: "same-origin",
       headers: {
@@ -314,7 +352,329 @@ export function createSitesListScreen(options) {
       },
       method: "POST"
     });
-    return response?.data ?? response;
+    const operation = readDirectPagesPublicationDto(response);
+
+    persistPublicationReconnect({
+      operationId: operation.operationId,
+      prNumber: operation.prNumber,
+      requestId: operation.requestId,
+      siteId: validateUuid(fullSite.id, "site")
+    });
+
+    return operation;
+  }
+
+  async function readLifecycleSite(site) {
+    const response = await apiClient.requestJson(`/api/admin/sites/${validateUuid(site.id, "site")}`, {
+      method: "GET"
+    });
+    const data = response?.data ?? response;
+
+    if (typeof data !== "object" || data === null || data.id !== site.id) {
+      throw new Error("Invalid site response.");
+    }
+
+    return data;
+  }
+
+  async function readCurrentPagesCatalogCard(cardId) {
+    const current = await apiClient.requestJson(`/api/admin/publication/pages/card/${cardId}`, {
+      method: "GET"
+    });
+    const data = current?.data ?? current;
+
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      data.cardId !== cardId ||
+      !(typeof data.blobSha === "string" || data.blobSha === null)
+    ) {
+      throw new Error("Invalid publication card response.");
+    }
+
+    return data;
+  }
+
+  function buildDirectPagesCatalogCard(site, options = {}) {
+    const cardId = readCatalogCardId(site);
+    if (cardId === null) {
+      throw new Error("Invalid catalog card id.");
+    }
+    const category = site?.category && typeof site.category === "object"
+      ? site.category
+      : categories.find((item) => item.id === site?.categoryId) ?? {};
+    const categoryTitle = typeof category.title === "string" && category.title.trim()
+      ? category.title.trim()
+      : "Каталог";
+    const categorySlug = typeof category.slug === "string" && category.slug.trim()
+      ? category.slug.trim()
+      : "";
+    const previewImage = readRequiredPublicationUrl(site?.previewImageUrl);
+    const galleryImages = readPublicationGalleryUrls(site?.galleryImages);
+
+    return {
+      id: cardId,
+      slug: cardId,
+      sortOrder: Number.isFinite(Number(site?.sortOrder)) ? Number(site.sortOrder) : Number.MAX_SAFE_INTEGER,
+      legacyTitle: optionalPublicationText(site?.legacyTitle) ?? optionalPublicationText(site?.title),
+      title: requiredPublicationText(site?.title),
+      editableTitle: true,
+      category: categoryTitle,
+      description: requiredPublicationText(site?.shortDescription),
+      priceFrom: optionalPublicationText(site?.priceLabel) ?? formatPublicationPrice(site?.priceAmountCents),
+      deliveryTime: optionalPublicationText(site?.deliveryLabel),
+      features: readPublicationTextArray(site?.features),
+      tags: readPublicationTextArray(site?.tags),
+      previewImage,
+      previewType: optionalPublicationText(site?.previewType),
+      filter: categorySlug || undefined,
+      demoMode: optionalPublicationText(site?.demoMode),
+      demoLocalUrl: site?.demoLocalUrl ?? null,
+      externalDemoUrl: optionalPublicationText(site?.externalDemoUrl),
+      originalDemoUrl: optionalPublicationText(site?.originalDemoUrl),
+      demoUrl: optionalPublicationText(site?.demoUrl),
+      siteUrl: optionalPublicationText(site?.siteUrl),
+      galleryImages: galleryImages.length > 0 ? galleryImages : [previewImage],
+      aliases: [cardId],
+      active: options.active === false ? false : site?.active !== false
+    };
+  }
+
+  function readRequiredPublicationUrl(value) {
+    const url = optionalPublicationText(value);
+    if (!url) {
+      throw new Error("Publication media URL is required.");
+    }
+
+    return url;
+  }
+
+  function readPublicationGalleryUrls(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => typeof item === "string" ? item : item?.url)
+      .map(optionalPublicationText)
+      .filter(Boolean);
+  }
+
+  function readPublicationTextArray(value) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return [...new Set(value.map(optionalPublicationText).filter(Boolean))];
+  }
+
+  function requiredPublicationText(value) {
+    const text = optionalPublicationText(value);
+    if (!text) {
+      throw new Error("Publication card text is required.");
+    }
+
+    return text;
+  }
+
+  function optionalPublicationText(value) {
+    const text = String(value ?? "").trim();
+
+    return text || undefined;
+  }
+
+  function formatPublicationPrice(value) {
+    return Number.isFinite(Number(value)) && Number(value) > 0
+      ? formatCentsToRubles(Number(value))
+      : undefined;
+  }
+
+  async function observeDirectPagesPublication(operation, options = {}) {
+    const normalized = readDirectPagesPublicationDto(operation);
+    activePublicationOperationId = normalized.operationId;
+    applyDirectPagesPublicationDto(normalized);
+
+    if (PUBLICATION_TERMINAL_STATUSES.has(normalized.status)) {
+      clearPublicationObserver();
+      clearPublicationReconnect();
+      return normalized;
+    }
+
+    if (options.waitForTerminal === true) {
+      await wait(publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50);
+      if (destroyed || activePublicationOperationId !== normalized.operationId) {
+        return normalized;
+      }
+      const next = await fetchDirectPagesPublicationStatus(normalized);
+
+      return observeDirectPagesPublication(next, { waitForTerminal: true });
+    }
+
+    if (publicationPollIntervalMs > 0) {
+      scheduleDirectPagesPublicationPoll(normalized);
+    }
+
+    return normalized;
+  }
+
+  async function fetchDirectPagesPublicationStatus(operation) {
+    publicationPollController?.abort();
+    publicationPollController = new AbortController();
+
+    const response = await apiClient.requestJson(operation.statusUrl, {
+      method: "GET",
+      signal: publicationPollController.signal
+    });
+
+    return readDirectPagesPublicationDto(response, operation.operationId);
+  }
+
+  function scheduleDirectPagesPublicationPoll(operation) {
+    clearPublicationPollTimer();
+    publicationPollTimer = setTimeout(() => {
+      void fetchDirectPagesPublicationStatus(operation)
+        .then((next) => {
+          if (!destroyed && activePublicationOperationId === operation.operationId) {
+            void observeDirectPagesPublication(next);
+          }
+        })
+        .catch(() => {
+          if (!destroyed && activePublicationOperationId === operation.operationId) {
+            scheduleDirectPagesPublicationPoll(operation);
+          }
+        });
+    }, publicationPollIntervalMs);
+  }
+
+  function applyDirectPagesPublicationDto(operation) {
+    statusRegion.textContent = operation.stableStatus;
+    onStatus(operation.stableStatus);
+  }
+
+  function readDirectPagesPublicationDto(response, expectedOperationId = null) {
+    const data = response?.data ?? response;
+    const status = typeof data?.status === "string" ? data.status : "";
+    const stableStatus = typeof data?.stableStatus === "string" ? data.stableStatus : "";
+    const statusUrl = typeof data?.statusUrl === "string" ? data.statusUrl : "";
+
+    if (
+      typeof data !== "object" ||
+      data === null ||
+      typeof data.operationId !== "string" ||
+      !UUID_PATTERN.test(data.operationId) ||
+      (expectedOperationId !== null && data.operationId !== expectedOperationId) ||
+      (!PUBLICATION_BUSY_STATUSES.has(status) && !PUBLICATION_TERMINAL_STATUSES.has(status)) ||
+      typeof data.retryable !== "boolean" ||
+      stableStatus.length === 0 ||
+      statusUrl !== `/api/admin/publication/pages/${data.operationId}`
+    ) {
+      throw new Error("Invalid publication status response.");
+    }
+
+    return {
+      operationId: data.operationId,
+      prNumber: Number.isInteger(data.prNumber) ? data.prNumber : null,
+      requestId: typeof data.requestId === "string" && UUID_PATTERN.test(data.requestId)
+        ? data.requestId
+        : data.operationId,
+      retryable: data.retryable,
+      stableStatus,
+      status,
+      statusUrl
+    };
+  }
+
+  function persistPublicationReconnect(metadata) {
+    if (storage === null) {
+      return;
+    }
+
+    try {
+      storage.setItem(PUBLICATION_RECONNECT_STORAGE_KEY, JSON.stringify({
+        operationId: metadata.operationId,
+        prNumber: Number.isInteger(metadata.prNumber) ? metadata.prNumber : null,
+        requestId: metadata.requestId,
+        siteId: metadata.siteId,
+        updatedAt: new Date().toISOString(),
+        version: 2
+      }));
+    } catch {
+      // Reconnect metadata is best-effort and contains no secrets.
+    }
+  }
+
+  function clearPublicationReconnect() {
+    try {
+      storage?.removeItem?.(PUBLICATION_RECONNECT_STORAGE_KEY);
+    } catch {
+      // Ignore local storage cleanup failure.
+    }
+  }
+
+  async function reconnectRememberedPublication() {
+    if (role !== "admin") {
+      return false;
+    }
+    const metadata = readPublicationReconnect();
+    if (metadata === null) {
+      return false;
+    }
+
+    try {
+      const response = await apiClient.requestJson(`/api/admin/publication/pages/${metadata.requestId}`, {
+        method: "GET"
+      });
+      await observeDirectPagesPublication(readDirectPagesPublicationDto(response, metadata.operationId));
+      return true;
+    } catch {
+      clearPublicationReconnect();
+      return false;
+    }
+  }
+
+  function readPublicationReconnect() {
+    if (storage === null) {
+      return null;
+    }
+
+    try {
+      const raw = storage.getItem(PUBLICATION_RECONNECT_STORAGE_KEY);
+      if (typeof raw !== "string" || raw.length === 0) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        parsed.version !== 2 ||
+        typeof parsed.siteId !== "string" ||
+        !UUID_PATTERN.test(parsed.siteId) ||
+        typeof parsed.operationId !== "string" ||
+        !UUID_PATTERN.test(parsed.operationId) ||
+        typeof parsed.requestId !== "string" ||
+        !UUID_PATTERN.test(parsed.requestId)
+      ) {
+        return null;
+      }
+
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function clearPublicationObserver() {
+    clearPublicationPollTimer();
+    publicationPollController?.abort();
+    publicationPollController = null;
+    activePublicationOperationId = null;
+  }
+
+  function clearPublicationPollTimer() {
+    if (publicationPollTimer !== null) {
+      clearTimeout(publicationPollTimer);
+      publicationPollTimer = null;
+    }
   }
 
   function readCatalogCardId(site) {
@@ -1000,4 +1360,10 @@ function clampInteger(value, fallback, min, max) {
   const boundedMin = Math.max(parsed, min);
 
   return max === undefined ? boundedMin : Math.min(boundedMin, max);
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

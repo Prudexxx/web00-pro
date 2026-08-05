@@ -96,16 +96,35 @@ function readPublicationActionPermission(body: unknown): B5Permission {
 }
 
 function readPagesPublicationActionPermission(body: unknown): B5Permission {
-  if (
-    typeof body === "object" &&
-    body !== null &&
-    !Array.isArray(body) &&
-    (body as { action?: unknown }).action === "delete"
-  ) {
+  if (isDirectPagesUnpublish(body)) {
     return "site.unpublish";
   }
 
   return "site.publish";
+}
+
+function isDirectPagesUnpublish(body: unknown): boolean {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body)
+  ) {
+    const record = body as { action?: unknown; card?: unknown };
+    if (record.action === "delete") {
+      return true;
+    }
+    if (
+      record.action === "update" &&
+      typeof record.card === "object" &&
+      record.card !== null &&
+      !Array.isArray(record.card) &&
+      (record.card as { active?: unknown }).active === false
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function createPermissionMiddleware(policy: PermissionPolicy, permission: B5Permission): RequestHandler {

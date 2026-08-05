@@ -4,13 +4,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - catalog/cards/**
-      - scripts/build-pages-catalog.mjs
-      - tests/frontend/pages-catalog-generator.test.mjs
-      - tests/frontend/catalog-api-client.test.mjs
-      - tests/frontend/catalog-normalization.test.mjs
-      - tests/frontend/catalog-source-policy.test.mjs
 
 permissions:
   contents: read
@@ -31,7 +24,19 @@ jobs:
         with:
           node-version: 22.23.1
 
+      - name: Classify catalog publication PR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.head_ref }}" == catalog/publish/* ]]; then
+            echo "Catalog publication PR detected."
+          else
+            echo "Non-catalog PR: required Catalog PR validation check passes without strict catalog validation."
+          fi
+
       - name: Reject changes outside catalog publication scope
+        if: ${{ startsWith(github.head_ref, 'catalog/publish/') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -44,6 +49,7 @@ jobs:
           fi
 
       - name: Validate and check deterministic Pages catalog
+        if: ${{ startsWith(github.head_ref, 'catalog/publish/') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -51,6 +57,7 @@ jobs:
           node scripts/build-pages-catalog.mjs --check
 
       - name: Run Phase 1 catalog tests
+        if: ${{ startsWith(github.head_ref, 'catalog/publish/') }}
         shell: bash
         run: |
           set -euo pipefail

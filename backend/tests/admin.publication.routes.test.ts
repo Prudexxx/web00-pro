@@ -140,6 +140,44 @@ describe("admin publication routes", () => {
 
     expect(service.startPublication).not.toHaveBeenCalled();
   });
+
+  it("requires unpublish permission for Direct Pages updates that deactivate a public card", async () => {
+    const module = await importPublicationRoutesModule();
+    const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
+      now: () => Date;
+      pagesService: ReturnType<typeof createPagesPublicationServiceFake>;
+      policy?: PermissionPolicy;
+      service: ReturnType<typeof createPublicationServiceFake>;
+    }) => Router;
+    const service = createPublicationServiceFake();
+    const pagesService = createPagesPublicationServiceFake();
+    const app = createPublicationRouteApp(createAdminPublicationRouter({
+      now: fixedNow,
+      pagesService,
+      policy: publishOnlyPolicy(),
+      service
+    }));
+
+    await request(app)
+      .post("/api/admin/publication/pages")
+      .set("Authorization", "Bearer admin")
+      .set("Cookie", "web00-admin-session=synthetic")
+      .set("X-CSRF-Token", "synthetic-csrf")
+      .send({
+        action: "update",
+        card: {
+          active: false,
+          id: "direct-pages-unpublish",
+          slug: "direct-pages-unpublish"
+        },
+        cardId: "direct-pages-unpublish",
+        expectedBlobSha: "sha-existing",
+        requestId: "00000000-0000-4000-8000-000000000991"
+      })
+      .expect(403);
+
+    expect(pagesService.startPagesPublication).not.toHaveBeenCalled();
+  });
 });
 
 async function importPublicationRoutesModule(): Promise<Record<string, unknown>> {
@@ -189,6 +227,25 @@ function createPublicationServiceFake() {
       stableStatus: "Публикуется",
       status: "queued",
       statusUrl: "/api/admin/public-catalog/operations/00000000-0000-4000-8000-00000000feed"
+    }))
+  };
+}
+
+function createPagesPublicationServiceFake() {
+  return {
+    getCatalogCard: vi.fn(),
+    getPagesPublicationStatus: vi.fn(),
+    startPagesPublication: vi.fn(async () => ({
+      action: "update",
+      buttonLabel: "Проверяется",
+      cardId: "direct-pages-unpublish",
+      noOp: false,
+      operationId: "00000000-0000-4000-8000-000000000991",
+      requestId: "00000000-0000-4000-8000-000000000991",
+      retryable: false,
+      stableStatus: "Проверяется",
+      status: "validating",
+      statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000991"
     }))
   };
 }
