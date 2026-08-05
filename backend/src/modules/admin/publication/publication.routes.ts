@@ -5,11 +5,15 @@ import type { AuthRequest } from "../../auth/auth.types.js";
 import { createPermissionPolicy } from "../rbac.policy.js";
 import type { B5Permission, PermissionPolicy } from "../rbac.types.js";
 import { createAdminPublicationController } from "./publication.controller.js";
-import type { AdminPublicationService } from "./publication.service.js";
+import type {
+  AdminPublicationService,
+  PagesCatalogPublicationService
+} from "./publication.service.js";
 
 export function createAdminPublicationRouter(options: {
   enabled?: boolean;
   now?: () => Date;
+  pagesService?: PagesCatalogPublicationService;
   policy?: PermissionPolicy;
   service: AdminPublicationService;
 }): Router {
@@ -17,6 +21,21 @@ export function createAdminPublicationRouter(options: {
   const controller = createAdminPublicationController(options);
   const policy = options.policy ?? createPermissionPolicy();
 
+  router.get(
+    "/publication/pages/card/:cardId",
+    createPermissionMiddleware(policy, "site.read"),
+    controller.getPagesCatalogCard
+  );
+  router.post(
+    "/publication/pages",
+    createPagesPublicationActionPermissionMiddleware(policy),
+    controller.startPagesPublication
+  );
+  router.get(
+    "/publication/pages/:requestId",
+    createPermissionMiddleware(policy, "site.read"),
+    controller.getPagesPublicationStatus
+  );
   router.post(
     "/sites/:id/publication",
     createPublicationActionPermissionMiddleware(policy),
@@ -55,12 +74,33 @@ function createPublicationActionPermissionMiddleware(policy: PermissionPolicy): 
   };
 }
 
+function createPagesPublicationActionPermissionMiddleware(policy: PermissionPolicy): RequestHandler {
+  return (request, _response, next) => {
+    const permission = readPagesPublicationActionPermission(request.body);
+
+    return createPermissionMiddleware(policy, permission)(request, _response, next);
+  };
+}
+
 function readPublicationActionPermission(body: unknown): B5Permission {
   if (
     typeof body === "object" &&
     body !== null &&
     !Array.isArray(body) &&
     (body as { action?: unknown }).action === "unpublish"
+  ) {
+    return "site.unpublish";
+  }
+
+  return "site.publish";
+}
+
+function readPagesPublicationActionPermission(body: unknown): B5Permission {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    (body as { action?: unknown }).action === "delete"
   ) {
     return "site.unpublish";
   }

@@ -40,7 +40,11 @@ import { createAdminCategoryService } from "./modules/admin/categories/category.
 import { createPrismaAdminPublicCatalogRepository } from "./modules/admin/public-catalog/public-catalog-admin.repository.js";
 import { createAdminPublicCatalogService } from "./modules/admin/public-catalog/public-catalog-admin.service.js";
 import { createPrismaAdminPublicationRepository } from "./modules/admin/publication/publication.repository.js";
-import { createAdminPublicationService } from "./modules/admin/publication/publication.service.js";
+import {
+  createAdminPublicationService,
+  createPagesCatalogPublicationService
+} from "./modules/admin/publication/publication.service.js";
+import { createGitHubPagesCatalogProviderFromEnv } from "./modules/admin/publication/pages-publication.github.js";
 import { createPrismaAdminSiteRepository } from "./modules/admin/sites/site.repository.js";
 import { createAdminSiteService } from "./modules/admin/sites/site.service.js";
 import {
@@ -242,6 +246,10 @@ export function startServer(options: StartServerOptions): StartedServer {
     publicationEnabled: publicCatalogV2Runtime !== undefined,
     publicationService: createAdminPublicationService({
       repository: createPrismaAdminPublicationRepository({ prisma })
+    }),
+    pagesPublicationService: createPagesCatalogPublicationService({
+      github: createGitHubPagesCatalogProviderFromEnv(process.env),
+      now: options.now ?? (() => new Date())
     }),
     publicCatalogService: createAdminPublicCatalogService({
       dryRunService: publicCatalogDryRunService,

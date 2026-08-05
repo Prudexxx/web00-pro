@@ -6,6 +6,12 @@ import {
   toPublicationAppError,
   type PublicationOperationDto
 } from "../../public-catalog-v2/public-catalog-v2.publication.js";
+export {
+  createPagesCatalogPublicationService,
+  type PagesCatalogGitHubProvider,
+  type PagesCatalogPublicationDto,
+  type PagesCatalogPublicationService
+} from "./pages-publication.service.js";
 
 export interface AdminPublicationStartInput {
   action: "publish" | "unpublish";

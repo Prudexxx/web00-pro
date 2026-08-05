@@ -102,6 +102,16 @@ export function buildPagesCatalogFromCards(cards, options = {}) {
   };
 }
 
+export function serializeCanonicalCatalogCard(card) {
+  const fileId = text(card?.id);
+  const normalized = normalizeCard(card, {
+    fileId,
+    filePath: fileId ? `catalog/cards/${fileId}.json` : "catalog/cards/<unknown>.json",
+  });
+
+  return `${JSON.stringify(normalized, null, 2)}\n`;
+}
+
 function normalizeCard(input, context) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error(`Catalog card must be a JSON object: ${context.filePath}`);

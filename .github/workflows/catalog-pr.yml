@@ -1,0 +1,62 @@
+name: Catalog PR validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - catalog/cards/**
+      - scripts/build-pages-catalog.mjs
+      - tests/frontend/pages-catalog-generator.test.mjs
+      - tests/frontend/catalog-api-client.test.mjs
+      - tests/frontend/catalog-normalization.test.mjs
+      - tests/frontend/catalog-source-policy.test.mjs
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.1
+
+      - name: Reject changes outside catalog publication scope
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          changed="$(git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD)"
+          printf '%s\n' "$changed"
+          if printf '%s\n' "$changed" | grep -Ev '^(catalog/cards/[^/]+\.json|scripts/build-pages-catalog\.mjs|tests/frontend/(pages-catalog-generator|catalog-api-client|catalog-normalization|catalog-source-policy)\.test\.mjs)$' | grep -q .; then
+            echo "Catalog PR contains changes outside the approved scope." >&2
+            exit 1
+          fi
+
+      - name: Validate and check deterministic Pages catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/build-pages-catalog.mjs --check
+
+      - name: Run Phase 1 catalog tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --test \
+            tests/frontend/pages-catalog-generator.test.mjs \
+            tests/frontend/catalog-api-client.test.mjs \
+            tests/frontend/catalog-normalization.test.mjs \
+            tests/frontend/catalog-source-policy.test.mjs
