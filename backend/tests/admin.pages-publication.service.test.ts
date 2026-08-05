@@ -866,6 +866,7 @@ describe("Direct Pages catalog publication service", () => {
 
   it("PHASE 2.3 server-owned reconciler finalizes lifecycle after Pages success when the browser is closed", async () => {
     const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const { serializeCanonicalCatalogCard } = await loadPagesCatalogGenerator();
     const lifecycleFinalize = vi.fn(async () => undefined);
     const github = createGitHubProviderFake({
       requiredCheckConfigured: true,
@@ -877,6 +878,18 @@ describe("Direct Pages catalog publication service", () => {
       lifecycleFinalizer: { finalize: lifecycleFinalize },
       now: fixedNow
     });
+    const reconciledCard = canonicalCard({
+      active: false,
+      id: "phase-two-reconcile-unpublish",
+      slug: "phase-two-reconcile-unpublish",
+      title: "Phase Two Reconcile Unpublish"
+    });
+    const reconciledFile = {
+      blobSha: "blob-reconcile-unpublish",
+      content: serializeCanonicalCatalogCard(reconciledCard)
+    };
+    github.setRefCard("e".repeat(40), "phase-two-reconcile-unpublish", reconciledFile);
+    github.setMainCard("phase-two-reconcile-unpublish", reconciledFile);
     github.setRecentPublicationRequests([
       {
         action: "update",
@@ -1313,16 +1326,222 @@ describe("Direct Pages catalog publication service", () => {
     });
     expect(github.enableAutoMerge).toHaveBeenCalledTimes(2);
   });
+
+  it("PHASE 2.4 supersedes stale same-site lifecycle work after publish-unpublish and delete-recreate races", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const { serializeCanonicalCatalogCard } = await loadPagesCatalogGenerator();
+    const lifecycleFinalize = vi.fn(async () => undefined);
+    const github = createGitHubProviderFake({
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const service = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      lifecycleFinalizer: { finalize: lifecycleFinalize },
+      now: fixedNow
+    });
+
+    const cardId = "phase-two-supersession";
+    const published = canonicalCard({ id: cardId, slug: cardId, title: "Published A" });
+    const unpublished = { ...published, active: false, title: "Unpublished B" };
+    const publishRequestId = "00000000-0000-4000-8000-000000002401";
+    const unpublishRequestId = "00000000-0000-4000-8000-000000002402";
+
+    const publishMergeSha = "1".repeat(40);
+    const unpublishMergeSha = "2".repeat(40);
+    const deleteMergeSha = "3".repeat(40);
+    github.setRefCard(publishMergeSha, cardId, {
+      blobSha: "blob-publish-a",
+      content: serializeCanonicalCatalogCard(published)
+    });
+    github.setRefCard(unpublishMergeSha, cardId, {
+      blobSha: "blob-unpublish-b",
+      content: serializeCanonicalCatalogCard(unpublished)
+    });
+    github.setMainCard(cardId, {
+      blobSha: "blob-unpublish-b",
+      content: serializeCanonicalCatalogCard(unpublished)
+    });
+    github.setSyntheticRequest(publishRequestId, {
+      action: "update",
+      branch: `catalog/publish/${publishRequestId}`,
+      cardId,
+      lifecycleAction: "publish",
+      mergeCommitSha: publishMergeSha,
+      pagesStatus: "success",
+      requestFingerprint: "a".repeat(64),
+      requestId: publishRequestId,
+      siteId: "00000000-0000-4000-8000-000000000101",
+      state: "merged"
+    });
+    github.setSyntheticRequest(unpublishRequestId, {
+      action: "update",
+      branch: `catalog/publish/${unpublishRequestId}`,
+      cardId,
+      lifecycleAction: "unpublish",
+      mergeCommitSha: unpublishMergeSha,
+      pagesStatus: "success",
+      requestFingerprint: "b".repeat(64),
+      requestId: unpublishRequestId,
+      siteId: "00000000-0000-4000-8000-000000000101",
+      state: "merged"
+    });
+
+    await expect(service.getPagesPublicationStatus(publishRequestId, statusContext())).resolves.toMatchObject({
+      code: "PUBLICATION_SUPERSEDED",
+      retryable: false,
+      status: "superseded"
+    });
+    await expect(service.getPagesPublicationStatus(unpublishRequestId, statusContext())).resolves.toMatchObject({
+      status: "published"
+    });
+    expect(lifecycleFinalize).toHaveBeenCalledTimes(1);
+    expect(lifecycleFinalize).toHaveBeenCalledWith(expect.objectContaining({ lifecycleAction: "unpublish" }));
+
+    lifecycleFinalize.mockClear();
+    const deleteRequestId = "00000000-0000-4000-8000-000000002403";
+    github.setRefCard(deleteMergeSha, cardId, null);
+    github.setMainCard(cardId, {
+      blobSha: "blob-recreated",
+      content: serializeCanonicalCatalogCard({ ...published, title: "Recreated" })
+    });
+    github.setSyntheticRequest(deleteRequestId, {
+      action: "delete",
+      branch: `catalog/publish/${deleteRequestId}`,
+      cardId,
+      lifecycleAction: "delete",
+      mergeCommitSha: deleteMergeSha,
+      pagesStatus: "success",
+      requestFingerprint: "c".repeat(64),
+      requestId: deleteRequestId,
+      siteId: "00000000-0000-4000-8000-000000000101",
+      state: "merged"
+    });
+
+    await expect(service.getPagesPublicationStatus(deleteRequestId, statusContext())).resolves.toMatchObject({
+      code: "PUBLICATION_SUPERSEDED",
+      status: "superseded"
+    });
+    expect(lifecycleFinalize).not.toHaveBeenCalled();
+  });
+
+  it("PHASE 2.4 reconciliation worker catches interval failures, survives, and stop waits for the active run", async () => {
+    vi.useFakeTimers();
+    try {
+      const { createPagesCatalogPublicationReconciliationWorker } = await loadPublicationServiceExports();
+      const onError = vi.fn();
+      let releaseSecondRun!: () => void;
+      const secondRun = new Promise<void>((resolve) => {
+        releaseSecondRun = resolve;
+      });
+      const reconcilePagesPublicationLifecycle = vi.fn()
+        .mockRejectedValueOnce(new Error("synthetic GitHub list failure"))
+        .mockImplementationOnce(async () => {
+          await secondRun;
+          return { failed: 0, finalized: 1, scanned: 1 };
+        });
+      const worker = createPagesCatalogPublicationReconciliationWorker({
+        actor: systemActor(),
+        intervalMs: 60_000,
+        onError,
+        service: { reconcilePagesPublicationLifecycle }
+      });
+
+      worker.start();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(reconcilePagesPublicationLifecycle).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reconcilePagesPublicationLifecycle).toHaveBeenCalledTimes(2);
+      let stopped = false;
+      const stopPromise = worker.stop().then(() => { stopped = true; });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      releaseSecondRun();
+      await stopPromise;
+      expect(stopped).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("PHASE 2.4 recovers a marker-only missing-card unpublish after restart and cleans the branch", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const lifecycleFinalize = vi.fn(async () => undefined);
+    const github = createGitHubProviderFake({
+      currentPagesStatus: "pending",
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "success"
+    });
+    const firstProcess = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      lifecycleFinalizer: { finalize: lifecycleFinalize },
+      now: fixedNow
+    });
+    const requestId = "00000000-0000-4000-8000-000000002404";
+    const cardId = "phase-two-marker-unpublish";
+
+    await expect(firstProcess.startPagesPublication(startInput({
+      action: "update",
+      card: null,
+      cardId,
+      expectedBlobSha: null,
+      lifecycleAction: "unpublish",
+      requestId
+    }))).resolves.toMatchObject({
+      noOp: true,
+      status: "deploying"
+    });
+    expect(github.markerCommits).toHaveLength(1);
+    expect(lifecycleFinalize).not.toHaveBeenCalled();
+
+    github.setRecentMarkerRequests([
+      {
+        ...github.markerCommits[0],
+        noOp: true,
+        state: "marker"
+      }
+    ]);
+    github.setCurrentPagesStatus("success");
+    const restartedProcess = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      lifecycleFinalizer: { finalize: lifecycleFinalize },
+      now: fixedNow
+    });
+
+    await expect(restartedProcess.reconcilePagesPublicationLifecycle({
+      actor: systemActor(),
+      limit: 5,
+      now: fixedNow()
+    })).resolves.toEqual({
+      failed: 0,
+      finalized: 1,
+      scanned: 1
+    });
+    expect(lifecycleFinalize).toHaveBeenCalledWith(expect.objectContaining({
+      lifecycleAction: "unpublish",
+      requestId
+    }));
+    expect(github.deletedBranches).toContainEqual({ branch: `catalog/publish/${requestId}` });
+  });
+
 });
 
 async function loadPublicationServiceExports(): Promise<Record<string, any>> {
   const module = await import(publicationServiceModulePath) as Record<string, unknown>;
   const createPagesCatalogPublicationService = module.createPagesCatalogPublicationService;
+  const createPagesCatalogPublicationReconciliationWorker = module.createPagesCatalogPublicationReconciliationWorker;
 
   expect(typeof createPagesCatalogPublicationService).toBe("function");
+  expect(typeof createPagesCatalogPublicationReconciliationWorker).toBe("function");
 
   return {
-    createPagesCatalogPublicationService
+    createPagesCatalogPublicationService,
+    createPagesCatalogPublicationReconciliationWorker
   };
 }
 
@@ -1348,11 +1567,12 @@ function createGitHubProviderFake(options: {
   let currentPagesStatus = options.currentPagesStatus ?? "success";
   let getBaseBranchHeadHook: (() => void) | null = null;
   let requiredCheckStatus = options.requiredCheckStatus;
-  const branchCards = new Map<string, { blobSha: string; content: string }>();
+  const branchCards = new Map<string, { blobSha: string; content: string } | null>();
   const branchHeads = new Map<string, string>();
   const branchPublicationRequests = new Map<string, Record<string, unknown>>();
   const mainCards = new Map<string, { blobSha: string; content: string }>();
   let recentPublicationRequests: Record<string, unknown>[] = [];
+  let recentMarkerRequests: Record<string, unknown>[] = [];
   const requests = new Map<string, Record<string, unknown>>();
   const github = {
     autoMergeRequests: [] as Record<string, unknown>[],
@@ -1432,11 +1652,18 @@ function createGitHubProviderFake(options: {
       const limit = typeof input.limit === "number" ? input.limit : recentPublicationRequests.length;
       return recentPublicationRequests.slice(0, limit);
     }),
+    listRecentPublicationMarkerRequests: vi.fn(async (input: Record<string, unknown>) => {
+      const limit = typeof input.limit === "number" ? input.limit : recentMarkerRequests.length;
+      return recentMarkerRequests.slice(0, limit);
+    }),
     onGetBaseBranchHead(callback: () => void) {
       getBaseBranchHeadHook = callback;
     },
     setBranchCard(branch: string, cardId: string, value: { blobSha: string; content: string }) {
       branchCards.set(`${branch}:${cardId}`, value);
+    },
+    setRefCard(ref: string, cardId: string, value: { blobSha: string; content: string } | null) {
+      branchCards.set(`${ref}:${cardId}`, value);
     },
     setBranchHead(branch: string, sha: string) {
       branchHeads.set(branch, sha);
@@ -1458,10 +1685,31 @@ function createGitHubProviderFake(options: {
       if (request === undefined) {
         throw new Error(`Missing synthetic publication request ${requestId}.`);
       }
-      requests.set(requestId, {
+      const updated = {
         ...request,
         ...patch
-      });
+      };
+      requests.set(requestId, updated);
+
+      if (updated.state === "merged" && typeof updated.mergeCommitSha === "string") {
+        const cardId = String(updated.cardId);
+        const branch = String(updated.branch);
+        const commit = [...github.commits].reverse().find((item) => item.branch === branch);
+        if (commit?.content === null) {
+          mainCards.delete(cardId);
+          branchCards.set(`${updated.mergeCommitSha}:${cardId}`, null);
+        } else if (typeof commit?.content === "string") {
+          const card = {
+            blobSha: `blob-${updated.mergeCommitSha}`,
+            content: commit.content
+          };
+          mainCards.set(cardId, card);
+          branchCards.set(`${updated.mergeCommitSha}:${cardId}`, card);
+        }
+      }
+    },
+    setSyntheticRequest(requestId: string, value: Record<string, unknown>) {
+      requests.set(requestId, value);
     },
     setMainCard(cardId: string, value: { blobSha: string; content: string }) {
       mainCards.set(cardId, value);
@@ -1471,6 +1719,9 @@ function createGitHubProviderFake(options: {
     },
     setRecentPublicationRequests(value: Record<string, unknown>[]) {
       recentPublicationRequests = value;
+    },
+    setRecentMarkerRequests(value: Record<string, unknown>[]) {
+      recentMarkerRequests = value;
     }
   };
 

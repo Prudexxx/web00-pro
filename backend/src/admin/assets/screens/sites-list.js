@@ -40,6 +40,7 @@ const PUBLICATION_TERMINAL_STATUSES = new Set([
   "failed",
   "published",
   "setup_required",
+  "superseded",
   "version_conflict"
 ]);
 const LIFECYCLE_ACTIONS = {
@@ -283,7 +284,7 @@ export function createSitesListScreen(options) {
           return;
         }
         const terminal = await observeDirectPagesPublication(operation, { waitForTerminal: true });
-        if (!destroyed && terminal.status === "published") {
+        if (!destroyed && (terminal.status === "published" || terminal.status === "superseded")) {
           await load();
           if (!destroyed) {
             statusRegion.textContent = terminal.stableStatus;

@@ -154,6 +154,138 @@ describe("Direct Pages GitHub provider", () => {
     await expect(provider.findPublicationRequest("00000000-0000-4000-8000-00000000b002")).resolves.toBeNull();
     await expect(provider.listRecentPublicationRequests?.({ limit: 5 })).resolves.toEqual([]);
   });
+
+  it("PHASE 2.4 reads the required check from the current PR test-merge SHA before falling back to head SHA", async () => {
+    const headSha = "1".repeat(40);
+    const testMergeSha = "2".repeat(40);
+    const requested: string[] = [];
+    const provider = createGitHubPagesCatalogProvider({
+      config,
+      fetchFn: async (url) => {
+        const text = String(url);
+        requested.push(text);
+
+        if (text.includes("/pulls?")) {
+          return jsonResponse(200, [
+            {
+              auto_merge: null,
+              body: [
+                "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b004",
+                "WEB00-CARD-ID: phase-two-test-merge-check",
+                "WEB00-ACTION: update",
+                "WEB00-LIFECYCLE-ACTION: publish",
+                "WEB00-EXPECTED-BLOB-SHA: previous-blob",
+                `WEB00-FINGERPRINT: ${"e".repeat(64)}`
+              ].join("\n"),
+              head: {
+                ref: "catalog/publish/00000000-0000-4000-8000-00000000b004",
+                sha: headSha
+              },
+              html_url: "https://github.example.test/pull/79",
+              merge_commit_sha: testMergeSha,
+              mergeable_state: "clean",
+              merged_at: null,
+              node_id: "PR_node_test_merge_check",
+              number: 79,
+              state: "open"
+            }
+          ]);
+        }
+        if (text.includes("/protection/required_status_checks")) {
+          return jsonResponse(200, { contexts: [config.requiredCheck] });
+        }
+        if (text.includes(`/commits/${testMergeSha}/check-runs`)) {
+          return jsonResponse(200, {
+            check_runs: [
+              {
+                conclusion: "success",
+                name: config.requiredCheck,
+                status: "completed"
+              }
+            ]
+          });
+        }
+        if (text.includes(`/commits/${headSha}/check-runs`)) {
+          throw new Error("Head SHA fallback must not run when the named test-merge check exists.");
+        }
+
+        throw new Error(`Unexpected GitHub URL ${text}`);
+      }
+    });
+
+    const request = await provider.findPublicationRequest("00000000-0000-4000-8000-00000000b004");
+    expect(request).toMatchObject({
+      headSha,
+      testMergeSha
+    });
+    await expect(provider.getRequiredCatalogCheckStatus(request!)).resolves.toEqual({
+      configured: true,
+      status: "success"
+    });
+    expect(requested.some((url) => url.includes(`/commits/${testMergeSha}/check-runs`))).toBe(true);
+    expect(requested.some((url) => url.includes(`/commits/${headSha}/check-runs`))).toBe(false);
+
+    const fallbackRequested: string[] = [];
+    const fallbackProvider = createGitHubPagesCatalogProvider({
+      config,
+      fetchFn: async (url) => {
+        const text = String(url);
+        fallbackRequested.push(text);
+        if (text.includes("/pulls?")) {
+          return jsonResponse(200, [
+            {
+              auto_merge: null,
+              body: [
+                "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b004",
+                "WEB00-CARD-ID: phase-two-test-merge-check",
+                "WEB00-ACTION: update",
+                "WEB00-LIFECYCLE-ACTION: publish",
+                "WEB00-EXPECTED-BLOB-SHA: previous-blob",
+                `WEB00-FINGERPRINT: ${"e".repeat(64)}`
+              ].join("\n"),
+              head: {
+                ref: "catalog/publish/00000000-0000-4000-8000-00000000b004",
+                sha: headSha
+              },
+              html_url: "https://github.example.test/pull/79",
+              merge_commit_sha: testMergeSha,
+              mergeable_state: "clean",
+              merged_at: null,
+              node_id: "PR_node_test_merge_check",
+              number: 79,
+              state: "open"
+            }
+          ]);
+        }
+        if (text.includes("/protection/required_status_checks")) {
+          return jsonResponse(200, { contexts: [config.requiredCheck] });
+        }
+        if (text.includes(`/commits/${testMergeSha}/check-runs`)) {
+          return jsonResponse(200, { check_runs: [] });
+        }
+        if (text.includes(`/commits/${headSha}/check-runs`)) {
+          return jsonResponse(200, {
+            check_runs: [
+              {
+                conclusion: "success",
+                name: config.requiredCheck,
+                status: "completed"
+              }
+            ]
+          });
+        }
+        throw new Error(`Unexpected GitHub URL ${text}`);
+      }
+    });
+    const fallbackRequest = await fallbackProvider.findPublicationRequest("00000000-0000-4000-8000-00000000b004");
+    await expect(fallbackProvider.getRequiredCatalogCheckStatus(fallbackRequest!)).resolves.toEqual({
+      configured: true,
+      status: "success"
+    });
+    expect(fallbackRequested.some((url) => url.includes(`/commits/${testMergeSha}/check-runs`))).toBe(true);
+    expect(fallbackRequested.some((url) => url.includes(`/commits/${headSha}/check-runs`))).toBe(true);
+  });
+
 });
 
 function jsonResponse(status: number, body: unknown): Response {

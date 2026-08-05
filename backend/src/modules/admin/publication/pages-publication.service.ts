@@ -13,6 +13,7 @@ export type PagesCatalogPublicationStatus =
   | "merged"
   | "deploying"
   | "published"
+  | "superseded"
   | "failed"
   | "version_conflict"
   | "setup_required";
@@ -35,18 +36,22 @@ export interface PagesCatalogPublicationRecord {
   checkStatus?: "failure" | "pending" | "success" | undefined;
   code?: string | undefined;
   body?: string | undefined;
+  expectedBlobSha?: string | null | undefined;
+  headSha?: string | undefined;
   lifecycleAction?: PagesCatalogPublicationLifecycleAction | undefined;
   mergeCommitSha?: string | null;
   mergeableState?: string | undefined;
   nodeId?: string | undefined;
   number?: number | undefined;
   pagesStatus?: "failure" | "pending" | "success" | null;
+  noOp?: boolean | undefined;
   prNumber?: number | undefined;
   pullRequestNodeId?: string | undefined;
   requestId?: string | undefined;
   requestFingerprint?: string | undefined;
   siteId?: string | undefined;
-  state?: "closed" | "merged" | "open" | undefined;
+  state?: "closed" | "marker" | "merged" | "open" | undefined;
+  testMergeSha?: string | null | undefined;
   url?: string | undefined;
 }
 
@@ -104,6 +109,7 @@ export interface PagesCatalogGitHubProvider {
   getRepositorySetup?(): Promise<{ configured: boolean; code?: "GITHUB_REPOSITORY_SETUP_REQUIRED" }>;
   getRequiredCatalogCheckStatus(request: PagesCatalogPublicationRecord): Promise<PagesCatalogRequiredCheckStatus>;
   listRecentPublicationRequests?(input: { limit: number }): Promise<PagesCatalogPublicationRecord[]>;
+  listRecentPublicationMarkerRequests?(input: { limit: number }): Promise<PagesCatalogPublicationRecord[]>;
 }
 
 export interface PagesCatalogPublicationStartInput {
@@ -182,6 +188,7 @@ export function createPagesCatalogPublicationReconciliationWorker(options: {
   intervalMs?: number | undefined;
   limit?: number | undefined;
   now?: () => Date;
+  onError?: ((error: unknown) => void) | undefined;
   service: PagesCatalogPublicationService;
 }): PagesCatalogPublicationReconciliationWorker {
   const intervalMs = Number.isFinite(options.intervalMs) && options.intervalMs !== undefined
@@ -190,21 +197,35 @@ export function createPagesCatalogPublicationReconciliationWorker(options: {
   const limit = normalizeReconciliationLimit(options.limit);
   const now = options.now ?? (() => new Date());
   let interval: ReturnType<typeof setInterval> | null = null;
-  let running = false;
+  let inFlight: Promise<PagesCatalogPublicationReconciliationDto> | null = null;
 
   async function reconcileOnce(): Promise<PagesCatalogPublicationReconciliationDto> {
-    if (running) {
-      return { failed: 0, finalized: 0, scanned: 0 };
+    if (inFlight !== null) {
+      return inFlight;
     }
-    running = true;
+    const run = options.service.reconcilePagesPublicationLifecycle({
+      actor: options.actor,
+      limit,
+      now: now()
+    });
+    const tracked = run.finally(() => {
+      inFlight = null;
+    });
+    inFlight = tracked;
+
+    return tracked;
+  }
+
+  function reportError(error: unknown): void {
     try {
-      return await options.service.reconcilePagesPublicationLifecycle({
-        actor: options.actor,
-        limit,
-        now: now()
-      });
-    } finally {
-      running = false;
+      if (options.onError !== undefined) {
+        options.onError(error);
+        return;
+      }
+      console.error("Direct Pages reconciliation failed.", safeErrorCode(error));
+    } catch {
+      // Error reporting must never turn a handled reconciliation failure into
+      // an unhandled rejection.
     }
   }
 
@@ -215,7 +236,10 @@ export function createPagesCatalogPublicationReconciliationWorker(options: {
         return;
       }
       interval = setInterval(() => {
-        void reconcileOnce();
+        if (inFlight !== null) {
+          return;
+        }
+        void reconcileOnce().catch(reportError);
       }, intervalMs);
       interval.unref?.();
     },
@@ -224,8 +248,20 @@ export function createPagesCatalogPublicationReconciliationWorker(options: {
         clearInterval(interval);
         interval = null;
       }
+      const active = inFlight;
+      if (active !== null) {
+        await active.catch(reportError);
+      }
     }
   };
+}
+
+function safeErrorCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string") {
+    return (error as { code: string }).code;
+  }
+
+  return "DIRECT_PAGES_RECONCILIATION_FAILED";
 }
 
 const CARD_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -283,12 +319,21 @@ export function createPagesCatalogPublicationService(options: {
 
     async getPagesPublicationStatus(requestId, context) {
       assertRequestId(requestId);
-      const existing = await options.github.findPublicationRequest(requestId);
+      const existing = await options.github.findPublicationRequest(requestId) ??
+        await readPublicationBranchRequest(options.github, requestId);
       if (existing === null) {
         throw new AppError({
           code: "SITE_NOT_FOUND",
           message: "Publication request not found.",
           statusCode: 404
+        });
+      }
+
+      if (isRecoverableNoOpMarkerRequest(existing)) {
+        return reconcileNoOpMarkerPublication(options.github, existing, {
+          actor: context?.actor,
+          lifecycleFinalizer: options.lifecycleFinalizer,
+          now: context?.now
         });
       }
 
@@ -302,24 +347,43 @@ export function createPagesCatalogPublicationService(options: {
 
     async reconcilePagesPublicationLifecycle(input) {
       const limit = normalizeReconciliationLimit(input.limit);
-      const recent = options.github.listRecentPublicationRequests === undefined
+      const pullRequests = options.github.listRecentPublicationRequests === undefined
         ? []
         : await options.github.listRecentPublicationRequests({ limit });
+      const markerRequests = options.github.listRecentPublicationMarkerRequests === undefined
+        ? []
+        : await options.github.listRecentPublicationMarkerRequests({ limit });
+      const seen = new Set(pullRequests.map((request) => request.requestId).filter((value): value is string => typeof value === "string"));
+      const uniqueMarkerRequests = markerRequests.filter((request) => (
+        typeof request.requestId === "string" && !seen.has(request.requestId)
+      ));
+      const recent = [
+        ...uniqueMarkerRequests.filter(isRecoverableNoOpMarkerRequest),
+        ...pullRequests.filter(isRecoverablePublicationRequest)
+      ].slice(0, limit);
       let failed = 0;
       let finalized = 0;
 
       for (const request of recent) {
-        if (!isRecoverablePublicationRequest(request)) {
+        const recoverablePullRequest = isRecoverablePublicationRequest(request);
+        const recoverableMarkerRequest = isRecoverableNoOpMarkerRequest(request);
+        if (!recoverablePullRequest && !recoverableMarkerRequest) {
           continue;
         }
 
         try {
-          const result = await reconcileGitHubPublicationStatus(options.github, request.requestId!, request, {
-            actor: input.actor,
-            lifecycleFinalizer: options.lifecycleFinalizer,
-            now: input.now,
-            siteId: request.siteId
-          });
+          const result = recoverableMarkerRequest
+            ? await reconcileNoOpMarkerPublication(options.github, request, {
+                actor: input.actor,
+                lifecycleFinalizer: options.lifecycleFinalizer,
+                now: input.now
+              })
+            : await reconcileGitHubPublicationStatus(options.github, request.requestId!, request, {
+                actor: input.actor,
+                lifecycleFinalizer: options.lifecycleFinalizer,
+                now: input.now,
+                siteId: request.siteId
+              });
           if (result.status === "published") {
             finalized += 1;
           } else if (result.status === "failed") {
@@ -356,6 +420,13 @@ export function createPagesCatalogPublicationService(options: {
       const branchRequest = await readPublicationBranchRequest(options.github, input.requestId);
       if (branchRequest !== null) {
         assertIdempotentReplay(branchRequest, requestFingerprint);
+        if (isRecoverableNoOpMarkerRequest(branchRequest)) {
+          return reconcileNoOpMarkerPublication(options.github, branchRequest, {
+            actor: input.actor,
+            lifecycleFinalizer: options.lifecycleFinalizer,
+            now: input.now
+          });
+        }
       }
 
       await assertRepositoryConfigured(options.github);
@@ -376,16 +447,21 @@ export function createPagesCatalogPublicationService(options: {
         : { existed: true };
 
       if (mutation.kind === "noop") {
-        return noOpPublicationDto(options.github, {
+        return reconcileNoOpMarkerPublication(options.github, {
           action: input.action,
-          actor: input.actor,
+          branch,
           cardId: input.cardId,
-          lifecycleFinalizer: options.lifecycleFinalizer,
+          expectedBlobSha: input.expectedBlobSha,
           lifecycleAction,
           noOp: true,
-          now: input.now,
+          requestFingerprint,
           requestId: input.requestId,
-          siteId: input.siteId
+          siteId: input.siteId,
+          state: "marker"
+        }, {
+          actor: input.actor,
+          lifecycleFinalizer: options.lifecycleFinalizer,
+          now: input.now
         });
       }
 
@@ -462,43 +538,6 @@ export function createPagesCatalogPublicationService(options: {
       });
     }
   };
-}
-
-async function noOpPublicationDto(
-  github: PagesCatalogGitHubProvider,
-  input: {
-    action: PagesCatalogPublicationAction;
-    actor: AuthenticatedPrincipal;
-    cardId: string;
-    lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
-    lifecycleAction: PagesCatalogPublicationLifecycleAction;
-    noOp: true;
-    now: Date;
-    requestId: string;
-    siteId?: string | undefined;
-  }
-): Promise<PagesCatalogPublicationDto> {
-  const pages = github.getCurrentPagesDeploymentStatus === undefined
-    ? { status: "pending" as const }
-    : await github.getCurrentPagesDeploymentStatus();
-
-  if (pages.status === "success") {
-    const finalized = await finalizePublicationLifecycle(input);
-    if (finalized !== null) {
-      return finalized;
-    }
-
-    return publicationDto({
-      ...input,
-      status: "published"
-    });
-  }
-
-  return publicationDto({
-    ...input,
-    code: pages.status === "failure" ? "PAGES_DEPLOYMENT_FAILED" : "PAGES_DEPLOYMENT_NOT_VERIFIED",
-    status: "failed"
-  });
 }
 
 async function createPagesPublicationRequestFingerprint(
@@ -801,6 +840,35 @@ async function reconcileGitHubPublicationStatus(
 
   if (request.state === "merged") {
     if (request.pagesStatus === "success") {
+      const currentness = await verifyMergedPublicationStillCurrent(github, request, cardId);
+      if (currentness === "superseded") {
+        await deleteMergedTemporaryBranch(github, request);
+        return publicationDto({
+          action,
+          cardId,
+          code: "PUBLICATION_SUPERSEDED",
+          mergeCommitSha: readOptionalSha(request.mergeCommitSha),
+          noOp: false,
+          prNumber,
+          requestId,
+          retryable: false,
+          status: "superseded"
+        });
+      }
+      if (currentness === "unverified") {
+        return publicationDto({
+          action,
+          cardId,
+          code: "PUBLICATION_STATE_NOT_VERIFIED",
+          mergeCommitSha: readOptionalSha(request.mergeCommitSha),
+          noOp: false,
+          prNumber,
+          requestId,
+          retryable: true,
+          status: "failed"
+        });
+      }
+
       const finalized = await finalizePublicationLifecycle({
         action,
         actor: lifecycle?.actor,
@@ -905,15 +973,165 @@ async function deleteMergedTemporaryBranch(
   github: PagesCatalogGitHubProvider,
   request: PagesCatalogPublicationRecord
 ): Promise<void> {
-  if (github.deleteTemporaryBranch === undefined || typeof request.branch !== "string") {
+  if (typeof request.branch !== "string") {
+    return;
+  }
+
+  await deleteTemporaryBranchBestEffort(github, request.branch);
+}
+
+async function deleteTemporaryBranchBestEffort(
+  github: PagesCatalogGitHubProvider,
+  branch: string
+): Promise<void> {
+  if (github.deleteTemporaryBranch === undefined) {
     return;
   }
 
   try {
-    await github.deleteTemporaryBranch({ branch: request.branch });
+    await github.deleteTemporaryBranch({ branch });
   } catch {
     // Branch cleanup is best-effort after a verified Pages deployment.
   }
+}
+
+async function verifyMergedPublicationStillCurrent(
+  github: PagesCatalogGitHubProvider,
+  request: PagesCatalogPublicationRecord,
+  cardId: string
+): Promise<"current" | "superseded" | "unverified"> {
+  const mergeCommitSha = readOptionalSha(request.mergeCommitSha);
+  if (mergeCommitSha === undefined) {
+    return "unverified";
+  }
+
+  const currentMainSha = await github.getBaseBranchHead();
+  const [requestCard, currentCard] = await Promise.all([
+    github.getCatalogCard(cardId, { ref: mergeCommitSha }),
+    github.getCatalogCard(cardId, { ref: currentMainSha })
+  ]);
+
+  if (request.action === "delete") {
+    if (requestCard !== null) {
+      return "unverified";
+    }
+
+    return currentCard === null ? "current" : "superseded";
+  }
+
+  if (requestCard === null) {
+    return "unverified";
+  }
+
+  return sameCatalogCardFile(requestCard, currentCard) ? "current" : "superseded";
+}
+
+function sameCatalogCardFile(
+  left: PagesCatalogCardFile,
+  right: PagesCatalogCardFile | null
+): boolean {
+  return right !== null && left.blobSha === right.blobSha && left.content === right.content;
+}
+
+function isRecoverableNoOpMarkerRequest(request: PagesCatalogPublicationRecord): boolean {
+  return request.noOp === true &&
+    request.state === "marker" &&
+    typeof request.branch === "string" &&
+    typeof request.requestId === "string" &&
+    UUID_RE.test(request.requestId) &&
+    request.branch === `catalog/publish/${request.requestId}` &&
+    typeof request.requestFingerprint === "string" &&
+    /^[a-f0-9]{64}$/i.test(request.requestFingerprint) &&
+    isRecoverableNoOpActionPair(request.action, request.lifecycleAction) &&
+    typeof request.cardId === "string" &&
+    CARD_ID_RE.test(request.cardId) &&
+    typeof request.siteId === "string" &&
+    UUID_RE.test(request.siteId) &&
+    (request.expectedBlobSha === null || typeof request.expectedBlobSha === "string");
+}
+
+function isRecoverableNoOpActionPair(
+  action: PagesCatalogPublicationAction | undefined,
+  lifecycleAction: PagesCatalogPublicationLifecycleAction | undefined
+): boolean {
+  if (action === "delete") {
+    return lifecycleAction === "delete";
+  }
+
+  return action === "update" && (lifecycleAction === "publish" || lifecycleAction === "unpublish");
+}
+
+async function reconcileNoOpMarkerPublication(
+  github: PagesCatalogGitHubProvider,
+  request: PagesCatalogPublicationRecord,
+  lifecycle: {
+    actor?: AuthenticatedPrincipal | undefined;
+    lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
+    now?: Date | undefined;
+  }
+): Promise<PagesCatalogPublicationDto> {
+  const action = readAction(request.action);
+  const cardId = readCardId(request.cardId);
+  const requestId = readRequestId(request.requestId);
+  const lifecycleAction = request.lifecycleAction ?? lifecycleActionForPublication(action);
+  const currentMainSha = await github.getBaseBranchHead();
+  const currentCard = await github.getCatalogCard(cardId, { ref: currentMainSha });
+  const expectedBlobSha = request.expectedBlobSha ?? null;
+  const currentStateMatches = expectedBlobSha === null
+    ? currentCard === null
+    : currentCard?.blobSha === expectedBlobSha;
+
+  if (!currentStateMatches) {
+    await deleteTemporaryBranchBestEffort(github, request.branch!);
+    return publicationDto({
+      action,
+      cardId,
+      code: "PUBLICATION_SUPERSEDED",
+      noOp: true,
+      requestId,
+      retryable: false,
+      status: "superseded"
+    });
+  }
+
+  const pages = github.getCurrentPagesDeploymentStatus === undefined
+    ? { status: "pending" as const }
+    : await github.getCurrentPagesDeploymentStatus();
+  if (pages.status !== "success") {
+    return publicationDto({
+      action,
+      cardId,
+      code: pages.status === "failure" ? "PAGES_DEPLOYMENT_FAILED" : "PAGES_DEPLOYMENT_NOT_VERIFIED",
+      noOp: true,
+      requestId,
+      retryable: pages.status !== "failure",
+      status: pages.status === "failure" ? "failed" : "deploying"
+    });
+  }
+
+  const finalized = await finalizePublicationLifecycle({
+    action,
+    actor: lifecycle.actor,
+    cardId,
+    lifecycleFinalizer: lifecycle.lifecycleFinalizer,
+    lifecycleAction,
+    noOp: true,
+    now: lifecycle.now,
+    requestId,
+    siteId: request.siteId
+  });
+  if (finalized !== null) {
+    return finalized;
+  }
+
+  await deleteTemporaryBranchBestEffort(github, request.branch!);
+  return publicationDto({
+    action,
+    cardId,
+    noOp: true,
+    requestId,
+    status: "published"
+  });
 }
 
 async function finalizePublicationLifecycle(input: {
@@ -1068,6 +1286,8 @@ function labelsForStatus(status: PagesCatalogPublicationStatus): {
       return { buttonLabel: "Развёртывается", stableStatus: "Развёртывается" };
     case "published":
       return { buttonLabel: "Опубликовано", stableStatus: "Опубликовано" };
+    case "superseded":
+      return { buttonLabel: "Состояние обновлено", stableStatus: "Состояние обновлено" };
     case "version_conflict":
       return { buttonLabel: "Конфликт версии", stableStatus: "Конфликт версии" };
     case "failed":
@@ -1376,6 +1596,10 @@ function readAction(action: unknown): PagesCatalogPublicationAction {
 
 function readCardId(cardId: unknown): string {
   return typeof cardId === "string" && CARD_ID_RE.test(cardId) ? cardId : "unknown-card";
+}
+
+function readRequestId(requestId: unknown): string {
+  return typeof requestId === "string" && UUID_RE.test(requestId) ? requestId : "00000000-0000-4000-8000-000000000000";
 }
 
 function readPullRequestNodeId(request: PagesCatalogPublicationRecord): string {

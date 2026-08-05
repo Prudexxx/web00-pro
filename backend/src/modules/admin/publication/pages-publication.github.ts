@@ -37,6 +37,7 @@ export const WEB00_CATALOG_REQUIRED_CHECK = "web00-catalog-validate";
 interface PullRequestMarkers {
   action: PagesCatalogPublicationAction;
   cardId: string;
+  expectedBlobSha: string | null;
   lifecycleAction: PagesCatalogPublicationLifecycleAction;
   requestFingerprint: string;
   requestId: string;
@@ -263,38 +264,7 @@ export function createGitHubPagesCatalogProvider(options: {
     },
 
     async getPublicationBranchRequest(requestId) {
-      const branch = `catalog/publish/${requestId}`;
-      const ref = await client.requestOptional(`/git/ref/heads/${encodeURIComponentPath(branch)}`);
-      if (ref === null) {
-        return null;
-      }
-      const headSha = requireString((ref as { object?: { sha?: unknown } }).object?.sha, "object.sha");
-      const commit = await client.request(`/git/commits/${encodeURIComponent(headSha)}`) as { message?: unknown };
-      const markers = readValidPullRequestMarkers(String(commit.message ?? ""), {
-        branch,
-        requestId
-      });
-
-      if (
-        markers === null
-      ) {
-        throw new AppError({
-          code: "IDEMPOTENCY_KEY_REUSED",
-          message: "Idempotency key was reused for a different request.",
-          statusCode: 409
-        });
-      }
-
-      return {
-        action: markers.action,
-        branch,
-        cardId: markers.cardId,
-        lifecycleAction: markers.lifecycleAction,
-        requestFingerprint: markers.requestFingerprint,
-        requestId,
-        siteId: markers.siteId,
-        state: "open"
-      };
+      return readPublicationMarkerBranchRequest(client, requestId, true);
     },
 
     async getRepositorySetup() {
@@ -337,7 +307,107 @@ export function createGitHubPagesCatalogProvider(options: {
       }
 
       return records;
+    },
+
+    async listRecentPublicationMarkerRequests(input) {
+      const limit = Math.max(1, Math.min(20, Math.trunc(input.limit)));
+      const refs = await client.requestOptional(`/git/matching-refs/heads/catalog/publish/?per_page=100`);
+      if (!Array.isArray(refs)) {
+        return [];
+      }
+      const records: PagesCatalogPublicationRecord[] = [];
+      const orderedRefs = [...refs].sort((left, right) => {
+        const leftRef = typeof left === "object" && left !== null ? String((left as { ref?: unknown }).ref ?? "") : "";
+        const rightRef = typeof right === "object" && right !== null ? String((right as { ref?: unknown }).ref ?? "") : "";
+        return leftRef.localeCompare(rightRef);
+      });
+
+      for (const value of orderedRefs) {
+        if (records.length >= limit) {
+          break;
+        }
+        const ref = typeof value === "object" && value !== null
+          ? (value as { ref?: unknown }).ref
+          : undefined;
+        if (typeof ref !== "string") {
+          continue;
+        }
+        const branch = ref.replace(/^refs\/heads\//, "");
+        const requestId = branch.startsWith("catalog/publish/")
+          ? branch.slice("catalog/publish/".length)
+          : "";
+        if (!UUID_RE.test(requestId)) {
+          continue;
+        }
+        const pulls = await client.requestOptional(`/pulls?state=all&head=${encodeURIComponent(`${options.config.owner}:${branch}`)}&base=${encodeURIComponent(options.config.baseBranch)}&per_page=1`);
+        if (Array.isArray(pulls) && pulls.length > 0) {
+          continue;
+        }
+        const record = await readPublicationMarkerBranchRequest(client, requestId, false);
+        if (record?.noOp === true) {
+          records.push(record);
+        }
+      }
+
+      return records;
     }
+  };
+}
+
+async function readPublicationMarkerBranchRequest(
+  client: ReturnType<typeof createGitHubClient>,
+  requestId: string,
+  rejectInvalidMarkers: boolean
+): Promise<PagesCatalogPublicationRecord | null> {
+  const branch = `catalog/publish/${requestId}`;
+  const ref = await client.requestOptional(`/git/ref/heads/${encodeURIComponentPath(branch)}`);
+  if (ref === null) {
+    return null;
+  }
+  const headSha = requireString((ref as { object?: { sha?: unknown } }).object?.sha, "object.sha");
+  const commit = await client.request(`/git/commits/${encodeURIComponent(headSha)}`) as {
+    message?: unknown;
+    parents?: Array<{ sha?: unknown }>;
+    tree?: { sha?: unknown };
+  };
+  const markers = readValidPullRequestMarkers(String(commit.message ?? ""), {
+    branch,
+    requestId
+  });
+
+  if (markers === null) {
+    if (rejectInvalidMarkers) {
+      throw new AppError({
+        code: "IDEMPOTENCY_KEY_REUSED",
+        message: "Idempotency key was reused for a different request.",
+        statusCode: 409
+      });
+    }
+    return null;
+  }
+
+  const parentSha = Array.isArray(commit.parents) && commit.parents.length === 1
+    ? readSha(commit.parents[0]?.sha)
+    : null;
+  const treeSha = readSha(commit.tree?.sha);
+  let noOp = false;
+  if (parentSha !== null && treeSha !== null) {
+    const parent = await client.requestOptional(`/git/commits/${encodeURIComponent(parentSha)}`) as { tree?: { sha?: unknown } } | null;
+    noOp = readSha(parent?.tree?.sha) === treeSha;
+  }
+
+  return {
+    action: markers.action,
+    branch,
+    cardId: markers.cardId,
+    expectedBlobSha: markers.expectedBlobSha,
+    headSha,
+    lifecycleAction: markers.lifecycleAction,
+    noOp,
+    requestFingerprint: markers.requestFingerprint,
+    requestId,
+    siteId: markers.siteId,
+    state: noOp ? "marker" : "open"
   };
 }
 
@@ -556,28 +626,54 @@ async function readPullRequestCheckStatus(
   request: PagesCatalogPublicationRecord,
   requiredCheck: string
 ): Promise<PagesCatalogRequiredCheckStatus["status"]> {
-  const ref = typeof request.branch === "string" ? request.branch : "";
-  if (!ref) {
-    return "pending";
+  const testMergeSha = readSha(request.testMergeSha);
+  const headSha = readSha(request.headSha);
+
+  if (testMergeSha !== null) {
+    const status = await readNamedCheckStatus(client, testMergeSha, requiredCheck);
+    if (status.found) {
+      return status.status;
+    }
   }
-  const runs = await client.requestOptional(`/commits/${encodeURIComponentPath(ref)}/check-runs`);
+  if (headSha !== null) {
+    const status = await readNamedCheckStatus(client, headSha, requiredCheck);
+    if (status.found) {
+      return status.status;
+    }
+  }
+
+  return "pending";
+}
+
+async function readNamedCheckStatus(
+  client: ReturnType<typeof createGitHubClient>,
+  sha: string,
+  requiredCheck: string
+): Promise<{ found: boolean; status: PagesCatalogRequiredCheckStatus["status"] }> {
+  const runs = await client.requestOptional(`/commits/${encodeURIComponent(sha)}/check-runs?filter=latest&per_page=100`);
   if (runs === null) {
-    return "pending";
+    return { found: false, status: "pending" };
   }
   const checkRuns = (runs as { check_runs?: unknown }).check_runs;
   if (!Array.isArray(checkRuns)) {
-    return "pending";
+    return { found: false, status: "pending" };
   }
   const run = checkRuns.find((item) => (
     typeof item === "object" &&
     item !== null &&
     (item as { name?: unknown }).name === requiredCheck
   )) as { conclusion?: unknown; status?: unknown } | undefined;
-  if (run === undefined || run.status !== "completed") {
-    return "pending";
+  if (run === undefined) {
+    return { found: false, status: "pending" };
+  }
+  if (run.status !== "completed") {
+    return { found: true, status: "pending" };
   }
 
-  return run.conclusion === "success" ? "success" : "failure";
+  return {
+    found: true,
+    status: run.conclusion === "success" ? "success" : "failure"
+  };
 }
 
 async function mapPullRequestToPublicationRecord(
@@ -601,7 +697,10 @@ async function mapPullRequestToPublicationRecord(
     state?: unknown;
   };
   const merged = typeof value.merged_at === "string" && value.merged_at.length > 0;
-  const mergeCommitSha = typeof value.merge_commit_sha === "string" ? value.merge_commit_sha : null;
+  const pullCommitSha = typeof value.merge_commit_sha === "string" ? value.merge_commit_sha : null;
+  const headSha = typeof value.head?.sha === "string" ? value.head.sha : undefined;
+  const mergeCommitSha = merged ? pullCommitSha : null;
+  const testMergeSha = merged ? null : pullCommitSha;
 
   return {
     action: markers.action,
@@ -610,6 +709,8 @@ async function mapPullRequestToPublicationRecord(
     branch: typeof value.head?.ref === "string" ? value.head.ref : undefined,
     cardId: markers.cardId,
     checkStatus: "pending",
+    expectedBlobSha: markers.expectedBlobSha,
+    ...(headSha === undefined ? {} : { headSha }),
     lifecycleAction: markers.lifecycleAction,
     mergeCommitSha,
     mergeableState: typeof value.mergeable_state === "string" ? value.mergeable_state : undefined,
@@ -624,6 +725,7 @@ async function mapPullRequestToPublicationRecord(
     requestFingerprint: markers.requestFingerprint,
     siteId: markers.siteId,
     state: merged ? "merged" : value.state === "open" ? "open" : "closed",
+    testMergeSha,
     url: typeof value.html_url === "string" ? value.html_url : undefined
   };
 }
@@ -716,6 +818,7 @@ function readCatalogPublicationPullRequestMarkers(value: unknown): PullRequestMa
 function readPullRequestMarkers(body: string): {
   action: string;
   cardId: string;
+  expectedBlobSha: string;
   lifecycleAction: string;
   requestFingerprint: string;
   requestId: string;
@@ -724,6 +827,7 @@ function readPullRequestMarkers(body: string): {
   const requestId = marker(body, "WEB00-REQUEST-ID");
   const action = marker(body, "WEB00-ACTION");
   const cardId = marker(body, "WEB00-CARD-ID");
+  const expectedBlobSha = marker(body, "WEB00-EXPECTED-BLOB-SHA");
   const lifecycleAction = marker(body, "WEB00-LIFECYCLE-ACTION");
   const requestFingerprint = marker(body, "WEB00-FINGERPRINT");
   const siteId = marker(body, "WEB00-SITE-ID");
@@ -731,6 +835,7 @@ function readPullRequestMarkers(body: string): {
   return {
     action,
     cardId,
+    expectedBlobSha,
     lifecycleAction,
     requestFingerprint,
     requestId,
@@ -768,10 +873,20 @@ function readValidPullRequestMarkers(
   if (markers.siteId !== undefined && !UUID_RE.test(markers.siteId)) {
     return null;
   }
+  if (
+    markers.expectedBlobSha !== "" &&
+    markers.expectedBlobSha !== "null" &&
+    !/^[a-zA-Z0-9_-]+$/.test(markers.expectedBlobSha)
+  ) {
+    return null;
+  }
 
   return {
     action: markers.action,
     cardId: markers.cardId,
+    expectedBlobSha: markers.expectedBlobSha === "" || markers.expectedBlobSha === "null"
+      ? null
+      : markers.expectedBlobSha,
     lifecycleAction: markers.lifecycleAction,
     requestFingerprint: markers.requestFingerprint,
     requestId: markers.requestId,
@@ -824,6 +939,10 @@ function requireNumber(value: unknown, field: string): number {
   }
 
   return value;
+}
+
+function readSha(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{40}$/i.test(value) ? value : null;
 }
 
 function text(value: unknown): string {

@@ -99,6 +99,7 @@ const PUBLICATION_TERMINAL_STATUSES = new Set([
   "published",
   "setup_required",
   "succeeded",
+  "superseded",
   "version_conflict"
 ]);
 const PUBLICATION_ALLOWED_LABELS = new Set([
@@ -110,7 +111,8 @@ const PUBLICATION_ALLOWED_LABELS = new Set([
   "Опубликовано",
   "Повторить публикацию",
   "Проверяется",
-  "Развёртывается"
+  "Развёртывается",
+  "Состояние обновлено"
 ]);
 const PUBLICATION_ALLOWED_STABLE_STATUSES = new Set([
   "Конфликт версии",
@@ -119,7 +121,8 @@ const PUBLICATION_ALLOWED_STABLE_STATUSES = new Set([
   "Ошибка публикации",
   "Публикуется",
   "Проверяется",
-  "Развёртывается"
+  "Развёртывается",
+  "Состояние обновлено"
 ]);
 const PUBLICATION_DTO_TUPLES = Object.freeze({
   cancelled: [
@@ -159,6 +162,9 @@ const PUBLICATION_DTO_TUPLES = Object.freeze({
   succeeded: [
     ["Опубликовано", "Опубликовано", false],
     ["Опубликовать", "Не опубликовано", false]
+  ],
+  superseded: [
+    ["Состояние обновлено", "Состояние обновлено", false]
   ],
   setup_required: [
     ["Ошибка публикации", "Ошибка публикации", true]
@@ -698,6 +704,12 @@ export function createSiteEditorScreen(options) {
         finishSuccessfulPublication(saved, form, {
           notify: options.preNotified !== true
         });
+        return result;
+      }
+      if (result.status === "superseded") {
+        await load();
+        statusRegion.textContent = result.stableStatus;
+        onStatus(result.stableStatus);
         return result;
       }
 
