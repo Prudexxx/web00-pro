@@ -1430,7 +1430,9 @@ describe("Direct Pages catalog publication service", () => {
     vi.useFakeTimers();
     try {
       const { createPagesCatalogPublicationReconciliationWorker } = await loadPublicationServiceExports();
-      const onError = vi.fn();
+      const onError = vi.fn(() => {
+        throw new Error("synthetic diagnostics failure");
+      });
       let releaseSecondRun!: () => void;
       const secondRun = new Promise<void>((resolve) => {
         releaseSecondRun = resolve;
@@ -1498,6 +1500,12 @@ describe("Direct Pages catalog publication service", () => {
     expect(github.markerCommits).toHaveLength(1);
     expect(lifecycleFinalize).not.toHaveBeenCalled();
 
+    github.setRecentPublicationRequests(Array.from({ length: 5 }, (_, index) => ({
+      action: "update",
+      cardId: `already-closed-${index}`,
+      requestId: `00000000-0000-4000-8000-00000000300${index}`,
+      state: "closed"
+    })));
     github.setRecentMarkerRequests([
       {
         ...github.markerCommits[0],
