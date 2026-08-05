@@ -21,7 +21,8 @@ const pagesPublicationInputSchema = z.object({
   card: z.record(z.string(), z.unknown()).nullable(),
   cardId: cardIdSchema,
   expectedBlobSha: z.string().min(1).nullable(),
-  requestId: z.string().uuid()
+  requestId: z.string().uuid(),
+  siteId: z.string().uuid()
 }).strict();
 const pagesCardParamsSchema = z.object({ cardId: cardIdSchema }).strict();
 const pagesRequestParamsSchema = z.object({ requestId: z.string().uuid() }).strict();
@@ -67,9 +68,13 @@ export function createAdminPublicationController(options: {
 
     getPagesPublicationStatus: async (request, response, next) => {
       try {
+        const principal = (request as AuthRequest).auth!;
         const { requestId } = parsePagesRequestParams(request.params);
         response.json({
-          data: await readPagesPublicationService(options).getPagesPublicationStatus(requestId)
+          data: await readPagesPublicationService(options).getPagesPublicationStatus(requestId, {
+            actor: principal,
+            now: now()
+          })
         });
       } catch (error) {
         next(error);
@@ -119,7 +124,8 @@ export function createAdminPublicationController(options: {
             cardId: input.cardId,
             expectedBlobSha: input.expectedBlobSha,
             now: now(),
-            requestId: input.requestId
+            requestId: input.requestId,
+            siteId: input.siteId
           })
         });
       } catch (error) {
@@ -168,6 +174,7 @@ function parsePagesPublicationInput(input: unknown): {
   cardId: string;
   expectedBlobSha: string | null;
   requestId: string;
+  siteId: string;
 } {
   const parsed = pagesPublicationInputSchema.safeParse(input);
   if (!parsed.success) {

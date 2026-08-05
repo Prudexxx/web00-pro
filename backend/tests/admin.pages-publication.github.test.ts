@@ -9,7 +9,7 @@ const config = {
   owner: "Prudexxx",
   pagesWorkflow: "pages.yml",
   repo: "web00-pro",
-  requiredCheck: "Catalog PR validation / validate",
+  requiredCheck: "web00-catalog-validate",
   token: "synthetic-token-for-provider-tests"
 };
 

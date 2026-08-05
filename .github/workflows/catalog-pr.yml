@@ -1,4 +1,4 @@
-name: Catalog PR validation
+name: web00-catalog-validate
 
 on:
   pull_request:
@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: validate
+  web00-catalog-validate:
+    name: web00-catalog-validate
     runs-on: ubuntu-latest
 
     steps:
@@ -32,7 +32,7 @@ jobs:
           if [[ "${{ github.head_ref }}" == catalog/publish/* ]]; then
             echo "Catalog publication PR detected."
           else
-            echo "Non-catalog PR: required Catalog PR validation check passes without strict catalog validation."
+            echo "Non-catalog PR: required web00-catalog-validate check passes without strict catalog validation."
           fi
 
       - name: Reject changes outside catalog publication scope
@@ -48,12 +48,13 @@ jobs:
             exit 1
           fi
 
-      - name: Validate and check deterministic Pages catalog
+      - name: Validate, generate, and check Pages catalog
         if: ${{ startsWith(github.head_ref, 'catalog/publish/') }}
         shell: bash
         run: |
           set -euo pipefail
 
+          node scripts/build-pages-catalog.mjs
           node scripts/build-pages-catalog.mjs --check
 
       - name: Run Phase 1 catalog tests

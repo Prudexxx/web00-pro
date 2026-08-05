@@ -10,14 +10,16 @@ import type { B5Permission, PermissionPolicy } from "../src/modules/admin/rbac.t
 const publicationRoutesModulePath = "../src/modules/admin/publication/publication.routes.js";
 
 describe("admin publication routes", () => {
-  it("fails closed for publication POST when the V2 feature gate is not explicitly enabled", async () => {
+  it("fails closed for legacy DB-only publication POST even when the V2 feature gate is enabled", async () => {
     const module = await importPublicationRoutesModule();
     const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
+      enabled?: boolean;
       now: () => Date;
       service: ReturnType<typeof createPublicationServiceFake>;
     }) => Router;
     const service = createPublicationServiceFake();
     const app = createPublicationRouteApp(createAdminPublicationRouter({
+      enabled: true,
       now: fixedNow,
       service
     }));
@@ -30,15 +32,15 @@ describe("admin publication routes", () => {
       .set("X-Request-Id", "req_publish_disabled")
       .set("Idempotency-Key", "00000000-0000-4000-8000-0000000000d1")
       .send({ action: "publish" })
-      .expect(503);
+      .expect(409);
 
     expect(response.body.error).toMatchObject({
-      code: "PUBLIC_CATALOG_V2_DISABLED"
+      code: "DIRECT_PAGES_PUBLICATION_REQUIRED"
     });
     expect(service.startPublication).not.toHaveBeenCalled();
   });
 
-  it("enqueues a new publication operation as queued without claiming a worker lease in the HTTP request", async () => {
+  it("keeps auth and RBAC boundaries before rejecting the legacy DB-only publication route", async () => {
     const module = await importPublicationRoutesModule();
     const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
       enabled?: boolean;
@@ -73,7 +75,7 @@ describe("admin publication routes", () => {
       .set("X-Request-Id", "req_missing_csrf")
       .set("Idempotency-Key", "00000000-0000-4000-8000-0000000000a2")
       .send({ action: "publish" })
-      .expect(403);
+      .expect(409);
 
     await request(app)
       .post("/api/admin/sites/00000000-0000-4000-8000-000000000101/publication")
@@ -82,7 +84,7 @@ describe("admin publication routes", () => {
       .set("X-CSRF-Token", "synthetic-csrf")
       .set("X-Request-Id", "req_missing_idempotency")
       .send({ action: "publish" })
-      .expect(400);
+      .expect(409);
 
     const response = await request(app)
       .post("/api/admin/sites/00000000-0000-4000-8000-000000000101/publication")
@@ -92,24 +94,12 @@ describe("admin publication routes", () => {
       .set("X-Request-Id", "req_publish_first")
       .set("Idempotency-Key", "00000000-0000-4000-8000-0000000000a3")
       .send({ action: "publish" })
-      .expect(202);
+      .expect(409);
 
-    expect(response.body.data).toEqual({
-      buttonLabel: "Публикуется…",
-      operationId: "00000000-0000-4000-8000-00000000feed",
-      retryable: false,
-      stableStatus: "Публикуется",
-      status: "queued",
-      statusUrl: "/api/admin/public-catalog/operations/00000000-0000-4000-8000-00000000feed"
+    expect(response.body.error).toMatchObject({
+      code: "DIRECT_PAGES_PUBLICATION_REQUIRED"
     });
-    expect(service.startPublication).toHaveBeenCalledWith(expect.objectContaining({
-      action: "publish",
-      actor: expect.objectContaining({ id: adminPrincipal().id, role: "admin" }),
-      idempotencyKey: "00000000-0000-4000-8000-0000000000a3",
-      requestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
-      requestId: "req_publish_first",
-      siteId: "00000000-0000-4000-8000-000000000101"
-    }));
+    expect(service.startPublication).not.toHaveBeenCalled();
     expect(service.claimWorkerLease).not.toHaveBeenCalled();
     expect(JSON.stringify(response.body)).not.toMatch(/lease|lockedBy|lockedAt|requestFingerprint|csrf|manifest|bucket|sha256/i);
   });
@@ -141,7 +131,7 @@ describe("admin publication routes", () => {
     expect(service.startPublication).not.toHaveBeenCalled();
   });
 
-  it("requires unpublish permission for Direct Pages updates that deactivate a public card", async () => {
+  it("requires action-specific Direct Pages permissions before starting a public catalog mutation", async () => {
     const module = await importPublicationRoutesModule();
     const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
       now: () => Date;
@@ -173,6 +163,23 @@ describe("admin publication routes", () => {
         cardId: "direct-pages-unpublish",
         expectedBlobSha: "sha-existing",
         requestId: "00000000-0000-4000-8000-000000000991"
+      })
+      .expect(403);
+
+    expect(pagesService.startPagesPublication).not.toHaveBeenCalled();
+
+    await request(app)
+      .post("/api/admin/publication/pages")
+      .set("Authorization", "Bearer admin")
+      .set("Cookie", "web00-admin-session=synthetic")
+      .set("X-CSRF-Token", "synthetic-csrf")
+      .send({
+        action: "delete",
+        card: null,
+        cardId: "direct-pages-delete",
+        expectedBlobSha: "sha-existing",
+        requestId: "00000000-0000-4000-8000-000000000992",
+        siteId: "00000000-0000-4000-8000-000000000101"
       })
       .expect(403);
 

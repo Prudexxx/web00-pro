@@ -199,6 +199,17 @@ export function startServer(options: StartServerOptions): StartedServer {
     nodeEnv: options.env.NODE_ENV,
     service: authService
   });
+  const adminSiteService = createAdminSiteService({
+    repository: createPrismaAdminSiteRepository({
+      diagnostics: {
+        environment: options.env.NODE_ENV,
+        logger,
+        now: options.now ?? (() => new Date()),
+        service: options.env.SERVICE_NAME
+      },
+      prisma
+    })
+  });
   const adminRouterOptions = {
     auditLogService: createAdminAuditLogService({
       repository: createPrismaAdminAuditLogRepository({ prisma })
@@ -207,17 +218,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     categoryService: createAdminCategoryService({
       repository: createPrismaAdminCategoryRepository({ prisma })
     }),
-    siteService: createAdminSiteService({
-      repository: createPrismaAdminSiteRepository({
-        diagnostics: {
-          environment: options.env.NODE_ENV,
-          logger,
-          now: options.now ?? (() => new Date()),
-          service: options.env.SERVICE_NAME
-        },
-        prisma
-      })
-    }),
+    siteService: adminSiteService,
     imageParser: createBusboyMultipartImageParser(),
     imageService: createSiteImageService({
       cleanup: storageCleanupRepository,
@@ -250,6 +251,36 @@ export function startServer(options: StartServerOptions): StartedServer {
     pagesPublicationService: createPagesCatalogPublicationService({
       allowedMediaOrigin: new URL(options.storageConfig.publicBaseUrl).origin,
       github: createGitHubPagesCatalogProviderFromEnv(process.env),
+      lifecycleFinalizer: {
+        async finalize(input) {
+          const context = {
+            actor: input.actor,
+            now: input.now,
+            requestId: input.requestId
+          };
+          const current = await adminSiteService.getSite(input.siteId, input.actor);
+
+          if (input.lifecycleAction === "delete") {
+            if (typeof current.deletedAt === "string" && current.deletedAt.length > 0) {
+              return;
+            }
+            await adminSiteService.deleteSite(input.siteId, context);
+            return;
+          }
+          if (input.lifecycleAction === "unpublish") {
+            if (current.status === "draft" && current.publishedAt === null) {
+              return;
+            }
+            await adminSiteService.unpublishSite(input.siteId, context);
+            return;
+          }
+
+          if (current.status === "published" && current.publishedAt !== null && current.deletedAt === null) {
+            return;
+          }
+          await adminSiteService.publishSite(input.siteId, context);
+        }
+      },
       now: options.now ?? (() => new Date())
     }),
     publicCatalogService: createAdminPublicCatalogService({

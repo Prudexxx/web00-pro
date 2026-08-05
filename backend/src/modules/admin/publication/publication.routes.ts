@@ -39,8 +39,7 @@ export function createAdminPublicationRouter(options: {
   router.post(
     "/sites/:id/publication",
     createPublicationActionPermissionMiddleware(policy),
-    createPublicationEnabledMiddleware(options.enabled ?? false),
-    controller.startPublication
+    createDirectPagesRequiredMiddleware()
   );
   router.get(
     "/public-catalog/operations/:id",
@@ -51,18 +50,13 @@ export function createAdminPublicationRouter(options: {
   return router;
 }
 
-function createPublicationEnabledMiddleware(enabled: boolean): RequestHandler {
+function createDirectPagesRequiredMiddleware(): RequestHandler {
   return (_request, _response, next) => {
-    if (!enabled) {
-      next(new AppError({
-        code: "PUBLIC_CATALOG_V2_DISABLED",
-        message: "Public catalog V2 publication is disabled.",
-        statusCode: 503
-      }));
-      return;
-    }
-
-    next();
+    next(new AppError({
+      code: "DIRECT_PAGES_PUBLICATION_REQUIRED",
+      message: "Direct Pages publication is required for public catalog lifecycle changes.",
+      statusCode: 409
+    }));
   };
 }
 
@@ -96,11 +90,21 @@ function readPublicationActionPermission(body: unknown): B5Permission {
 }
 
 function readPagesPublicationActionPermission(body: unknown): B5Permission {
+  if (isDirectPagesSoftDelete(body)) {
+    return "site.softDelete";
+  }
   if (isDirectPagesUnpublish(body)) {
     return "site.unpublish";
   }
 
   return "site.publish";
+}
+
+function isDirectPagesSoftDelete(body: unknown): boolean {
+  return typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    (body as { action?: unknown }).action === "delete";
 }
 
 function isDirectPagesUnpublish(body: unknown): boolean {
@@ -110,9 +114,6 @@ function isDirectPagesUnpublish(body: unknown): boolean {
     !Array.isArray(body)
   ) {
     const record = body as { action?: unknown; card?: unknown };
-    if (record.action === "delete") {
-      return true;
-    }
     if (
       record.action === "update" &&
       typeof record.card === "object" &&

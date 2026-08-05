@@ -35,6 +35,7 @@ export interface PagesCatalogPublicationRecord {
   checkStatus?: "failure" | "pending" | "success" | undefined;
   code?: string | undefined;
   body?: string | undefined;
+  lifecycleAction?: PagesCatalogPublicationLifecycleAction | undefined;
   mergeCommitSha?: string | null;
   mergeableState?: string | undefined;
   nodeId?: string | undefined;
@@ -44,6 +45,7 @@ export interface PagesCatalogPublicationRecord {
   pullRequestNodeId?: string | undefined;
   requestId?: string | undefined;
   requestFingerprint?: string | undefined;
+  siteId?: string | undefined;
   state?: "closed" | "merged" | "open" | undefined;
   url?: string | undefined;
 }
@@ -55,7 +57,9 @@ export interface PagesCatalogGitHubProvider {
     body: string;
     branch: string;
     cardId: string;
+    lifecycleAction: PagesCatalogPublicationLifecycleAction;
     requestId: string;
+    siteId?: string | undefined;
     title: string;
   }): Promise<{ nodeId: string; number: number; url: string }>;
   createOrUpdateCardCommit(input: {
@@ -77,6 +81,17 @@ export interface PagesCatalogGitHubProvider {
     pullRequestNodeId: string;
   }): Promise<void>;
   findPublicationRequest(requestId: string): Promise<PagesCatalogPublicationRecord | null>;
+  createPublicationMarkerCommit(input: {
+    action: PagesCatalogPublicationAction;
+    branch: string;
+    cardId: string;
+    expectedBlobSha: string | null;
+    fromSha: string;
+    message: string;
+    requestFingerprint: string;
+    requestId: string;
+    siteId?: string | undefined;
+  }): Promise<{ commitSha: string }>;
   getBaseBranchHead(): Promise<string>;
   getBranchHead?(input: { branch: string }): Promise<string | null>;
   getCatalogCard(cardId: string, options?: { ref?: string }): Promise<PagesCatalogCardFile | null>;
@@ -84,6 +99,7 @@ export interface PagesCatalogGitHubProvider {
     headSha?: string | null;
     status: "failure" | "pending" | "success";
   }>;
+  getPublicationBranchRequest?(requestId: string): Promise<PagesCatalogPublicationRecord | null>;
   getRepositorySetup?(): Promise<{ configured: boolean; code?: "GITHUB_REPOSITORY_SETUP_REQUIRED" }>;
   getRequiredCatalogCheckStatus(request: PagesCatalogPublicationRecord): Promise<PagesCatalogRequiredCheckStatus>;
 }
@@ -96,6 +112,7 @@ export interface PagesCatalogPublicationStartInput {
   expectedBlobSha: string | null;
   now: Date;
   requestId: string;
+  siteId?: string | undefined;
 }
 
 export interface PagesCatalogPublicationDto {
@@ -120,17 +137,51 @@ export interface PagesCatalogPublicationService {
     card: Record<string, unknown> | null;
     cardId: string;
   }>;
-  getPagesPublicationStatus(requestId: string): Promise<PagesCatalogPublicationDto>;
+  getPagesPublicationStatus(
+    requestId: string,
+    context?: { actor: AuthenticatedPrincipal; now: Date }
+  ): Promise<PagesCatalogPublicationDto>;
   startPagesPublication(input: PagesCatalogPublicationStartInput): Promise<PagesCatalogPublicationDto>;
+}
+
+export type PagesCatalogPublicationLifecycleAction = "delete" | "publish" | "unpublish";
+
+export interface PagesCatalogPublicationLifecycleFinalizer {
+  finalize(input: {
+    actor: AuthenticatedPrincipal;
+    cardId: string;
+    lifecycleAction: PagesCatalogPublicationLifecycleAction;
+    now: Date;
+    requestId: string;
+    siteId: string;
+  }): Promise<void> | void;
 }
 
 const CARD_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CATALOG_CARDS_ROOT = "catalog/cards";
+const LEGACY_RELATIVE_MEDIA_CARD_IDS = new Set([
+  "advokat",
+  "cleaning",
+  "digital-projects",
+  "doma-bani",
+  "drova",
+  "krovlya",
+  "massage",
+  "mebel",
+  "medicina",
+  "narko-medicine",
+  "odezhda",
+  "rental-house",
+  "ruberoid-roof",
+  "site-custom",
+  "uslugi"
+]);
 
 export function createPagesCatalogPublicationService(options: {
   allowedMediaOrigin?: string;
   github: PagesCatalogGitHubProvider;
+  lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
   now?: () => Date;
   serializeCanonicalCatalogCard?: (card: Record<string, unknown>) => Promise<string> | string;
 }): PagesCatalogPublicationService {
@@ -159,7 +210,7 @@ export function createPagesCatalogPublicationService(options: {
       };
     },
 
-    async getPagesPublicationStatus(requestId) {
+    async getPagesPublicationStatus(requestId, context) {
       assertRequestId(requestId);
       const existing = await options.github.findPublicationRequest(requestId);
       if (existing === null) {
@@ -170,46 +221,79 @@ export function createPagesCatalogPublicationService(options: {
         });
       }
 
-      return reconcileGitHubPublicationStatus(options.github, requestId, existing);
+      return reconcileGitHubPublicationStatus(options.github, requestId, existing, {
+        actor: context?.actor,
+        lifecycleFinalizer: options.lifecycleFinalizer,
+        now: context?.now,
+        siteId: existing.siteId
+      });
     },
 
     async startPagesPublication(input) {
       assertStartInput(input);
       assertCardIdentity(input);
-      assertCardMedia(input.card, allowedMediaOrigin);
+      const lifecycleAction = lifecycleActionForStartInput(input);
       const requestFingerprint = await createPagesPublicationRequestFingerprint(input, serializeCanonicalCatalogCard);
+      const branch = `catalog/publish/${input.requestId}`;
       const existing = await options.github.findPublicationRequest(input.requestId);
       if (existing !== null) {
         assertIdempotentReplay(existing, requestFingerprint);
-        return reconcileGitHubPublicationStatus(options.github, input.requestId, existing);
+        return reconcileGitHubPublicationStatus(options.github, input.requestId, existing, {
+          actor: input.actor,
+          lifecycleFinalizer: options.lifecycleFinalizer,
+          now: input.now,
+          siteId: input.siteId
+        });
+      }
+      const branchRequest = await readPublicationBranchRequest(options.github, input.requestId);
+      if (branchRequest !== null) {
+        assertIdempotentReplay(branchRequest, requestFingerprint);
       }
 
       await assertRepositoryConfigured(options.github);
 
       const path = catalogCardPath(input.cardId);
       const current = await options.github.getCatalogCard(input.cardId);
+      assertCardMedia(input.card, allowedMediaOrigin, current, input.cardId);
       const mutation = await planCardMutation(input, current, serializeCanonicalCatalogCard);
+
+      const mainSha = await options.github.getBaseBranchHead();
+      const branchState = branchRequest === null
+        ? await createPublicationMarkerBranch(options.github, {
+            branch,
+            fromSha: mainSha,
+            input,
+            requestFingerprint
+          })
+        : { existed: true };
 
       if (mutation.kind === "noop") {
         return noOpPublicationDto(options.github, {
           action: input.action,
+          actor: input.actor,
           cardId: input.cardId,
+          lifecycleFinalizer: options.lifecycleFinalizer,
+          lifecycleAction,
           noOp: true,
-          requestId: input.requestId
+          now: input.now,
+          requestId: input.requestId,
+          siteId: input.siteId
         });
       }
 
-      const mainSha = await options.github.getBaseBranchHead();
-      const branch = `catalog/publish/${input.requestId}`;
-      const branchExisted = await ensurePublicationBranch(options.github, {
-        branch,
-        fromSha: mainSha
-      });
-      const branchCurrent = branchExisted
+      const branchCurrent = branchState.existed
         ? await options.github.getCatalogCard(input.cardId, { ref: branch })
         : current;
 
-      const commitMessage = `catalog: ${input.action} ${input.cardId}`;
+      const commitMessage = renderCommitMessage({
+        action: input.action,
+        cardId: input.cardId,
+        expectedBlobSha: input.expectedBlobSha,
+        lifecycleAction,
+        requestFingerprint,
+        requestId: input.requestId,
+        siteId: input.siteId
+      });
       const commit = planBranchCommit(mutation, branchCurrent);
       if (commit?.kind === "delete") {
         await options.github.deleteCardCommit({
@@ -234,12 +318,16 @@ export function createPagesCatalogPublicationService(options: {
           action: input.action,
           cardId: input.cardId,
           expectedBlobSha: input.expectedBlobSha,
+          lifecycleAction,
           requestFingerprint,
-          requestId: input.requestId
+          requestId: input.requestId,
+          siteId: input.siteId
         }),
         branch,
         cardId: input.cardId,
+        lifecycleAction,
         requestId: input.requestId,
+        siteId: input.siteId,
         title: `Catalog ${input.action}: ${input.cardId}`
       });
       const request: PagesCatalogPublicationRecord = {
@@ -252,11 +340,18 @@ export function createPagesCatalogPublicationService(options: {
         pullRequestNodeId: pullRequest.nodeId,
         requestId: input.requestId,
         requestFingerprint,
+        lifecycleAction,
+        siteId: input.siteId,
         state: "open",
         url: pullRequest.url
       };
 
-      return reconcileGitHubPublicationStatus(options.github, input.requestId, request);
+      return reconcileGitHubPublicationStatus(options.github, input.requestId, request, {
+        actor: input.actor,
+        lifecycleFinalizer: options.lifecycleFinalizer,
+        now: input.now,
+        siteId: input.siteId
+      });
     }
   };
 }
@@ -265,9 +360,14 @@ async function noOpPublicationDto(
   github: PagesCatalogGitHubProvider,
   input: {
     action: PagesCatalogPublicationAction;
+    actor: AuthenticatedPrincipal;
     cardId: string;
+    lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
+    lifecycleAction: PagesCatalogPublicationLifecycleAction;
     noOp: true;
+    now: Date;
     requestId: string;
+    siteId?: string | undefined;
   }
 ): Promise<PagesCatalogPublicationDto> {
   const pages = github.getCurrentPagesDeploymentStatus === undefined
@@ -275,6 +375,11 @@ async function noOpPublicationDto(
     : await github.getCurrentPagesDeploymentStatus();
 
   if (pages.status === "success") {
+    const finalized = await finalizePublicationLifecycle(input);
+    if (finalized !== null) {
+      return finalized;
+    }
+
     return publicationDto({
       ...input,
       status: "published"
@@ -300,7 +405,8 @@ async function createPagesPublicationRequestFingerprint(
         ? null
         : createHash("sha256").update(await serializeCanonicalCatalogCard(input.card)).digest("hex"),
       expectedBlobSha: input.expectedBlobSha,
-      requestContract: "web00-direct-pages-catalog-publication-v1"
+      requestContract: "web00-direct-pages-catalog-publication-v1",
+      siteId: input.siteId
     }))
     .digest("hex");
 }
@@ -312,12 +418,16 @@ function assertIdempotentReplay(
   const existingFingerprint = readExistingRequestFingerprint(existing);
 
   if (existingFingerprint !== requestFingerprint) {
-    throw new AppError({
-      code: "IDEMPOTENCY_KEY_REUSED",
-      message: "Idempotency key was reused for a different request.",
-      statusCode: 409
-    });
+    throw idempotencyKeyReused();
   }
+}
+
+function idempotencyKeyReused(): AppError {
+  return new AppError({
+    code: "IDEMPOTENCY_KEY_REUSED",
+    message: "Idempotency key was reused for a different request.",
+    statusCode: 409
+  });
 }
 
 function readExistingRequestFingerprint(existing: PagesCatalogPublicationRecord): string | null {
@@ -392,27 +502,83 @@ async function planCardMutation(
   };
 }
 
-async function ensurePublicationBranch(
+async function createPublicationMarkerBranch(
   github: PagesCatalogGitHubProvider,
-  input: { branch: string; fromSha: string }
-): Promise<boolean> {
-  const existingHead = github.getBranchHead === undefined
-    ? null
-    : await github.getBranchHead({ branch: input.branch });
-  if (existingHead !== null) {
-    return true;
+  input: {
+    branch: string;
+    fromSha: string;
+    input: PagesCatalogPublicationStartInput;
+    requestFingerprint: string;
+  }
+): Promise<{ existed: boolean }> {
+  if (await readBranchHead(github, input.branch) !== null) {
+    throw idempotencyKeyReused();
   }
 
+  const markerCommit = await createPublicationMarkerCommit(github, input);
   try {
-    await github.createBranch(input);
-    return false;
+    await github.createBranch({
+      branch: input.branch,
+      fromSha: markerCommit.commitSha
+    });
   } catch (error) {
-    if (isBranchAlreadyExists(error)) {
-      return true;
+    if (!isBranchAlreadyExists(error)) {
+      throw error;
     }
-
-    throw error;
+    const racedRequest = await readPublicationBranchRequest(github, input.input.requestId);
+    if (racedRequest === null) {
+      throw idempotencyKeyReused();
+    }
+    assertIdempotentReplay(racedRequest, input.requestFingerprint);
+    return { existed: true };
   }
+
+  return { existed: false };
+}
+
+async function readPublicationBranchRequest(
+  github: PagesCatalogGitHubProvider,
+  requestId: string
+): Promise<PagesCatalogPublicationRecord | null> {
+  return github.getPublicationBranchRequest === undefined
+    ? null
+    : await github.getPublicationBranchRequest(requestId);
+}
+
+async function createPublicationMarkerCommit(
+  github: PagesCatalogGitHubProvider,
+  input: {
+    branch: string;
+    fromSha: string;
+    input: PagesCatalogPublicationStartInput;
+    requestFingerprint: string;
+  }
+): Promise<{ commitSha: string }> {
+  return github.createPublicationMarkerCommit({
+    action: input.input.action,
+    branch: input.branch,
+    cardId: input.input.cardId,
+    expectedBlobSha: input.input.expectedBlobSha,
+    fromSha: input.fromSha,
+    message: renderCommitMessage({
+      action: input.input.action,
+      cardId: input.input.cardId,
+      expectedBlobSha: input.input.expectedBlobSha,
+      lifecycleAction: lifecycleActionForStartInput(input.input),
+      requestFingerprint: input.requestFingerprint,
+      requestId: input.input.requestId,
+      siteId: input.input.siteId
+    }),
+    requestFingerprint: input.requestFingerprint,
+    requestId: input.input.requestId,
+    ...(input.input.siteId === undefined ? {} : { siteId: input.input.siteId })
+  });
+}
+
+async function readBranchHead(github: PagesCatalogGitHubProvider, branch: string): Promise<string | null> {
+  return github.getBranchHead === undefined
+    ? null
+    : await github.getBranchHead({ branch });
 }
 
 function isBranchAlreadyExists(error: unknown): boolean {
@@ -450,7 +616,13 @@ function planBranchCommit(
 async function reconcileGitHubPublicationStatus(
   github: PagesCatalogGitHubProvider,
   requestId: string,
-  request: PagesCatalogPublicationRecord
+  request: PagesCatalogPublicationRecord,
+  lifecycle?: {
+    actor?: AuthenticatedPrincipal | undefined;
+    lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
+    now?: Date | undefined;
+    siteId?: string | undefined;
+  }
 ): Promise<PagesCatalogPublicationDto> {
   const action = readAction(request.action);
   const cardId = readCardId(request.cardId);
@@ -486,8 +658,21 @@ async function reconcileGitHubPublicationStatus(
   }
 
   if (request.state === "merged") {
-    await deleteMergedTemporaryBranch(github, request);
     if (request.pagesStatus === "success") {
+      const finalized = await finalizePublicationLifecycle({
+        action,
+        actor: lifecycle?.actor,
+        cardId,
+        lifecycleFinalizer: lifecycle?.lifecycleFinalizer,
+        lifecycleAction: request.lifecycleAction,
+        now: lifecycle?.now,
+        requestId,
+        siteId: lifecycle?.siteId ?? request.siteId
+      });
+      if (finalized !== null) {
+        return finalized;
+      }
+      await deleteMergedTemporaryBranch(github, request);
       return publicationDto({
         action,
         cardId,
@@ -582,7 +767,85 @@ async function deleteMergedTemporaryBranch(
     return;
   }
 
-  await github.deleteTemporaryBranch({ branch: request.branch });
+  try {
+    await github.deleteTemporaryBranch({ branch: request.branch });
+  } catch {
+    // Branch cleanup is best-effort after a verified Pages deployment.
+  }
+}
+
+async function finalizePublicationLifecycle(input: {
+  action: PagesCatalogPublicationAction;
+  actor?: AuthenticatedPrincipal | undefined;
+  cardId: string;
+  lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
+  lifecycleAction?: PagesCatalogPublicationLifecycleAction | undefined;
+  now?: Date | undefined;
+  noOp?: boolean | undefined;
+  requestId: string;
+  siteId?: string | undefined;
+}): Promise<PagesCatalogPublicationDto | null> {
+  if (
+    input.lifecycleFinalizer === undefined ||
+    input.actor === undefined ||
+    input.now === undefined ||
+    input.siteId === undefined
+  ) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "BACKEND_LIFECYCLE_FINALIZATION_FAILED",
+      noOp: input.noOp ?? false,
+      requestId: input.requestId,
+      retryable: true,
+      status: "failed"
+    });
+  }
+
+  try {
+    await input.lifecycleFinalizer.finalize({
+      actor: input.actor,
+      cardId: input.cardId,
+      lifecycleAction: input.lifecycleAction ?? lifecycleActionForPublication(input.action),
+      now: input.now,
+      requestId: input.requestId,
+      siteId: input.siteId
+    });
+    return null;
+  } catch {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "BACKEND_LIFECYCLE_FINALIZATION_FAILED",
+      noOp: false,
+      requestId: input.requestId,
+      retryable: true,
+      status: "failed"
+    });
+  }
+}
+
+function lifecycleActionForPublication(action: PagesCatalogPublicationAction): PagesCatalogPublicationLifecycleAction {
+  if (action === "delete") {
+    return "delete";
+  }
+
+  return "publish";
+}
+
+function lifecycleActionForStartInput(input: PagesCatalogPublicationStartInput): PagesCatalogPublicationLifecycleAction {
+  if (input.action === "delete") {
+    return "delete";
+  }
+  if (
+    input.action === "update" &&
+    input.card !== null &&
+    input.card.active === false
+  ) {
+    return "unpublish";
+  }
+
+  return "publish";
 }
 
 function publicationDto(input: {
@@ -649,8 +912,10 @@ function renderPullRequestBody(input: {
   action: PagesCatalogPublicationAction;
   cardId: string;
   expectedBlobSha: string | null;
+  lifecycleAction: PagesCatalogPublicationLifecycleAction;
   requestFingerprint: string;
   requestId: string;
+  siteId?: string | undefined;
 }): string {
   return [
     "WEB00 Direct Pages catalog publication.",
@@ -658,8 +923,32 @@ function renderPullRequestBody(input: {
     `WEB00-REQUEST-ID: ${input.requestId}`,
     `WEB00-CARD-ID: ${input.cardId}`,
     `WEB00-ACTION: ${input.action}`,
+    `WEB00-LIFECYCLE-ACTION: ${input.lifecycleAction}`,
     `WEB00-EXPECTED-BLOB-SHA: ${input.expectedBlobSha ?? "null"}`,
-    `WEB00-FINGERPRINT: ${input.requestFingerprint}`
+    `WEB00-FINGERPRINT: ${input.requestFingerprint}`,
+    ...(input.siteId === undefined ? [] : [`WEB00-SITE-ID: ${input.siteId}`])
+  ].join("\n");
+}
+
+function renderCommitMessage(input: {
+  action: PagesCatalogPublicationAction;
+  cardId: string;
+  expectedBlobSha: string | null;
+  lifecycleAction: PagesCatalogPublicationLifecycleAction;
+  requestFingerprint: string;
+  requestId: string;
+  siteId?: string | undefined;
+}): string {
+  return [
+    `catalog: ${input.action} ${input.cardId}`,
+    "",
+    `WEB00-REQUEST-ID: ${input.requestId}`,
+    `WEB00-CARD-ID: ${input.cardId}`,
+    `WEB00-ACTION: ${input.action}`,
+    `WEB00-LIFECYCLE-ACTION: ${input.lifecycleAction}`,
+    `WEB00-EXPECTED-BLOB-SHA: ${input.expectedBlobSha ?? "null"}`,
+    `WEB00-FINGERPRINT: ${input.requestFingerprint}`,
+    ...(input.siteId === undefined ? [] : [`WEB00-SITE-ID: ${input.siteId}`])
   ].join("\n");
 }
 
@@ -723,20 +1012,32 @@ function assertCardIdentity(input: PagesCatalogPublicationStartInput): void {
   }
 }
 
-function assertCardMedia(card: Record<string, unknown> | null, allowedMediaOrigin: string | null): void {
+function assertCardMedia(
+  card: Record<string, unknown> | null,
+  allowedMediaOrigin: string | null,
+  current: PagesCatalogCardFile | null,
+  cardId: string
+): void {
   if (card === null) {
     return;
   }
 
-  assertMediaUrl(card.previewImage, "card.previewImage", allowedMediaOrigin);
+  const preservedRelativeMedia = readPreservedRelativeMedia(current, cardId);
+
+  assertMediaUrl(card.previewImage, "card.previewImage", allowedMediaOrigin, preservedRelativeMedia);
   if (Array.isArray(card.galleryImages)) {
     card.galleryImages.forEach((url, index) => {
-      assertMediaUrl(url, `card.galleryImages.${index}`, allowedMediaOrigin);
+      assertMediaUrl(url, `card.galleryImages.${index}`, allowedMediaOrigin, preservedRelativeMedia);
     });
   }
 }
 
-function assertMediaUrl(value: unknown, path: string, allowedMediaOrigin: string | null): void {
+function assertMediaUrl(
+  value: unknown,
+  path: string,
+  allowedMediaOrigin: string | null,
+  preservedRelativeMedia: Set<string>
+): void {
   const text = String(value ?? "").trim();
   if (text.length === 0) {
     throw validationError(path, "Catalog media URL is required.");
@@ -746,7 +1047,7 @@ function assertMediaUrl(value: unknown, path: string, allowedMediaOrigin: string
     return;
   }
 
-  assertRelativeMediaUrl(text, path);
+  assertRelativeMediaUrl(text, path, preservedRelativeMedia);
 }
 
 function assertAbsoluteMediaUrl(value: string, path: string, allowedMediaOrigin: string | null): void {
@@ -763,6 +1064,9 @@ function assertAbsoluteMediaUrl(value: string, path: string, allowedMediaOrigin:
     parsed.origin !== allowedMediaOrigin ||
     parsed.username.length > 0 ||
     parsed.password.length > 0 ||
+    parsed.search.length > 0 ||
+    parsed.hash.length > 0 ||
+    parsed.hostname.replace(/\.+$/, "").endsWith(".invalid") ||
     !parsed.pathname.startsWith("/storage/v1/object/public/web00-catalog-images/") ||
     repeatedlyDecode(parsed.pathname).split("/").includes("..")
   ) {
@@ -770,18 +1074,47 @@ function assertAbsoluteMediaUrl(value: string, path: string, allowedMediaOrigin:
   }
 }
 
-function assertRelativeMediaUrl(value: string, path: string): void {
+function assertRelativeMediaUrl(value: string, path: string, preservedRelativeMedia: Set<string>): void {
   const decoded = repeatedlyDecode(value);
 
   if (
+    !preservedRelativeMedia.has(value) ||
     value.startsWith("/") ||
     value.startsWith("//") ||
     value.includes("\\") ||
     /[\u0000-\u001f\u007f]/.test(value) ||
     /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(decoded) ||
-    !/^[a-z0-9][a-z0-9/_.,+@%=-]*(?:#[a-z0-9._%=-]+)?$/i.test(value)
+    !/^[a-z0-9][a-z0-9/_.,+@%=-]*$/i.test(value)
   ) {
     throw validationError(path, "Catalog media URL is invalid.");
+  }
+}
+
+function readPreservedRelativeMedia(current: PagesCatalogCardFile | null, cardId: string): Set<string> {
+  const values = new Set<string>();
+  if (current === null || !LEGACY_RELATIVE_MEDIA_CARD_IDS.has(cardId)) {
+    return values;
+  }
+
+  try {
+    const card = JSON.parse(current.content) as { galleryImages?: unknown; previewImage?: unknown };
+    collectRelativeMedia(values, card.previewImage);
+    if (Array.isArray(card.galleryImages)) {
+      for (const image of card.galleryImages) {
+        collectRelativeMedia(values, image);
+      }
+    }
+  } catch {
+    return values;
+  }
+
+  return values;
+}
+
+function collectRelativeMedia(values: Set<string>, value: unknown): void {
+  const text = String(value ?? "").trim();
+  if (text.length > 0 && !/^[a-z][a-z0-9+.-]*:/i.test(text)) {
+    values.add(text);
   }
 }
 

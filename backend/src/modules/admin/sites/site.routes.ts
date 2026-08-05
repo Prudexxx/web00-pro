@@ -1,4 +1,6 @@
 import { Router } from "express";
+import type { RequestHandler } from "express";
+import { AppError } from "../../../lib/errors.js";
 import { createPermissionMiddleware } from "../rbac.middleware.js";
 import { createAdminSiteController } from "./site.controller.js";
 import type { AdminSiteService } from "./site.service.js";
@@ -32,17 +34,17 @@ export function createAdminSiteRouter(
   router.post(
     "/sites/:id/publish",
     createPermissionMiddleware({ permission: "site.publish" }),
-    controller.publishSite
+    createDirectPagesRequiredMiddleware()
   );
   router.post(
     "/sites/:id/unpublish",
     createPermissionMiddleware({ permission: "site.unpublish" }),
-    controller.unpublishSite
+    createDirectPagesRequiredMiddleware()
   );
   router.delete(
     "/sites/:id",
     createPermissionMiddleware({ permission: "site.softDelete" }),
-    controller.deleteSite
+    createDirectPagesRequiredMiddleware()
   );
   router.post(
     "/sites/:id/restore",
@@ -56,4 +58,14 @@ export function createAdminSiteRouter(
   );
 
   return router;
+}
+
+function createDirectPagesRequiredMiddleware(): RequestHandler {
+  return (_request, _response, next) => {
+    next(new AppError({
+      code: "DIRECT_PAGES_PUBLICATION_REQUIRED",
+      message: "Direct Pages publication is required for public catalog lifecycle changes.",
+      statusCode: 409
+    }));
+  };
 }

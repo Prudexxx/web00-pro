@@ -143,6 +143,27 @@ describe("admin site route validation", () => {
     });
     expect(JSON.stringify(response.body)).not.toMatch(/INSERT|secret-title|private\.example|valid-site/i);
   });
+
+  it("rejects legacy DB-only public lifecycle routes before mutating site state", async () => {
+    const service = createSiteService();
+    const app = createApp(service);
+
+    for (const [method, path] of [
+      ["post", "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish"],
+      ["post", "/api/admin/sites/00000000-0000-4000-8000-000000000101/unpublish"],
+      ["delete", "/api/admin/sites/00000000-0000-4000-8000-000000000101"]
+    ] as const) {
+      const response = await request(app)[method](path).expect(409);
+
+      expect(response.body.error).toMatchObject({
+        code: "DIRECT_PAGES_PUBLICATION_REQUIRED"
+      });
+    }
+
+    expect(service.publishSite).not.toHaveBeenCalled();
+    expect(service.unpublishSite).not.toHaveBeenCalled();
+    expect(service.deleteSite).not.toHaveBeenCalled();
+  });
 });
 
 function createApp(service: AdminSiteService) {

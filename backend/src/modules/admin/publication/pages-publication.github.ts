@@ -29,6 +29,7 @@ type FetchLike = typeof fetch;
 
 const GITHUB_API = "https://api.github.com";
 const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 15_000;
+export const WEB00_CATALOG_REQUIRED_CHECK = "web00-catalog-validate";
 
 export function createGitHubPagesCatalogProviderFromEnv(
   env: PagesCatalogGitHubEnv,
@@ -53,7 +54,14 @@ export function readGitHubPagesCatalogConfig(env: PagesCatalogGitHubEnv): PagesC
   const requiredCheck = text(env.WEB00_GITHUB_REQUIRED_CHECK);
   const pagesWorkflow = text(env.WEB00_GITHUB_PAGES_WORKFLOW);
 
-  if (!token || !owner || !repo || !baseBranch || !requiredCheck || !pagesWorkflow) {
+  if (
+    !token ||
+    !owner ||
+    !repo ||
+    !baseBranch ||
+    requiredCheck !== WEB00_CATALOG_REQUIRED_CHECK ||
+    !pagesWorkflow
+  ) {
     return null;
   }
 
@@ -108,6 +116,23 @@ export function createGitHubPagesCatalogProvider(options: {
         number: requireNumber(response.number, "number"),
         url: requireString(response.html_url, "html_url")
       };
+    },
+
+    async createPublicationMarkerCommit(input) {
+      const baseCommit = await client.request(`/git/commits/${encodeURIComponent(input.fromSha)}`) as {
+        tree?: { sha?: unknown };
+      };
+      const markerCommit = await client.request(`/git/commits`, {
+        body: JSON.stringify({
+          message: input.message,
+          parents: [input.fromSha],
+          tree: requireString(baseCommit.tree?.sha, "tree.sha")
+        }),
+        method: "POST"
+      }) as { sha?: unknown };
+      const commitSha = requireString(markerCommit.sha, "sha");
+
+      return { commitSha };
     },
 
     async createOrUpdateCardCommit(input) {
@@ -218,6 +243,39 @@ export function createGitHubPagesCatalogProvider(options: {
       };
     },
 
+    async getPublicationBranchRequest(requestId) {
+      const branch = `catalog/publish/${requestId}`;
+      const ref = await client.requestOptional(`/git/ref/heads/${encodeURIComponentPath(branch)}`);
+      if (ref === null) {
+        return null;
+      }
+      const headSha = requireString((ref as { object?: { sha?: unknown } }).object?.sha, "object.sha");
+      const commit = await client.request(`/git/commits/${encodeURIComponent(headSha)}`) as { message?: unknown };
+      const markers = readPullRequestMarkers(String(commit.message ?? ""));
+
+      if (
+        markers.requestId !== requestId ||
+        !/^[a-f0-9]{64}$/i.test(markers.requestFingerprint)
+      ) {
+        throw new AppError({
+          code: "IDEMPOTENCY_KEY_REUSED",
+          message: "Idempotency key was reused for a different request.",
+          statusCode: 409
+        });
+      }
+
+      return {
+        action: markers.action,
+        branch,
+        cardId: markers.cardId,
+        lifecycleAction: markers.lifecycleAction,
+        requestFingerprint: markers.requestFingerprint,
+        requestId,
+        siteId: markers.siteId,
+        state: "open"
+      };
+    },
+
     async getRepositorySetup() {
       return { configured: true };
     },
@@ -252,12 +310,14 @@ function createUnavailableGitHubPagesCatalogProvider(): PagesCatalogGitHubProvid
   return {
     createBranch: unavailable,
     createCatalogPullRequest: unavailable,
+    createPublicationMarkerCommit: unavailable,
     createOrUpdateCardCommit: unavailable,
     deleteCardCommit: unavailable,
     enableAutoMerge: unavailable,
     findPublicationRequest: async () => null,
     getBaseBranchHead: unavailable,
     getCatalogCard: unavailable,
+    getPublicationBranchRequest: async () => null,
     getRepositorySetup: setup,
     getRequiredCatalogCheckStatus: async () => ({
       configured: false,
@@ -508,6 +568,7 @@ async function mapPullRequestToPublicationRecord(
     branch: typeof value.head?.ref === "string" ? value.head.ref : undefined,
     cardId: markers.cardId,
     checkStatus: "pending",
+    lifecycleAction: markers.lifecycleAction,
     mergeCommitSha,
     mergeableState: typeof value.mergeable_state === "string" ? value.mergeable_state : undefined,
     nodeId: requireString(value.node_id, "node_id"),
@@ -519,6 +580,7 @@ async function mapPullRequestToPublicationRecord(
     pullRequestNodeId: requireString(value.node_id, "node_id"),
     requestId,
     requestFingerprint: markers.requestFingerprint,
+    siteId: markers.siteId,
     state: merged ? "merged" : value.state === "open" ? "open" : "closed",
     url: typeof value.html_url === "string" ? value.html_url : undefined
   };
@@ -598,16 +660,29 @@ function isMarkedPullRequest(value: unknown, requestId: string): boolean {
 function readPullRequestMarkers(body: string): {
   action: PagesCatalogPublicationAction;
   cardId: string;
+  lifecycleAction: "delete" | "publish" | "unpublish";
   requestFingerprint: string;
+  requestId: string;
+  siteId?: string | undefined;
 } {
+  const requestId = marker(body, "WEB00-REQUEST-ID");
   const action = marker(body, "WEB00-ACTION");
   const cardId = marker(body, "WEB00-CARD-ID");
+  const lifecycleAction = marker(body, "WEB00-LIFECYCLE-ACTION");
   const requestFingerprint = marker(body, "WEB00-FINGERPRINT");
+  const siteId = marker(body, "WEB00-SITE-ID");
 
   return {
     action: action === "create" || action === "delete" || action === "update" ? action : "update",
     cardId: cardId || "unknown-card",
-    requestFingerprint
+    lifecycleAction: lifecycleAction === "delete" || lifecycleAction === "publish" || lifecycleAction === "unpublish"
+      ? lifecycleAction
+      : action === "delete"
+        ? "delete"
+        : "publish",
+    requestFingerprint,
+    requestId,
+    ...(siteId.length === 0 ? {} : { siteId })
   };
 }
 

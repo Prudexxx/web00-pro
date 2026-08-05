@@ -344,7 +344,8 @@ export function createSitesListScreen(options) {
             }),
         cardId,
         expectedBlobSha: pagesAction === "create" ? null : current.blobSha,
-        requestId
+        requestId,
+        siteId: validateUuid(fullSite.id, "site")
       },
       credentials: "same-origin",
       headers: {

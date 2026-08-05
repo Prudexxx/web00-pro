@@ -95,8 +95,36 @@ describe("OPV2-6 ordinary maintenance visibility", () => {
     const screen = await renderSitesList(siteFixture({ status: "published" }), {
       onRequest(requestPath, options = {}) {
         requests.push({ options, requestPath });
-        if (requestPath.endsWith("/unpublish")) {
-          return Promise.resolve({ data: siteFixture({ status: "draft" }) });
+        if (requestPath === `/api/admin/sites/${SITE_ID}`) {
+          return Promise.resolve({ data: siteFixture({ status: "published" }) });
+        }
+        if (requestPath === "/api/admin/publication/pages/card/synthetic-site") {
+          return Promise.resolve({
+            data: {
+              blobSha: "sha-existing",
+              card: {
+                id: "synthetic-site",
+                slug: "synthetic-site"
+              },
+              cardId: "synthetic-site"
+            }
+          });
+        }
+        if (requestPath === "/api/admin/publication/pages") {
+          return Promise.resolve({
+            data: {
+              action: "update",
+              buttonLabel: "Опубликовано",
+              cardId: "synthetic-site",
+              noOp: false,
+              operationId: "00000000-0000-4000-8000-000000000701",
+              requestId: "00000000-0000-4000-8000-000000000701",
+              retryable: false,
+              stableStatus: "Опубликовано",
+              status: "published",
+              statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000701"
+            }
+          });
         }
         throw new Error(`Unexpected request ${requestPath}`);
       }
@@ -108,7 +136,7 @@ describe("OPV2-6 ordinary maintenance visibility", () => {
     expect(requests).toEqual([]);
 
     click(screen.element, '[data-action="confirm-dialog"]');
-    await waitFor(() => requests.some((request) => request.requestPath.endsWith("/unpublish")));
+    await waitFor(() => requests.some((request) => request.requestPath === "/api/admin/publication/pages"));
   });
 });
 
@@ -149,6 +177,7 @@ function siteFixture(overrides = {}) {
     category: { title: "Synthetic Category" },
     deletedAt: null,
     id: SITE_ID,
+    previewImageUrl: "https://storage.example.test/storage/v1/object/public/web00-catalog-images/sites/synthetic/preview/main/1200.webp",
     shortDescription: "Synthetic short description",
     slug: "synthetic-site",
     status: "draft",
