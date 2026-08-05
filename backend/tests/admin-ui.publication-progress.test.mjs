@@ -293,7 +293,7 @@ describe("OPV2-6 publication progress mapping", () => {
     expect(storage.getItem("web00_admin_publication_reconnect_v1")).toBeNull();
   });
 
-  it("persists reconnect metadata without the publication idempotency key", async () => {
+  it("persists safe Direct Pages reconnect metadata without secrets", async () => {
     const storage = createMemoryStorage();
     const screen = await renderEditor({
       apiClient: createEditorApi((requestPath, options = {}) => {
@@ -334,11 +334,13 @@ describe("OPV2-6 publication progress mapping", () => {
     const [, rawMetadata] = storage.setItem.mock.calls[0];
     expect(JSON.parse(rawMetadata)).toEqual({
       operationId: "00000000-0000-4000-8000-00000000feed",
+      prNumber: null,
+      requestId: "00000000-0000-4000-8000-00000000feed",
       siteId: SITE_ID,
       updatedAt: expect.any(String),
-      version: 1
+      version: 2
     });
-    expect(rawMetadata).not.toMatch(/00000000-0000-4000-8000-0000000000ab|idempotency/i);
+    expect(rawMetadata).not.toMatch(/WEB00_GITHUB_TOKEN|github_pat|ghp_|Authorization|Bearer/i);
   });
 
   it("fails closed on unknown operation DTOs without rendering raw labels or false published state", async () => {
@@ -421,7 +423,7 @@ describe("OPV2-6 publication progress mapping", () => {
               buttonLabel: "Опубликовать",
               retryable: false,
               stableStatus: "Не опубликовано",
-              status: "succeeded"
+              status: "published"
             })
           });
         }
@@ -662,6 +664,28 @@ function createEditorApi(onRequest) {
           }
         });
       }
+      if (requestPath === "/api/admin/publication/pages/card/synthetic-site" && options.method === "GET") {
+        return Promise.resolve({
+          data: {
+            blobSha: "sha-synthetic-site",
+            card: null,
+            cardId: "synthetic-site"
+          }
+        });
+      }
+      if (requestPath === "/api/admin/publication/pages" && options.method === "POST") {
+        return onRequest(`/api/admin/sites/${SITE_ID}/publication`, {
+          ...options,
+          body: { action: "publish" },
+          headers: {
+            ...(options.headers ?? {}),
+            "Idempotency-Key": options.body?.requestId
+          }
+        });
+      }
+      if (requestPath === "/api/admin/publication/pages/00000000-0000-4000-8000-00000000feed") {
+        return onRequest(OPERATION_URL, options);
+      }
       return onRequest(requestPath, options);
     }),
     requestMultipart: vi.fn((requestPath, options = {}) => onRequest(requestPath, options))
@@ -698,7 +722,12 @@ function siteFixture(overrides = {}) {
     active: true,
     categoryId: CATEGORY_ID,
     deletedAt: null,
+    deliveryLabel: "от 3 дней",
+    features: ["Feature A"],
+    galleryImages: [{ url: "https://storage.example.test/gallery.webp" }],
     id: SITE_ID,
+    previewImageUrl: "https://storage.example.test/preview.webp",
+    priceLabel: "от 100 000 ₽",
     shortDescription: "Synthetic short description",
     slug: "synthetic-site",
     status: "draft",

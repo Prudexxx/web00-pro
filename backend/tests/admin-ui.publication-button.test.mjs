@@ -208,7 +208,7 @@ describe("OPV2-6 admin one-button publication control", () => {
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
 
     await waitFor(() => onSaved.mock.calls.length === 1);
-    expect(apiClient.requestJson.mock.calls.filter(([requestPath]) => requestPath.endsWith("/publication"))).toHaveLength(1);
+    expect(apiClient.requestJson.mock.calls.filter(([requestPath]) => requestPath === "/api/admin/publication/pages")).toHaveLength(1);
 
     expect(screen.element.querySelector('[name="title"]').value).toBe("Publication failure");
     expect(screen.element.textContent).toContain("preview-still-selected.png");
@@ -322,6 +322,28 @@ function createEditorApi(options = {}) {
           }
         });
       }
+      if (requestPath === "/api/admin/publication/pages/card/synthetic-site" && requestOptions.method === "GET") {
+        return Promise.resolve({
+          data: {
+            blobSha: requestOptions.mode === "create" ? null : "sha-synthetic-site",
+            card: null,
+            cardId: "synthetic-site"
+          }
+        });
+      }
+      if (requestPath === "/api/admin/publication/pages" && requestOptions.method === "POST") {
+        return options.onRequest?.(`/api/admin/sites/${SITE_ID}/publication`, {
+          ...requestOptions,
+          body: { action: "publish" },
+          headers: {
+            ...(requestOptions.headers ?? {}),
+            "Idempotency-Key": requestOptions.body?.requestId
+          }
+        });
+      }
+      if (requestPath === "/api/admin/publication/pages/00000000-0000-4000-8000-00000000feed") {
+        return options.onRequest?.("/api/admin/public-catalog/operations/00000000-0000-4000-8000-00000000feed", requestOptions);
+      }
       if (typeof options.onRequest === "function") {
         return options.onRequest(requestPath, requestOptions);
       }
@@ -373,7 +395,12 @@ function siteFixture(overrides = {}) {
     active: true,
     categoryId: CATEGORY_ID,
     deletedAt: null,
+    deliveryLabel: "от 3 дней",
+    features: ["Feature A"],
+    galleryImages: [{ url: "https://storage.example.test/gallery.webp" }],
     id: SITE_ID,
+    previewImageUrl: "https://storage.example.test/preview.webp",
+    priceLabel: "от 100 000 ₽",
     shortDescription: "Synthetic short description",
     slug: "synthetic-site",
     status: "draft",
