@@ -39,6 +39,7 @@ interface PullRequestMarkers {
   cardId: string;
   expectedBlobSha: string | null;
   lifecycleAction: PagesCatalogPublicationLifecycleAction;
+  noOp: boolean;
   requestFingerprint: string;
   requestId: string;
   siteId?: string | undefined;
@@ -367,8 +368,6 @@ async function readPublicationMarkerBranchRequest(
   const headSha = requireString((ref as { object?: { sha?: unknown } }).object?.sha, "object.sha");
   const commit = await client.request(`/git/commits/${encodeURIComponent(headSha)}`) as {
     message?: unknown;
-    parents?: Array<{ sha?: unknown }>;
-    tree?: { sha?: unknown };
   };
   const markers = readValidPullRequestMarkers(String(commit.message ?? ""), {
     branch,
@@ -386,16 +385,6 @@ async function readPublicationMarkerBranchRequest(
     return null;
   }
 
-  const parentSha = Array.isArray(commit.parents) && commit.parents.length === 1
-    ? readSha(commit.parents[0]?.sha)
-    : null;
-  const treeSha = readSha(commit.tree?.sha);
-  let noOp = false;
-  if (parentSha !== null && treeSha !== null) {
-    const parent = await client.requestOptional(`/git/commits/${encodeURIComponent(parentSha)}`) as { tree?: { sha?: unknown } } | null;
-    noOp = readSha(parent?.tree?.sha) === treeSha;
-  }
-
   return {
     action: markers.action,
     branch,
@@ -403,11 +392,11 @@ async function readPublicationMarkerBranchRequest(
     expectedBlobSha: markers.expectedBlobSha,
     headSha,
     lifecycleAction: markers.lifecycleAction,
-    noOp,
+    noOp: markers.noOp,
     requestFingerprint: markers.requestFingerprint,
     requestId,
     siteId: markers.siteId,
-    state: noOp ? "marker" : "open"
+    state: markers.noOp ? "marker" : "open"
   };
 }
 
@@ -713,6 +702,7 @@ async function mapPullRequestToPublicationRecord(
     ...(headSha === undefined ? {} : { headSha }),
     lifecycleAction: markers.lifecycleAction,
     mergeCommitSha,
+    noOp: markers.noOp,
     mergeableState: typeof value.mergeable_state === "string" ? value.mergeable_state : undefined,
     nodeId: requireString(value.node_id, "node_id"),
     number: requireNumber(value.number, "number"),
@@ -820,6 +810,7 @@ function readPullRequestMarkers(body: string): {
   cardId: string;
   expectedBlobSha: string;
   lifecycleAction: string;
+  noOp: string;
   requestFingerprint: string;
   requestId: string;
   siteId?: string | undefined;
@@ -829,6 +820,7 @@ function readPullRequestMarkers(body: string): {
   const cardId = marker(body, "WEB00-CARD-ID");
   const expectedBlobSha = marker(body, "WEB00-EXPECTED-BLOB-SHA");
   const lifecycleAction = marker(body, "WEB00-LIFECYCLE-ACTION");
+  const noOp = marker(body, "WEB00-NO-OP");
   const requestFingerprint = marker(body, "WEB00-FINGERPRINT");
   const siteId = marker(body, "WEB00-SITE-ID");
 
@@ -837,6 +829,7 @@ function readPullRequestMarkers(body: string): {
     cardId,
     expectedBlobSha,
     lifecycleAction,
+    noOp,
     requestFingerprint,
     requestId,
     ...(siteId.length === 0 ? {} : { siteId })
@@ -873,6 +866,10 @@ function readValidPullRequestMarkers(
   if (markers.siteId !== undefined && !UUID_RE.test(markers.siteId)) {
     return null;
   }
+  const noOp = parseNoOpMarker(markers.noOp);
+  if (noOp === undefined) {
+    return null;
+  }
   if (
     markers.expectedBlobSha !== "" &&
     markers.expectedBlobSha !== "null" &&
@@ -888,6 +885,7 @@ function readValidPullRequestMarkers(
       ? null
       : markers.expectedBlobSha,
     lifecycleAction: markers.lifecycleAction,
+    noOp,
     requestFingerprint: markers.requestFingerprint,
     requestId: markers.requestId,
     ...(markers.siteId === undefined ? {} : { siteId: markers.siteId })
@@ -939,6 +937,17 @@ function requireNumber(value: unknown, field: string): number {
   }
 
   return value;
+}
+
+function parseNoOpMarker(value: string): boolean | undefined {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false" || value.length === 0) {
+    return false;
+  }
+
+  return undefined;
 }
 
 function readSha(value: unknown): string | null {

@@ -1498,6 +1498,7 @@ describe("Direct Pages catalog publication service", () => {
       status: "deploying"
     });
     expect(github.markerCommits).toHaveLength(1);
+    expect(github.markerCommits[0]).toMatchObject({ noOp: true });
     expect(lifecycleFinalize).not.toHaveBeenCalled();
 
     github.setRecentPublicationRequests(Array.from({ length: 5 }, (_, index) => ({
@@ -1511,6 +1512,18 @@ describe("Direct Pages catalog publication service", () => {
         ...github.markerCommits[0],
         noOp: true,
         state: "marker"
+      },
+      {
+        action: "update",
+        branch: "catalog/publish/00000000-0000-4000-8000-000000002405",
+        cardId: "interrupted-real-mutation",
+        expectedBlobSha: "previous-blob",
+        lifecycleAction: "publish",
+        noOp: false,
+        requestFingerprint: "e".repeat(64),
+        requestId: "00000000-0000-4000-8000-000000002405",
+        siteId: "00000000-0000-4000-8000-000000000102",
+        state: "open"
       }
     ]);
     github.setCurrentPagesStatus("success");

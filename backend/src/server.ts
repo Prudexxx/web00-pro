@@ -258,6 +258,15 @@ export function startServer(options: StartServerOptions): StartedServer {
   const pagesPublicationReconciliationWorker = createPagesCatalogPublicationReconciliationWorker({
     actor: DIRECT_PAGES_SYSTEM_ACTOR,
     now: options.now ?? (() => new Date()),
+    onError: () => {
+      logger.log({
+        environment: options.env.NODE_ENV,
+        event: "admin.pages-publication.reconciliation.failed",
+        level: "error",
+        service: options.env.SERVICE_NAME,
+        time: (options.now ?? (() => new Date()))().toISOString()
+      });
+    },
     service: pagesPublicationService
   });
   const adminRouterOptions = {

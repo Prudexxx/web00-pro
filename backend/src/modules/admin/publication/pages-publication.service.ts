@@ -94,6 +94,7 @@ export interface PagesCatalogGitHubProvider {
     fromSha: string;
     lifecycleAction: PagesCatalogPublicationLifecycleAction;
     message: string;
+    noOp: boolean;
     requestFingerprint: string;
     requestId: string;
     siteId?: string | undefined;
@@ -442,6 +443,7 @@ export function createPagesCatalogPublicationService(options: {
             branch,
             fromSha: mainSha,
             input,
+            noOp: mutation.kind === "noop",
             requestFingerprint
           })
         : { existed: true };
@@ -474,6 +476,7 @@ export function createPagesCatalogPublicationService(options: {
         cardId: input.cardId,
         expectedBlobSha: input.expectedBlobSha,
         lifecycleAction,
+        noOp: false,
         requestFingerprint,
         requestId: input.requestId,
         siteId: input.siteId
@@ -503,6 +506,7 @@ export function createPagesCatalogPublicationService(options: {
           cardId: input.cardId,
           expectedBlobSha: input.expectedBlobSha,
           lifecycleAction,
+          noOp: false,
           requestFingerprint,
           requestId: input.requestId,
           siteId: input.siteId
@@ -666,6 +670,7 @@ async function createPublicationMarkerBranch(
     branch: string;
     fromSha: string;
     input: PagesCatalogPublicationStartInput;
+    noOp: boolean;
     requestFingerprint: string;
   }
 ): Promise<{ existed: boolean }> {
@@ -709,6 +714,7 @@ async function createPublicationMarkerCommit(
     branch: string;
     fromSha: string;
     input: PagesCatalogPublicationStartInput;
+    noOp: boolean;
     requestFingerprint: string;
   }
 ): Promise<{ commitSha: string }> {
@@ -724,10 +730,12 @@ async function createPublicationMarkerCommit(
       cardId: input.input.cardId,
       expectedBlobSha: input.input.expectedBlobSha,
       lifecycleAction: input.input.lifecycleAction,
+      noOp: input.noOp,
       requestFingerprint: input.requestFingerprint,
       requestId: input.input.requestId,
       siteId: input.input.siteId
     }),
+    noOp: input.noOp,
     requestFingerprint: input.requestFingerprint,
     requestId: input.input.requestId,
     ...(input.input.siteId === undefined ? {} : { siteId: input.input.siteId })
@@ -1301,6 +1309,7 @@ function renderPullRequestBody(input: {
   cardId: string;
   expectedBlobSha: string | null;
   lifecycleAction: PagesCatalogPublicationLifecycleAction;
+  noOp: boolean;
   requestFingerprint: string;
   requestId: string;
   siteId?: string | undefined;
@@ -1312,6 +1321,7 @@ function renderPullRequestBody(input: {
     `WEB00-CARD-ID: ${input.cardId}`,
     `WEB00-ACTION: ${input.action}`,
     `WEB00-LIFECYCLE-ACTION: ${input.lifecycleAction}`,
+    `WEB00-NO-OP: ${input.noOp ? "true" : "false"}`,
     `WEB00-EXPECTED-BLOB-SHA: ${input.expectedBlobSha ?? "null"}`,
     `WEB00-FINGERPRINT: ${input.requestFingerprint}`,
     ...(input.siteId === undefined ? [] : [`WEB00-SITE-ID: ${input.siteId}`])
@@ -1323,6 +1333,7 @@ function renderCommitMessage(input: {
   cardId: string;
   expectedBlobSha: string | null;
   lifecycleAction: PagesCatalogPublicationLifecycleAction;
+  noOp: boolean;
   requestFingerprint: string;
   requestId: string;
   siteId?: string | undefined;
@@ -1334,6 +1345,7 @@ function renderCommitMessage(input: {
     `WEB00-CARD-ID: ${input.cardId}`,
     `WEB00-ACTION: ${input.action}`,
     `WEB00-LIFECYCLE-ACTION: ${input.lifecycleAction}`,
+    `WEB00-NO-OP: ${input.noOp ? "true" : "false"}`,
     `WEB00-EXPECTED-BLOB-SHA: ${input.expectedBlobSha ?? "null"}`,
     `WEB00-FINGERPRINT: ${input.requestFingerprint}`,
     ...(input.siteId === undefined ? [] : [`WEB00-SITE-ID: ${input.siteId}`])

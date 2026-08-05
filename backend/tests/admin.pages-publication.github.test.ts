@@ -174,6 +174,7 @@ describe("Direct Pages GitHub provider", () => {
                 "WEB00-CARD-ID: phase-two-test-merge-check",
                 "WEB00-ACTION: update",
                 "WEB00-LIFECYCLE-ACTION: publish",
+                "WEB00-NO-OP: false",
                 "WEB00-EXPECTED-BLOB-SHA: previous-blob",
                 `WEB00-FINGERPRINT: ${"e".repeat(64)}`
               ].join("\n"),
@@ -240,6 +241,7 @@ describe("Direct Pages GitHub provider", () => {
                 "WEB00-CARD-ID: phase-two-test-merge-check",
                 "WEB00-ACTION: update",
                 "WEB00-LIFECYCLE-ACTION: publish",
+                "WEB00-NO-OP: false",
                 "WEB00-EXPECTED-BLOB-SHA: previous-blob",
                 `WEB00-FINGERPRINT: ${"e".repeat(64)}`
               ].join("\n"),
