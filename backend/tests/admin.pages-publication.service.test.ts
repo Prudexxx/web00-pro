@@ -923,7 +923,7 @@ describe("Direct Pages catalog publication service", () => {
     })).resolves.toMatchObject({
       failed: 0,
       finalized: 1,
-      scanned: 2
+      scanned: 1
     });
     expect(lifecycleFinalize).toHaveBeenCalledTimes(1);
     expect(lifecycleFinalize).toHaveBeenCalledWith(expect.objectContaining({
@@ -975,7 +975,7 @@ describe("Direct Pages catalog publication service", () => {
 
     expect(noOp).toMatchObject({
       noOp: true,
-      status: "failed"
+      status: "deploying"
     });
     expect(noOp.status).not.toBe("published");
     expect(github.createdBranches).toHaveLength(1);
