@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import crypto from "node:crypto";
 import vm from "node:vm";
 
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
@@ -11,7 +10,6 @@ import { createFakeFetch, jsonResponse } from "./helpers/fake-fetch.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
 
 const CARD_ROOT = "catalog/cards";
-const PRE_PHASE_NORMALIZED_DTO_SHA256 = "566422e96156ddcd526ad95ff08921f864ba26792fbe147ea90c1bf3d7663b07";
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -71,17 +69,37 @@ async function readCard(cardsDir, id) {
   return JSON.parse(await readFile(join(cardsDir, `${id}.json`), "utf8"));
 }
 
+async function readCanonicalCards(cardsDir = CARD_ROOT) {
+  const files = (await readdir(cardsDir)).filter((file) => file.endsWith(".json")).sort();
+  return Promise.all(files.map(async (file) => JSON.parse(await readFile(join(cardsDir, file), "utf8"))));
+}
+
+function sortedIds(cards) {
+  return cards.map((card) => card.id).sort();
+}
+
+function assertContainsEachCanonicalCardOnce(actualCards, canonicalCards, label) {
+  const actualIds = sortedIds(actualCards);
+  const expectedIds = sortedIds(canonicalCards);
+
+  assert.deepEqual(actualIds, expectedIds, `${label} should include every canonical card exactly once`);
+  assert.equal(new Set(actualIds).size, actualIds.length, `${label} should not duplicate card ids`);
+}
+
 async function writeCard(cardsDir, card) {
   await writeFile(join(cardsDir, `${card.id}.json`), `${JSON.stringify(card, null, 2)}\n`, "utf8");
 }
 
-test("FIFTEEN-CARD PARITY: canonical JSON generates the same normalized public DTO as data.js", async () => {
+test("CANONICAL-CARD PARITY: canonical JSON generates the same normalized public DTO as data.js", async () => {
+  const canonicalCards = await readCanonicalCards();
   const committedData = evaluateDataJs(await readFile("assets/js/data.js", "utf8"));
   const committed = await normalizeStaticData(committedData);
   const { generated, normalized } = await buildGeneratedStaticCatalog();
 
-  assert.equal(generated.cards.length, 15);
-  assert.equal(normalized.length, 15);
+  assert.equal(generated.cards.length, canonicalCards.length);
+  assert.equal(normalized.length, canonicalCards.length);
+  assertContainsEachCanonicalCardOnce(generated.cards, canonicalCards, "generated catalog");
+  assertContainsEachCanonicalCardOnce(normalized, canonicalCards, "normalized catalog");
   assert.deepEqual(normalized, committed);
   assert.deepEqual(normalized.map((item) => item.previewImage?.url || item.previewImageUrl), committed.map((item) => item.previewImage?.url || item.previewImageUrl));
   assert.deepEqual(
@@ -90,7 +108,17 @@ test("FIFTEEN-CARD PARITY: canonical JSON generates the same normalized public D
   );
   assert.equal(normalized.some((item) => item.demoUrl !== committed.find((expected) => expected.slug === item.slug)?.demoUrl), false);
   assert.deepEqual(normalized.map((item) => item.aliases), normalized.map((item) => [item.slug]));
-  assert.equal(crypto.createHash("sha256").update(JSON.stringify(normalized)).digest("hex"), PRE_PHASE_NORMALIZED_DTO_SHA256);
+  assert.deepEqual(
+    generated.cards.filter((item) => item.id === "web00-smoke-create").map((item) => ({
+      active: item.active,
+      title: item.title,
+    })),
+    [{ active: true, title: "WEB00 Smoke Updated" }]
+  );
+  assert.deepEqual(
+    normalized.filter((item) => item.id === "web00-smoke-create").map((item) => item.title),
+    ["WEB00 Smoke Updated"]
+  );
 });
 
 test("API FAILURE FAIL-SAFE: Render API failure keeps the static catalog visible", async () => {
@@ -150,9 +178,12 @@ test("CREATE / UPDATE / DELETE: card JSON changes rebuild the full catalog witho
 
     const { cards, dataJs } = await buildPagesCatalog({ cardsDir });
     const normalized = await normalizeStaticData(evaluateDataJs(dataJs));
+    const canonicalCards = await readCanonicalCards(cardsDir);
     const ids = cards.map((card) => card.id);
 
-    assert.equal(cards.length, 15);
+    assert.equal(cards.length, canonicalCards.length);
+    assertContainsEachCanonicalCardOnce(cards, canonicalCards, "mutated generated catalog");
+    assertContainsEachCanonicalCardOnce(normalized, canonicalCards, "mutated normalized catalog");
     assert.equal(new Set(ids).size, ids.length);
     assert.equal(ids.includes("z-phase-one-created"), true);
     assert.equal(ids.includes("drova"), false);

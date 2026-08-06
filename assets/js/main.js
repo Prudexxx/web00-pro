@@ -11,7 +11,6 @@
 
   let activeSolution = (DATA.SOLUTIONS || []).find((item) => item.active !== false) || DATA.SOLUTIONS[0];
   let activeService = null;
-  let bugAttachment = null;
   let catalogState = null;
   let popularCatalogState = null;
   let catalogAttemptCount = 0;
@@ -1113,12 +1112,6 @@
         else openLeadModal({ service: service || activeService || "Сайт под ключ" });
       }
 
-      const bugButton = event.target.closest("[data-open-bug]");
-      if (bugButton) {
-        event.preventDefault();
-        openBugModal();
-      }
-
       const messageButton = event.target.closest("[data-open-message]");
       if (messageButton) {
         event.preventDefault();
@@ -1921,177 +1914,9 @@
         <p>Проверьте данные и попробуйте ещё раз. Если проблема повторится, напишите нам в Telegram.</p>
         <div class="success-box"><span>Выбранный сайт</span><strong>${esc(context.solution?.title || context.service || "Проект WEB00")}</strong></div>
         <a class="btn btn--primary btn--full" href="${attr(DATA.CONTACTS?.telegram?.href || "https://t.me/GarantiyWeb00bot")}" target="_blank" rel="noopener noreferrer">Открыть Telegram</a>
-        <button class="btn btn--secondary btn--full" type="button" onclick="location.reload()">Попробовать ещё раз</button>
+        <button class="btn btn--secondary btn--full" type="button" onclick="location.reload()">Повторить отправку</button>
       </div>
     `;
-  }
-
-  function openBugModal() {
-    bugAttachment = null;
-    renderBugForm({ formStartTime: Date.now() });
-    setModal("bug", true);
-  }
-
-  function renderBugForm(context = {}) {
-    const target = $("[data-bug-modal-content]");
-    if (!target) return;
-    const formStartTime = context.formStartTime || Date.now();
-    target.innerHTML = `
-      <div class="bug-modal">
-        <form data-bug-form novalidate>
-          <h2 id="bug-title">Сообщить об ошибке</h2>
-          <p>Опишите, что пошло не так. Это поможет быстрее исправить проблему.</p>
-          <div class="bug-form-body">
-            <p>Если можете, приложите скриншот: нажмите Print Screen и вставьте изображение в поле через Ctrl+V.</p>
-            <input class="form-honeypot" name="companySite" type="text" autocomplete="off" tabindex="-1" aria-hidden="true">
-            <input name="formStartTime" type="hidden" value="${String(formStartTime)}">
-            <label><span class="field-label">Где ошибка? <b>*</b></span><input name="place" type="text" placeholder="Страница, раздел или действие" required></label>
-            <label><span class="field-label">Что произошло? <b>*</b></span><textarea name="what" rows="3" placeholder="Опишите проблему" required></textarea></label>
-            <label><span class="field-label">Что вы делали перед ошибкой? <b>*</b></span><textarea name="before" rows="2" placeholder="Какие действия были перед проблемой" required></textarea></label>
-            <label><span class="field-label">Контакт для связи</span><input name="contact" type="text" placeholder="Telegram, телефон или email"></label>
-            <label class="upload-zone" data-upload-zone>
-              <span class="field-label">Скриншот / файл</span>
-              <input name="screenshot" type="file" accept="image/png,image/jpeg,image/webp">
-              <span>Перетащите файл сюда или нажмите для выбора<br><small>PNG, JPG, JPEG, WEBP до 10 МБ</small></span>
-            </label>
-            <p class="attachment-info" data-attachment-info></p>
-          </div>
-          <div class="modal-actions bug-form-footer"><button class="btn btn--primary" type="submit">Отправить сообщение</button><button class="btn btn--secondary" type="button" data-close-modal>Отмена</button></div>
-        </form>
-        <aside class="bug-help">
-          <h3>Как правильно сообщить об ошибке</h3>
-          <p><strong>Будьте точны</strong><br>Укажите страницу и действия.</p>
-          <p><strong>Опишите проблему</strong><br>Расскажите, что произошло.</p>
-          <p><strong>Прикрепите скриншот</strong><br>Он помогает быстрее понять проблему.</p>
-        </aside>
-      </div>
-    `;
-    const form = $("[data-bug-form]", target);
-    if (!form) return;
-    const fileInput = form.elements.screenshot;
-    const info = $("[data-attachment-info]", form);
-    fileInput?.addEventListener("change", () => setBugAttachment(fileInput.files[0], info));
-    form.addEventListener("paste", (event) => {
-      const file = Array.from(event.clipboardData?.files || []).find((item) => item.type.startsWith("image/"));
-      if (file) setBugAttachment(file, info);
-    });
-    const zone = $("[data-upload-zone]", form);
-    if (zone) {
-      zone.addEventListener("dragover", (event) => {
-        event.preventDefault();
-        zone.classList.add("is-dragover");
-      });
-      zone.addEventListener("dragleave", () => zone.classList.remove("is-dragover"));
-      zone.addEventListener("drop", (event) => {
-        event.preventDefault();
-        zone.classList.remove("is-dragover");
-        setBugAttachment(event.dataTransfer.files[0], info);
-      });
-    }
-    bindBugErrorCleanup(form);
-    form.addEventListener("submit", submitBugReport);
-    $("[data-close-modal]", target)?.addEventListener("click", closeModals);
-  }
-
-  function setBugAttachment(file, info) {
-    if (!file) return;
-    const allowed = ["image/png", "image/jpeg", "image/webp"];
-    if (!allowed.includes(file.type)) {
-      if (info) {
-        info.textContent = "Можно приложить PNG, JPG, JPEG или WEBP.";
-        info.classList.add("is-error");
-      }
-      return;
-    }
-    if (file.size > 10 * 1024 * 1024) {
-      if (info) {
-        info.textContent = "Файл больше 10 МБ. Выберите файл меньшего размера.";
-        info.classList.add("is-error");
-      }
-      return;
-    }
-    bugAttachment = file;
-    if (info) {
-      info.textContent = `Прикреплён файл: ${file.name}`;
-      info.classList.remove("is-error");
-    }
-  }
-
-  function submitBugReport(event) {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const data = Object.fromEntries(new FormData(form).entries());
-    if (data.companySite) return;
-    const errors = [];
-    if (!data.place?.trim()) errors.push("Укажите, где ошибка");
-    if (!data.what?.trim()) errors.push("Опишите, что произошло");
-    if (!data.before?.trim()) errors.push("Укажите, что вы делали перед ошибкой");
-    if (errors.length) {
-      ["place", "what", "before"].forEach((name) => {
-        if (!data[name]?.trim()) form.elements[name].classList.add("is-invalid");
-      });
-      $(".attachment-info", form).textContent = errors.join(". ");
-      $(".attachment-info", form).classList.add("is-error");
-      return;
-    }
-    try {
-      const report = (DATA.createErrorReport || DATA.createBugReport)({
-        place: data.place.trim(),
-        what: data.what.trim(),
-        before: data.before.trim(),
-        contact: data.contact?.trim() || "",
-        fileName: bugAttachment?.name || "",
-        formStartTime: data.formStartTime || "",
-      });
-      renderBugSuccess(report);
-    } catch (error) {
-      renderBugFallback();
-    }
-  }
-
-  function renderBugSuccess(report) {
-    const target = $("[data-bug-modal-content]");
-    if (!target) return;
-    target.innerHTML = `
-      <div class="success-state">
-        <div class="success-icon">✓</div>
-        <h2>Сообщение отправлено</h2>
-        <p>Мы проверим проблему и свяжемся с вами, если нужны детали.</p>
-        <div class="success-box"><span>Номер обращения</span><strong class="lead-number">${esc(report.id)}</strong><span>${report.fileName ? `Скриншот: ${esc(report.fileName)}` : "Скриншот не прикреплён"}</span></div>
-        <div class="modal-actions"><button class="btn btn--primary" type="button" data-close-modal>Вернуться на сайт</button><a class="btn btn--secondary" href="contacts.html">Написать в поддержку</a></div>
-      </div>
-    `;
-    $("[data-close-modal]", target)?.addEventListener("click", closeModals);
-  }
-
-  function renderBugFallback() {
-    const target = $("[data-bug-modal-content]");
-    if (!target) return;
-    target.innerHTML = `
-      <div class="success-state">
-        <div class="success-icon">!</div>
-        <h2>Не удалось отправить сообщение автоматически</h2>
-        <p>Попробуйте ещё раз или напишите в поддержку.</p>
-        <div class="modal-actions"><button class="btn btn--primary" type="button" data-open-bug>Попробовать ещё раз</button><a class="btn btn--secondary" href="contacts.html">Написать в поддержку</a></div>
-      </div>
-    `;
-    $("[data-open-bug]", target)?.addEventListener("click", openBugModal);
-  }
-
-  function bindBugErrorCleanup(form) {
-    ["place", "what", "before"].forEach((name) => {
-      const field = form.elements[name];
-      if (!field) return;
-      field.addEventListener("input", () => {
-        if (!field.value.trim()) return;
-        field.classList.remove("is-invalid");
-        if (![form.elements.place, form.elements.what, form.elements.before].some((item) => item.classList.contains("is-invalid"))) {
-          const info = $(".attachment-info", form);
-          info.classList.remove("is-error");
-          info.textContent = bugAttachment ? `Прикреплён файл: ${bugAttachment.name}` : "";
-        }
-      });
-    });
   }
 
   function initCalculator() {
@@ -2562,11 +2387,10 @@
           <div>
             <span class="status-card-label">Нужна помощь по проекту?</span>
             <h2>Связь и поддержка</h2>
-            <p>Напишите в поддержку или добавьте WEB00 на телефон для быстрого доступа к статусу. Если что-то пошло не так, можно кратко описать проблему.</p>
+            <p>Напишите в поддержку или добавьте WEB00 на телефон для быстрого доступа к статусу.</p>
           </div>
           <div class="status-help-actions__buttons">
             <a class="btn btn--secondary" href="contacts.html">Написать в поддержку</a>
-            <button class="btn btn--secondary status-help-actions__quiet" type="button" data-open-bug>Описать проблему</button>
             <a class="btn btn--secondary" href="install.html">Установить на телефон</a>
           </div>
         </section>
@@ -2704,7 +2528,16 @@
     const { protocol, hostname } = window.location;
     const canRegister = protocol === "https:" || hostname === "localhost" || hostname === "127.0.0.1";
     if (!canRegister) return;
-    navigator.serviceWorker.register("sw.js").catch((error) => {
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloadStarted = false;
+
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || reloadStarted) return;
+      reloadStarted = true;
+      window.location.reload();
+    });
+
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch((error) => {
       console.warn("WEB00 service worker registration skipped.", error);
     });
   }

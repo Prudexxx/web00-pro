@@ -380,8 +380,9 @@
   }
 
   function getInitialCatalog(options = {}) {
-    const cached = readLastKnownGoodCatalog();
-    const initial = cached || getStaticCatalog();
+    const staticCatalog = getStaticCatalog();
+    const cachedCatalog = readLastKnownGoodCatalog();
+    const initial = hasCatalogItems(staticCatalog) ? staticCatalog : cachedCatalog || staticCatalog;
     const limit = Number(options.limit);
     if (!Number.isInteger(limit) || limit <= 0) return initial;
     const items = initial.items.slice(0, limit);
@@ -579,9 +580,11 @@
 
   function preservedCatalogState(currentState, errorCode, flags = {}) {
     const config = flags.config || getConfig();
+    const staticCatalog = config.staticFallbackEnabled ? getStaticCatalog() : null;
+    const cachedCatalog = readLastKnownGoodCatalog();
     const fallback = hasCatalogItems(currentState)
       ? currentState
-      : readLastKnownGoodCatalog() || (config.staticFallbackEnabled ? getStaticCatalog() : null);
+      : (hasCatalogItems(staticCatalog) ? staticCatalog : cachedCatalog);
     if (hasCatalogItems(fallback)) {
       return withStateFlags({
         source: fallback.source,
@@ -642,17 +645,6 @@
       const errorCode = error && error.code ? error.code : (request.signal.aborted ? "WEB00_API_ABORTED" : "WEB00_API_ERROR");
       if (channel.isStale(request.sequence)) {
         return null;
-      }
-      if (config.staticFallbackEnabled) {
-        const fallback = getStaticCatalog();
-        if (fallback.items.length > 0) {
-          const items = kind === "popular" ? fallback.items.slice(0, Number(options.limit || 3)) : fallback.items;
-          return withStateFlags({
-            ...fallback,
-            items,
-            errorCode,
-          }, { apiAvailable: false, staticFallbackActive: true });
-        }
       }
       return preservedCatalogState(currentState, errorCode, { config });
     } finally {

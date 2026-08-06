@@ -30,10 +30,10 @@ test("main.js consumes WEB00_CATALOG through narrow catalog seams", async () => 
   assert.match(source, /function catalogItemById\(/);
   assert.match(source, /const found = CATALOG\.findCatalogItem\(\[\.\.\.popularItems, \.\.\.catalogItems\(\)\], value\);/);
   assert.match(source, /if \(found\) return found;/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions", currentState: catalogState \}\)/);
 });
 
-test("solutions.html provides stable B8 catalog state nodes", async () => {
+test("solutions.html provides stable B9 catalog state nodes", async () => {
   const html = await readFile("solutions.html", "utf8");
 
   assert.match(html, /data-catalog-loading/);
@@ -53,7 +53,7 @@ test("main.js replaces homepage popular cards only from successful API popular s
 
   assert.match(source, /async function initPopularCatalogState\(\)/);
   assert.match(source, /function renderPopularSolutions\(\)/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3, currentState: popularCatalogState \}\)/);
   assert.match(source, /popularCatalogState\.source === "api"/);
   assert.match(source, /popularCatalogState\.lifecycle === "ready"/);
 });
@@ -79,12 +79,12 @@ test("brief and modal integration use normalized catalog lookup and gallery inde
   assert.doesNotMatch(source, /data-gallery-image="\$\{attr\(image\)\}"/);
 });
 
-test("root pages use canonical B8 deferred script order", async () => {
+test("root pages use canonical B9 deferred script order", async () => {
   const expected = [
-    "assets/js/data.js?v=b8-live-1",
-    "assets/js/runtime-config.js?v=b8-live-1",
-    "assets/js/catalog-api.js?v=b8-live-1",
-    "assets/js/main.js?v=b8-live-1",
+    "assets/js/data.js?v=b9-catalog-lkg-1",
+    "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
+    "assets/js/catalog-api.js?v=b9-catalog-lkg-1",
+    "assets/js/main.js?v=b9-catalog-lkg-1",
   ];
 
   for (const page of ROOT_MAIN_PAGES) {
@@ -93,13 +93,13 @@ test("root pages use canonical B8 deferred script order", async () => {
     const b8Start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
     assert.notEqual(b8Start, -1, `${page} should load data.js`);
     assert.deepEqual(scripts.slice(b8Start, b8Start + 4), expected, `${page} script order`);
-    assert.equal(scripts.filter((src) => expected.includes(src)).length, 4, `${page} should not duplicate B8 scripts`);
+    assert.equal(scripts.filter((src) => expected.includes(src)).length, 4, `${page} should not duplicate B9 scripts`);
     assert.doesNotMatch(html, /<script\s+async/i, `${page} should not async public scripts`);
     assert.doesNotMatch(html, /<base\s/i, `${page} should not use base href`);
   }
 });
 
-test("frontend B8 uses one canonical live API config and avoids production secrets", async () => {
+test("frontend B9 uses one canonical live API config and avoids production secrets", async () => {
   await assert.rejects(() => access("package.json"));
   await assert.rejects(() => access("package-lock.json"));
 
@@ -112,7 +112,10 @@ test("frontend B8 uses one canonical live API config and avoids production secre
   assert.match(runtimeConfig, /apiBaseUrl: "https:\/\/web00-backend-production\.onrender\.com"/);
   assert.equal((combined.match(/https:\/\/web00-backend-production\.onrender\.com/g) || []).length, 1);
   assert.doesNotMatch(combined, /https:\/\/api\.|Authorization|credentials:\s*"include"|document\.cookie|\.env|TODO|TBD/i);
-  assert.doesNotMatch(catalogApi, /localStorage|sessionStorage|document\.querySelector/);
+  assert.match(catalogApi, /const LKG_KEY = "web00\.catalog\.api\.lkg\.v1";/);
+  assert.match(catalogApi, /window\.localStorage && window\.localStorage\.getItem\(LKG_KEY\)/);
+  assert.match(catalogApi, /window\.localStorage\.setItem\(LKG_KEY, serialized\)/);
+  assert.doesNotMatch(catalogApi, /sessionStorage|document\.querySelector/);
   assert.doesNotMatch(main, /target="_blank" rel="noopener"(?! noreferrer)/);
 });
 
@@ -134,10 +137,12 @@ test("public pages expose no forbidden bug-report controls, modal targets, or de
 test("main.js ignores non-applyable stale catalog results", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)\.then\(\(nextCatalogState\) => \{/);
-  assert.match(source, /applyCatalogState\(nextCatalogState\)/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)\.then\(\(nextPopularCatalogState\) => \{/);
-  assert.match(source, /if \(nextPopularCatalogState\) popularCatalogState = nextPopularCatalogState;/);
+  assert.match(source, /async function refreshCatalogInBackground\(\)/);
+  assert.match(source, /const nextCatalogState = await CATALOG\.resolveCatalogForPage\(\{ kind: "solutions", currentState: catalogState \}\);/);
+  assert.match(source, /const loaded = applyCatalogState\(nextCatalogState\);/);
+  assert.match(source, /if \(!loaded\) scheduleCatalogRetry\(\);/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3, currentState: popularCatalogState \}\)\.then\(\(nextPopularCatalogState\) => \{/);
+  assert.match(source, /if \(nextPopularCatalogState && hasCatalogItems\(nextPopularCatalogState\)\) popularCatalogState = nextPopularCatalogState;/);
 });
 
 test("main.js applies catalog API states through the catalog seam", async () => {
@@ -149,7 +154,7 @@ test("main.js applies catalog API states through the catalog seam", async () => 
   assert.match(source, /renderSolutions\(\);/);
 });
 
-test("B8 CSS supports catalog status and homepage API empty state without new global cards", async () => {
+test("B9 CSS supports catalog status and homepage API empty state without new global cards", async () => {
   const catalogCss = await readFile("assets/css/catalog-premium.css", "utf8");
   const homeCss = await readFile("assets/css/home.css", "utf8");
 

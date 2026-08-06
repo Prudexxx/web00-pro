@@ -1,4 +1,4 @@
-const WEB00_CACHE = "web00-shell-v5-catalog-lkg";
+const WEB00_CACHE = "web00-shell-v6-catalog-network-first";
 
 const SHELL_ASSETS = [
   "index.html",
@@ -22,8 +22,45 @@ function isRuntimeConfigRequest(url) {
   return url.origin === self.location.origin && url.pathname.endsWith("/assets/js/runtime-config.js");
 }
 
+function isCatalogDataRequest(url) {
+  return url.origin === self.location.origin && url.pathname.endsWith("/assets/js/data.js");
+}
+
 function isApiRequest(url) {
   return url.origin === self.location.origin && (url.pathname.startsWith("/api/") || url.pathname === "/api");
+}
+
+function catalogDataCacheKey(request) {
+  const url = new URL(request.url);
+  url.search = "";
+  return url.href;
+}
+
+async function networkFirstCatalogData(request) {
+  let networkResponse;
+  let networkError;
+
+  try {
+    networkResponse = await fetch(request, { cache: "no-store" });
+    if (networkResponse.ok) {
+      const cache = await caches.open(WEB00_CACHE);
+      await cache.put(catalogDataCacheKey(request), networkResponse.clone());
+      return networkResponse;
+    }
+  } catch (error) {
+    networkError = error;
+  }
+
+  const cache = await caches.open(WEB00_CACHE);
+  const cached = await cache.match(request, { ignoreSearch: true });
+  if (cached) {
+    return cached;
+  }
+  if (networkResponse) {
+    return networkResponse;
+  }
+
+  throw networkError || new TypeError("WEB00 catalog data unavailable.");
 }
 
 self.addEventListener("install", (event) => {
@@ -49,6 +86,11 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (isRuntimeConfigRequest(url) || isApiRequest(url)) return;
   if (url.origin !== self.location.origin) return;
+
+  if (isCatalogDataRequest(url)) {
+    event.respondWith(networkFirstCatalogData(request));
+    return;
+  }
 
   // No personal/project data is cached in this frontend-only service worker.
   if (request.mode === "navigate" || request.headers.get("accept")?.includes("text/html")) {
