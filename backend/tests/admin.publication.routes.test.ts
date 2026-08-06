@@ -152,7 +152,7 @@ describe("admin publication routes", () => {
       .post("/api/admin/publication/pages")
       .set("Authorization", "Bearer admin")
       .set("Cookie", "web00-admin-session=synthetic")
-      .set("X-CSRF-Token", "synthetic-csrf")
+      .set("X-CSRF-Token", "web00-admin")
       .send({
         action: "update",
         card: {
@@ -174,7 +174,7 @@ describe("admin publication routes", () => {
       .post("/api/admin/publication/pages")
       .set("Authorization", "Bearer admin")
       .set("Cookie", "web00-admin-session=synthetic")
-      .set("X-CSRF-Token", "synthetic-csrf")
+      .set("X-CSRF-Token", "web00-admin")
       .send({
         action: "delete",
         card: null,
@@ -187,6 +187,83 @@ describe("admin publication routes", () => {
       .expect(403);
 
     expect(pagesService.startPagesPublication).not.toHaveBeenCalled();
+  });
+
+  it("allows bearer-authenticated Direct Pages publication through the CSRF header boundary without a cookie", async () => {
+    const module = await importPublicationRoutesModule();
+    const createAdminPublicationRouter = readFunction(module, "createAdminPublicationRouter") as (options: {
+      now: () => Date;
+      pagesService: ReturnType<typeof createPagesPublicationServiceFake>;
+      service: ReturnType<typeof createPublicationServiceFake>;
+    }) => Router;
+    const payload = directPagesCsrfSmokePayload();
+
+    const allowedService = createPagesPublicationServiceFake();
+    const allowedApp = createPublicationRouteApp(createAdminPublicationRouter({
+      now: fixedNow,
+      pagesService: allowedService,
+      service: createPublicationServiceFake()
+    }));
+    await request(allowedApp)
+      .post("/api/admin/publication/pages")
+      .set("Authorization", "Bearer admin")
+      .set("X-CSRF-Token", "web00-admin")
+      .send(payload)
+      .expect(202);
+    expect(allowedService.startPagesPublication).toHaveBeenCalledTimes(1);
+    expect(allowedService.startPagesPublication).toHaveBeenCalledWith(expect.objectContaining({
+      action: "create",
+      card: payload.card,
+      cardId: "direct-pages-csrf-smoke",
+      expectedBlobSha: null,
+      lifecycleAction: "publish",
+      requestId: "00000000-0000-4000-8000-000000000a01",
+      siteId: "00000000-0000-4000-8000-000000000b01"
+    }));
+
+    const missingCsrfService = createPagesPublicationServiceFake();
+    const missingCsrfApp = createPublicationRouteApp(createAdminPublicationRouter({
+      now: fixedNow,
+      pagesService: missingCsrfService,
+      service: createPublicationServiceFake()
+    }));
+    const missingCsrf = await request(missingCsrfApp)
+      .post("/api/admin/publication/pages")
+      .set("Authorization", "Bearer admin")
+      .send(payload)
+      .expect(403);
+    expect(missingCsrf.body.error).toMatchObject({ code: "FORBIDDEN" });
+    expect(missingCsrfService.startPagesPublication).not.toHaveBeenCalled();
+
+    const wrongCsrfService = createPagesPublicationServiceFake();
+    const wrongCsrfApp = createPublicationRouteApp(createAdminPublicationRouter({
+      now: fixedNow,
+      pagesService: wrongCsrfService,
+      service: createPublicationServiceFake()
+    }));
+    const wrongCsrf = await request(wrongCsrfApp)
+      .post("/api/admin/publication/pages")
+      .set("Authorization", "Bearer admin")
+      .set("X-CSRF-Token", "wrong-token")
+      .send(payload)
+      .expect(403);
+    expect(wrongCsrf.body.error).toMatchObject({ code: "FORBIDDEN" });
+    expect(wrongCsrfService.startPagesPublication).not.toHaveBeenCalled();
+
+    const editorService = createPagesPublicationServiceFake();
+    const editorApp = createPublicationRouteApp(createAdminPublicationRouter({
+      now: fixedNow,
+      pagesService: editorService,
+      service: createPublicationServiceFake()
+    }));
+    const editor = await request(editorApp)
+      .post("/api/admin/publication/pages")
+      .set("Authorization", "Bearer editor")
+      .set("X-CSRF-Token", "web00-admin")
+      .send(payload)
+      .expect(403);
+    expect(editor.body.error).toMatchObject({ code: "FORBIDDEN" });
+    expect(editorService.startPagesPublication).not.toHaveBeenCalled();
   });
 });
 
@@ -258,6 +335,22 @@ function createPagesPublicationServiceFake() {
       status: "validating",
       statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000991"
     }))
+  };
+}
+
+function directPagesCsrfSmokePayload() {
+  return {
+    action: "create",
+    card: {
+      id: "direct-pages-csrf-smoke",
+      slug: "direct-pages-csrf-smoke",
+      title: "Direct Pages CSRF Smoke"
+    },
+    cardId: "direct-pages-csrf-smoke",
+    expectedBlobSha: null,
+    lifecycleAction: "publish",
+    requestId: "00000000-0000-4000-8000-000000000a01",
+    siteId: "00000000-0000-4000-8000-000000000b01"
   };
 }
 
