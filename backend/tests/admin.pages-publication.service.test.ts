@@ -111,20 +111,20 @@ describe("Direct Pages catalog publication service", () => {
       action: "create",
       cardId: "phase-two-created",
       operationId: "00000000-0000-4000-8000-000000000201",
-      status: "merge_queued"
+      status: "deploying"
     });
     expect(updateResult).toMatchObject({
       action: "update",
       cardId: "phase-two-existing",
       operationId: "00000000-0000-4000-8000-000000000203",
-      status: "merge_queued"
+      status: "deploying"
     });
     expect(updateNoop).toMatchObject({ noOp: true, status: "published" });
     expect(deleteResult).toMatchObject({
       action: "delete",
       cardId: "phase-two-delete",
       operationId: "00000000-0000-4000-8000-000000000205",
-      status: "merge_queued"
+      status: "deploying"
     });
     expect(deleteNoop).toMatchObject({ noOp: true, status: "published" });
     expect(github.commits).toEqual([
@@ -194,11 +194,11 @@ describe("Direct Pages catalog publication service", () => {
 
     expect(first).toMatchObject({
       operationId: "00000000-0000-4000-8000-000000000301",
-      status: "merge_queued"
+      status: "deploying"
     });
     expect(replay).toMatchObject({
       operationId: "00000000-0000-4000-8000-000000000301",
-      status: "merge_queued"
+      status: "deploying"
     });
     await expect(mismatchedReplay).rejects.toMatchObject({
       code: "IDEMPOTENCY_KEY_REUSED",
@@ -358,7 +358,7 @@ describe("Direct Pages catalog publication service", () => {
       requestId: "00000000-0000-4000-8000-000000000401"
     }))).resolves.toMatchObject({
       cardId: "phase-two-card-a",
-      status: "merge_queued"
+      status: "deploying"
     });
     await expect(service.startPagesPublication(startInput({
       action: "update",
@@ -372,7 +372,7 @@ describe("Direct Pages catalog publication service", () => {
       requestId: "00000000-0000-4000-8000-000000000402"
     }))).resolves.toMatchObject({
       cardId: "phase-two-card-b",
-      status: "merge_queued"
+      status: "deploying"
     });
     await expect(service.startPagesPublication(startInput({
       action: "update",
@@ -594,7 +594,7 @@ describe("Direct Pages catalog publication service", () => {
     });
   });
 
-  it("AUTO-MERGE SAFETY enables squash auto-merge only after the required catalog validation check is successful", async () => {
+  it("SELF-MERGE SAFETY performs squash merge only after the required catalog validation check is successful", async () => {
     const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
     const pendingGithub = createGitHubProviderFake({
       requiredCheckConfigured: true,
@@ -622,17 +622,17 @@ describe("Direct Pages catalog publication service", () => {
       status: "validating",
       statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000501"
     });
-    expect(pendingGithub.enableAutoMerge).not.toHaveBeenCalled();
+    expect(pendingGithub.mergeCatalogPullRequest).not.toHaveBeenCalled();
 
     pendingGithub.setRequiredCheckStatus("success");
-    const queued = await pendingService.getPagesPublicationStatus("00000000-0000-4000-8000-000000000501");
-    expect(queued).toMatchObject({
-      buttonLabel: "Проверяется",
-      status: "merge_queued"
+    const merging = await pendingService.getPagesPublicationStatus("00000000-0000-4000-8000-000000000501");
+    expect(merging).toMatchObject({
+      buttonLabel: "Развёртывается",
+      status: "deploying"
     });
-    expect(pendingGithub.enableAutoMerge).toHaveBeenCalledWith({
-      mergeMethod: "SQUASH",
-      pullRequestNodeId: "PR_node_1"
+    expect(pendingGithub.mergeCatalogPullRequest).toHaveBeenCalledWith({
+      headSha: expect.stringMatching(/^[a-f0-9]{40}$/),
+      number: 1
     });
     pendingGithub.setPublicationRequest("00000000-0000-4000-8000-000000000501", {
       mergeCommitSha: "a".repeat(40),
@@ -647,6 +647,32 @@ describe("Direct Pages catalog publication service", () => {
     expect(pendingGithub.deletedBranches).toEqual([
       { branch: "catalog/publish/00000000-0000-4000-8000-000000000501" }
     ]);
+
+    const failedGithub = createGitHubProviderFake({
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "failure"
+    });
+    const failedService = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github: failedGithub,
+      now: fixedNow
+    });
+    const failed = await failedService.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        id: "phase-two-validation-failed",
+        slug: "phase-two-validation-failed",
+        title: "Phase Two Validation Failed"
+      }),
+      cardId: "phase-two-validation-failed",
+      expectedBlobSha: null,
+      requestId: "00000000-0000-4000-8000-000000000504"
+    }));
+    expect(failed).toMatchObject({
+      code: "CATALOG_VALIDATION_FAILED",
+      status: "failed"
+    });
+    expect(failedGithub.mergeCatalogPullRequest).not.toHaveBeenCalled();
 
     const mismatchGithub = createGitHubProviderFake({
       requiredCheckConfigured: false,
@@ -673,7 +699,54 @@ describe("Direct Pages catalog publication service", () => {
       code: "GITHUB_REPOSITORY_SETUP_REQUIRED",
       status: "setup_required"
     });
-    expect(mismatchGithub.enableAutoMerge).not.toHaveBeenCalled();
+    expect(mismatchGithub.mergeCatalogPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("SELF-MERGE returns VERSION_CONFLICT and skips merge when the PR head changes after validation", async () => {
+    const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
+    const github = createGitHubProviderFake({
+      requiredCheckConfigured: true,
+      requiredCheckStatus: "pending"
+    });
+    const service = createPagesCatalogPublicationService({
+      allowedMediaOrigin: "https://storage.example.test",
+      github,
+      lifecycleFinalizer: lifecycleFinalizerFake(),
+      now: fixedNow
+    });
+    const requestId = "00000000-0000-4000-8000-000000000503";
+    const firstHeadSha = "1".repeat(40);
+    const changedHeadSha = "2".repeat(40);
+
+    await service.startPagesPublication(startInput({
+      action: "create",
+      card: canonicalCard({
+        id: "phase-two-head-change",
+        slug: "phase-two-head-change",
+        title: "Phase Two Head Change"
+      }),
+      cardId: "phase-two-head-change",
+      expectedBlobSha: null,
+      requestId
+    }));
+    github.setPublicationRequest(requestId, {
+      headSha: firstHeadSha,
+      mergeableState: "clean",
+      testMergeSha: "3".repeat(40)
+    });
+    github.setRequiredCheckStatus("success");
+    github.onRequiredCheckStatus(() => {
+      github.setPublicationRequest(requestId, {
+        headSha: changedHeadSha
+      });
+    });
+
+    await expect(service.getPagesPublicationStatus(requestId)).resolves.toMatchObject({
+      code: "VERSION_CONFLICT",
+      retryable: false,
+      status: "version_conflict"
+    });
+    expect(github.mergeCatalogPullRequest).not.toHaveBeenCalled();
   });
 
   it("PHASE 2.2 synchronizes Pages success with idempotent backend lifecycle finalization", async () => {
@@ -1029,7 +1102,7 @@ describe("Direct Pages catalog publication service", () => {
 
     expect(recovered).toMatchObject({
       cardId: "phase-two-recovered-new",
-      status: "merge_queued"
+      status: "deploying"
     });
     expect(github.createBranch).not.toHaveBeenCalledWith({
       branch: recoveredBranch,
@@ -1088,7 +1161,7 @@ describe("Direct Pages catalog publication service", () => {
       expectedBlobSha: null,
       requestId: "00000000-0000-4000-8000-000000000801"
     }))).resolves.toMatchObject({
-      status: "merge_queued"
+      status: "deploying"
     });
 
     const githubCallsBeforeInvalid = github.createdBranches.length + github.commits.length + github.pullRequests.length;
@@ -1173,7 +1246,7 @@ describe("Direct Pages catalog publication service", () => {
       expectedBlobSha: "sha-legacy-media",
       requestId: "00000000-0000-4000-8000-000000001201"
     }))).resolves.toMatchObject({
-      status: "merge_queued"
+      status: "deploying"
     });
     await expect(service.startPagesPublication(startInput({
       action: "update",
@@ -1275,7 +1348,7 @@ describe("Direct Pages catalog publication service", () => {
     const { createPagesCatalogPublicationService } = await loadPublicationServiceExports();
     const github = createGitHubProviderFake({
       requiredCheckConfigured: true,
-      requiredCheckStatus: "success"
+      requiredCheckStatus: "pending"
     });
     const service = createPagesCatalogPublicationService({
       allowedMediaOrigin: "https://storage.example.test",
@@ -1324,7 +1397,7 @@ describe("Direct Pages catalog publication service", () => {
       retryable: false,
       status: "failed"
     });
-    expect(github.enableAutoMerge).toHaveBeenCalledTimes(2);
+    expect(github.mergeCatalogPullRequest).not.toHaveBeenCalled();
   });
 
   it("PHASE 2.4 supersedes stale same-site lifecycle work after publish-unpublish and delete-recreate races", async () => {
@@ -1586,6 +1659,7 @@ function createGitHubProviderFake(options: {
 }) {
   let currentPagesStatus = options.currentPagesStatus ?? "success";
   let getBaseBranchHeadHook: (() => void) | null = null;
+  let requiredCheckStatusHook: (() => void) | null = null;
   let requiredCheckStatus = options.requiredCheckStatus;
   const branchCards = new Map<string, { blobSha: string; content: string } | null>();
   const branchHeads = new Map<string, string>();
@@ -1595,27 +1669,30 @@ function createGitHubProviderFake(options: {
   let recentMarkerRequests: Record<string, unknown>[] = [];
   const requests = new Map<string, Record<string, unknown>>();
   const github = {
-    autoMergeRequests: [] as Record<string, unknown>[],
     commits: [] as Record<string, unknown>[],
     createdBranches: [] as Record<string, unknown>[],
     deletedBranches: [] as Record<string, unknown>[],
     markerCommits: [] as Record<string, unknown>[],
+    mergeRequests: [] as Record<string, unknown>[],
     pullRequests: [] as Record<string, unknown>[],
     createBranch: vi.fn(async (input: Record<string, unknown>) => {
       github.createdBranches.push(input);
       branchHeads.set(String(input.branch), String(input.fromSha));
     }),
     createCatalogPullRequest: vi.fn(async (input: Record<string, unknown>) => {
+      const number = github.pullRequests.length + 1;
       const pullRequest = {
         ...input,
-        nodeId: `PR_node_${github.pullRequests.length + 1}`,
-        number: github.pullRequests.length + 1,
-        url: `https://github.example.test/pull/${github.pullRequests.length + 1}`
+        headSha: String(number).padStart(40, "0"),
+        mergeableState: "clean",
+        nodeId: `PR_node_${number}`,
+        number,
+        testMergeSha: String(number + 100).padStart(40, "0"),
+        url: `https://github.example.test/pull/${number}`
       };
       github.pullRequests.push(pullRequest);
       requests.set(String(input.requestId), {
         ...pullRequest,
-        autoMergeEnabled: false,
         checkStatus: requiredCheckStatus,
         mergeCommitSha: null,
         pagesStatus: null,
@@ -1643,8 +1720,20 @@ function createGitHubProviderFake(options: {
     deleteTemporaryBranch: vi.fn(async (input: Record<string, unknown>) => {
       github.deletedBranches.push(input);
     }),
-    enableAutoMerge: vi.fn(async (input: Record<string, unknown>) => {
-      github.autoMergeRequests.push(input);
+    mergeCatalogPullRequest: vi.fn(async (input: Record<string, unknown>) => {
+      github.mergeRequests.push(input);
+      const request = [...requests.entries()].find(([, value]) => value.number === input.number)?.[1];
+      if (request === undefined) {
+        throw new Error(`Missing synthetic pull request ${String(input.number)}.`);
+      }
+      const mergeCommitSha = "f".repeat(40);
+      requests.set(String(request.requestId), {
+        ...request,
+        mergeCommitSha,
+        pagesStatus: "pending",
+        state: "merged"
+      });
+      return { mergeCommitSha };
     }),
     findPublicationRequest: vi.fn(async (requestId: string) => requests.get(requestId) ?? null),
     getBaseBranchHead: vi.fn(async () => {
@@ -1664,10 +1753,13 @@ function createGitHubProviderFake(options: {
       headSha: "main-sha",
       status: currentPagesStatus
     })),
-    getRequiredCatalogCheckStatus: vi.fn(async () => ({
-      configured: options.requiredCheckConfigured,
-      status: requiredCheckStatus
-    })),
+    getRequiredCatalogCheckStatus: vi.fn(async () => {
+      requiredCheckStatusHook?.();
+      return {
+        configured: options.requiredCheckConfigured,
+        status: requiredCheckStatus
+      };
+    }),
     listRecentPublicationRequests: vi.fn(async (input: Record<string, unknown>) => {
       const limit = typeof input.limit === "number" ? input.limit : recentPublicationRequests.length;
       return recentPublicationRequests.slice(0, limit);
@@ -1678,6 +1770,9 @@ function createGitHubProviderFake(options: {
     }),
     onGetBaseBranchHead(callback: () => void) {
       getBaseBranchHeadHook = callback;
+    },
+    onRequiredCheckStatus(callback: () => void) {
+      requiredCheckStatusHook = callback;
     },
     setBranchCard(branch: string, cardId: string, value: { blobSha: string; content: string }) {
       branchCards.set(`${branch}:${cardId}`, value);

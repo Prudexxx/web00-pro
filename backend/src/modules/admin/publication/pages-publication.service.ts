@@ -28,7 +28,6 @@ export interface PagesCatalogRequiredCheckStatus {
 
 export interface PagesCatalogPublicationRecord {
   action?: PagesCatalogPublicationAction | undefined;
-  autoMergeEnabled?: boolean | undefined;
   branch?: string | undefined;
   cardId?: string | undefined;
   checkStatus?: "failure" | "pending" | "success" | undefined;
@@ -44,7 +43,6 @@ export interface PagesCatalogPublicationRecord {
   pagesStatus?: "failure" | "pending" | "success" | null;
   noOp?: boolean | undefined;
   prNumber?: number | undefined;
-  pullRequestNodeId?: string | undefined;
   requestId?: string | undefined;
   requestFingerprint?: string | undefined;
   siteId?: string | undefined;
@@ -61,10 +59,18 @@ export interface PagesCatalogGitHubProvider {
     branch: string;
     cardId: string;
     lifecycleAction: PagesCatalogPublicationLifecycleAction;
+    requestFingerprint: string;
     requestId: string;
     siteId?: string | undefined;
     title: string;
-  }): Promise<{ nodeId: string; number: number; url: string }>;
+  }): Promise<{
+    headSha?: string | undefined;
+    mergeableState?: string | undefined;
+    nodeId: string;
+    number: number;
+    testMergeSha?: string | null | undefined;
+    url: string;
+  }>;
   createOrUpdateCardCommit(input: {
     branch: string;
     content: string;
@@ -79,11 +85,11 @@ export interface PagesCatalogGitHubProvider {
     path: string;
   }): Promise<{ commitSha: string }>;
   deleteTemporaryBranch?(input: { branch: string }): Promise<void>;
-  enableAutoMerge(input: {
-    mergeMethod: "SQUASH";
-    pullRequestNodeId: string;
-  }): Promise<void>;
   findPublicationRequest(requestId: string): Promise<PagesCatalogPublicationRecord | null>;
+  mergeCatalogPullRequest(input: {
+    headSha: string;
+    number: number;
+  }): Promise<{ mergeCommitSha: string }>;
   createPublicationMarkerCommit(input: {
     action: PagesCatalogPublicationAction;
     branch: string;
@@ -513,6 +519,7 @@ export function createPagesCatalogPublicationService(options: {
         branch,
         cardId: input.cardId,
         lifecycleAction,
+        requestFingerprint,
         requestId: input.requestId,
         siteId: input.siteId,
         title: `Catalog ${input.action}: ${input.cardId}`
@@ -521,15 +528,18 @@ export function createPagesCatalogPublicationService(options: {
         action: input.action,
         branch,
         cardId: input.cardId,
+        expectedBlobSha: input.expectedBlobSha,
+        headSha: pullRequest.headSha,
         nodeId: pullRequest.nodeId,
         number: pullRequest.number,
         prNumber: pullRequest.number,
-        pullRequestNodeId: pullRequest.nodeId,
+        mergeableState: pullRequest.mergeableState,
         requestId: input.requestId,
         requestFingerprint,
         lifecycleAction,
         siteId: input.siteId,
         state: "open",
+        testMergeSha: pullRequest.testMergeSha,
         url: pullRequest.url
       };
 
@@ -948,21 +958,11 @@ async function reconcileGitHubPublicationStatus(
     });
   }
   if (check.status === "success") {
-    const pullRequestNodeId = readPullRequestNodeId(request);
-    if (request.autoMergeEnabled !== true) {
-      await github.enableAutoMerge({
-        mergeMethod: "SQUASH",
-        pullRequestNodeId
-      });
-    }
-
-    return publicationDto({
+    return mergeValidatedCatalogPullRequest(github, requestId, request, {
       action,
       cardId,
-      noOp: false,
-      prNumber,
-      requestId,
-      status: "merge_queued"
+      lifecycle,
+      prNumber
     });
   }
 
@@ -974,6 +974,164 @@ async function reconcileGitHubPublicationStatus(
     requestId,
     status: "validating"
   });
+}
+
+async function mergeValidatedCatalogPullRequest(
+  github: PagesCatalogGitHubProvider,
+  requestId: string,
+  request: PagesCatalogPublicationRecord,
+  input: {
+    action: PagesCatalogPublicationAction;
+    cardId: string;
+    lifecycle?: {
+      actor?: AuthenticatedPrincipal | undefined;
+      lifecycleFinalizer?: PagesCatalogPublicationLifecycleFinalizer | undefined;
+      now?: Date | undefined;
+      siteId?: string | undefined;
+    } | undefined;
+    prNumber?: number | undefined;
+  }
+): Promise<PagesCatalogPublicationDto> {
+  const checkedHeadSha = readOptionalSha(request.headSha);
+  if (checkedHeadSha === undefined) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      noOp: false,
+      prNumber: input.prNumber,
+      requestId,
+      status: "validating"
+    });
+  }
+
+  const latest = await github.findPublicationRequest(requestId);
+  if (latest === null) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "PULL_REQUEST_CLOSED",
+      noOp: false,
+      prNumber: input.prNumber,
+      requestId,
+      retryable: false,
+      status: "failed"
+    });
+  }
+
+  if (!isSamePublicationRequest(requestId, request, latest)) {
+    return versionConflictDto(input.action, input.cardId, input.prNumber, requestId);
+  }
+
+  const latestPrNumber = readPullRequestNumber(latest) ?? input.prNumber;
+  if (latestPrNumber === undefined) {
+    return versionConflictDto(input.action, input.cardId, input.prNumber, requestId);
+  }
+
+  if (latest.state === "closed") {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "PULL_REQUEST_CLOSED",
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      retryable: false,
+      status: "failed"
+    });
+  }
+  if (latest.state === "merged") {
+    return reconcileGitHubPublicationStatus(github, requestId, latest, input.lifecycle);
+  }
+  if (latest.state !== "open" || isConflictedPullRequest(latest)) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "PULL_REQUEST_CONFLICTED",
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      retryable: false,
+      status: "failed"
+    });
+  }
+
+  const latestHeadSha = readOptionalSha(latest.headSha);
+  if (latestHeadSha === undefined) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      status: "validating"
+    });
+  }
+  if (latestHeadSha !== checkedHeadSha) {
+    return versionConflictDto(input.action, input.cardId, latestPrNumber, requestId);
+  }
+
+  const latestCheck = await github.getRequiredCatalogCheckStatus(latest);
+  if (!latestCheck.configured) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "GITHUB_REPOSITORY_SETUP_REQUIRED",
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      status: "setup_required"
+    });
+  }
+  if (latestCheck.status === "failure") {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      code: "CATALOG_VALIDATION_FAILED",
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      status: "failed"
+    });
+  }
+  if (latestCheck.status !== "success") {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      status: "validating"
+    });
+  }
+  if (!isMergeablePullRequest(latest)) {
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      status: "validating"
+    });
+  }
+
+  try {
+    const merge = await github.mergeCatalogPullRequest({
+      headSha: latestHeadSha,
+      number: latestPrNumber
+    });
+
+    return publicationDto({
+      action: input.action,
+      cardId: input.cardId,
+      mergeCommitSha: readOptionalSha(merge.mergeCommitSha),
+      noOp: false,
+      prNumber: latestPrNumber,
+      requestId,
+      status: "deploying"
+    });
+  } catch (error) {
+    return mergeFailureDto(error, input.action, input.cardId, latestPrNumber, requestId);
+  }
 }
 
 async function deleteMergedTemporaryBranch(
@@ -1234,6 +1392,119 @@ function isConflictedPullRequest(request: PagesCatalogPublicationRecord): boolea
   return request.mergeableState === "dirty" ||
     request.mergeableState === "conflicting" ||
     request.mergeableState === "unknown_conflict";
+}
+
+function isMergeablePullRequest(request: PagesCatalogPublicationRecord): boolean {
+  return request.mergeableState === "clean" ||
+    request.mergeableState === "unstable" ||
+    request.mergeableState === "has_hooks";
+}
+
+function isSamePublicationRequest(
+  requestId: string,
+  previous: PagesCatalogPublicationRecord,
+  latest: PagesCatalogPublicationRecord
+): boolean {
+  if (!hasValidPublicationMarkers(latest, requestId)) {
+    return false;
+  }
+
+  const previousPrNumber = readPullRequestNumber(previous);
+  const latestPrNumber = readPullRequestNumber(latest);
+  return latest.branch === previous.branch &&
+    latest.action === previous.action &&
+    latest.lifecycleAction === previous.lifecycleAction &&
+    latest.cardId === previous.cardId &&
+    latest.requestFingerprint === previous.requestFingerprint &&
+    (latest.siteId ?? null) === (previous.siteId ?? null) &&
+    (previousPrNumber === undefined || latestPrNumber === previousPrNumber);
+}
+
+function hasValidPublicationMarkers(request: PagesCatalogPublicationRecord, requestId: string): boolean {
+  return typeof request.requestId === "string" &&
+    request.requestId === requestId &&
+    UUID_RE.test(request.requestId) &&
+    typeof request.branch === "string" &&
+    request.branch === `catalog/publish/${requestId}` &&
+    typeof request.requestFingerprint === "string" &&
+    /^[a-f0-9]{64}$/i.test(request.requestFingerprint) &&
+    isRecoverableActionPair(request.action, request.lifecycleAction) &&
+    typeof request.cardId === "string" &&
+    CARD_ID_RE.test(request.cardId) &&
+    (request.siteId === undefined || UUID_RE.test(request.siteId));
+}
+
+function readPullRequestNumber(request: PagesCatalogPublicationRecord): number | undefined {
+  const number = typeof request.prNumber === "number" ? request.prNumber : request.number;
+  return Number.isInteger(number) && number !== undefined && number > 0 ? number : undefined;
+}
+
+function versionConflictDto(
+  action: PagesCatalogPublicationAction,
+  cardId: string,
+  prNumber: number | undefined,
+  requestId: string
+): PagesCatalogPublicationDto {
+  return publicationDto({
+    action,
+    cardId,
+    code: "VERSION_CONFLICT",
+    noOp: false,
+    prNumber,
+    requestId,
+    retryable: false,
+    status: "version_conflict"
+  });
+}
+
+function mergeFailureDto(
+  error: unknown,
+  action: PagesCatalogPublicationAction,
+  cardId: string,
+  prNumber: number,
+  requestId: string
+): PagesCatalogPublicationDto {
+  const code = readErrorCode(error);
+  if (code === "GITHUB_REPOSITORY_SETUP_REQUIRED") {
+    return publicationDto({
+      action,
+      cardId,
+      code,
+      noOp: false,
+      prNumber,
+      requestId,
+      status: "setup_required"
+    });
+  }
+  if (code === "GITHUB_API_CONFLICT") {
+    return publicationDto({
+      action,
+      cardId,
+      code: "PULL_REQUEST_CONFLICTED",
+      noOp: false,
+      prNumber,
+      requestId,
+      retryable: false,
+      status: "failed"
+    });
+  }
+
+  return publicationDto({
+    action,
+    cardId,
+    code: code ?? "GITHUB_API_FAILED",
+    noOp: false,
+    prNumber,
+    requestId,
+    retryable: true,
+    status: "failed"
+  });
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string"
+    ? (error as { code: string }).code
+    : undefined;
 }
 
 function isRecoverablePublicationRequest(request: PagesCatalogPublicationRecord): boolean {
@@ -1778,23 +2049,6 @@ function readCardId(cardId: unknown): string {
 
 function readRequestId(requestId: unknown): string {
   return typeof requestId === "string" && UUID_RE.test(requestId) ? requestId : "00000000-0000-4000-8000-000000000000";
-}
-
-function readPullRequestNodeId(request: PagesCatalogPublicationRecord): string {
-  const nodeId = typeof request.pullRequestNodeId === "string"
-    ? request.pullRequestNodeId
-    : typeof request.nodeId === "string"
-      ? request.nodeId
-      : "";
-  if (nodeId.length === 0) {
-    throw new AppError({
-      code: "GITHUB_REPOSITORY_SETUP_REQUIRED",
-      message: "GitHub pull request node id is unavailable.",
-      statusCode: 503
-    });
-  }
-
-  return nodeId;
 }
 
 function readOptionalSha(value: unknown): string | undefined {

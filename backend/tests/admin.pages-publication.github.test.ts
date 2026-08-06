@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createGitHubPagesCatalogProvider
 } from "../src/modules/admin/publication/pages-publication.github.js";
+import type { PagesCatalogPublicationRecord } from "../src/modules/admin/publication/pages-publication.service.js";
 
 const config = {
   baseBranch: "main",
@@ -73,7 +74,6 @@ describe("Direct Pages GitHub provider", () => {
         if (text.includes("/pulls?")) {
           return jsonResponse(200, [
             {
-              auto_merge: null,
               body: [
                 "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b001",
                 "WEB00-CARD-ID: phase-two-pages-status",
@@ -129,7 +129,6 @@ describe("Direct Pages GitHub provider", () => {
         if (text.includes("/pulls?")) {
           return jsonResponse(200, [
             {
-              auto_merge: null,
               body: [
                 "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b002",
                 "WEB00-CARD-ID: phase-two-missing-lifecycle",
@@ -168,7 +167,6 @@ describe("Direct Pages GitHub provider", () => {
         if (text.includes("/pulls?")) {
           return jsonResponse(200, [
             {
-              auto_merge: null,
               body: [
                 "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b004",
                 "WEB00-CARD-ID: phase-two-test-merge-check",
@@ -191,9 +189,6 @@ describe("Direct Pages GitHub provider", () => {
               state: "open"
             }
           ]);
-        }
-        if (text.includes("/protection/required_status_checks")) {
-          return jsonResponse(200, { contexts: [config.requiredCheck] });
         }
         if (text.includes(`/commits/${testMergeSha}/check-runs`)) {
           return jsonResponse(200, {
@@ -235,7 +230,6 @@ describe("Direct Pages GitHub provider", () => {
         if (text.includes("/pulls?")) {
           return jsonResponse(200, [
             {
-              auto_merge: null,
               body: [
                 "WEB00-REQUEST-ID: 00000000-0000-4000-8000-00000000b004",
                 "WEB00-CARD-ID: phase-two-test-merge-check",
@@ -258,9 +252,6 @@ describe("Direct Pages GitHub provider", () => {
               state: "open"
             }
           ]);
-        }
-        if (text.includes("/protection/required_status_checks")) {
-          return jsonResponse(200, { contexts: [config.requiredCheck] });
         }
         if (text.includes(`/commits/${testMergeSha}/check-runs`)) {
           return jsonResponse(200, { check_runs: [] });
@@ -288,7 +279,133 @@ describe("Direct Pages GitHub provider", () => {
     expect(fallbackRequested.some((url) => url.includes(`/commits/${headSha}/check-runs`))).toBe(true);
   });
 
+  it("SELF-MERGE green required check uses one REST squash merge with the exact current head", async () => {
+    const headSha = "3".repeat(40);
+    const testMergeSha = "4".repeat(40);
+    const mergeCommitSha = "5".repeat(40);
+    const requested: Array<{ body: unknown; method: string; url: string }> = [];
+    const provider = createGitHubPagesCatalogProvider({
+      config,
+      fetchFn: async (url, init) => {
+        const text = String(url);
+        requested.push({
+          body: init?.body === undefined ? null : JSON.parse(String(init.body)),
+          method: init?.method ?? "GET",
+          url: text
+        });
+
+        if (text.includes(`/commits/${testMergeSha}/check-runs`)) {
+          return jsonResponse(200, {
+            check_runs: [
+              {
+                conclusion: "success",
+                name: config.requiredCheck,
+                status: "completed"
+              }
+            ]
+          });
+        }
+        if (text.endsWith("/pulls/42/merge") && init?.method === "PUT") {
+          return jsonResponse(200, {
+            merged: true,
+            sha: mergeCommitSha
+          });
+        }
+
+        throw new Error(`Unexpected GitHub URL ${text}`);
+      }
+    });
+    const request = publicationRecord({
+      headSha,
+      number: 42,
+      testMergeSha
+    });
+
+    await expect(provider.getRequiredCatalogCheckStatus(request)).resolves.toEqual({
+      configured: true,
+      status: "success"
+    });
+    await expect(provider.mergeCatalogPullRequest({
+      headSha,
+      number: 42
+    })).resolves.toEqual({
+      mergeCommitSha
+    });
+
+    expect(requested.filter((request) => request.url.endsWith("/pulls/42/merge"))).toEqual([
+      {
+        body: {
+          merge_method: "squash",
+          sha: headSha
+        },
+        method: "PUT",
+        url: "https://api.github.com/repos/Prudexxx/web00-pro/pulls/42/merge"
+      }
+    ]);
+    expect(requested.some((request) => request.url.includes("/protection/required_status_checks"))).toBe(false);
+  });
+
+  it("SELF-MERGE pending and failed required checks never use branch protection or REST merge", async () => {
+    for (const status of ["pending", "failure"] as const) {
+      const requested: string[] = [];
+      const provider = createGitHubPagesCatalogProvider({
+        config,
+        fetchFn: async (url) => {
+          const text = String(url);
+          requested.push(text);
+
+          if (text.includes("/protection/required_status_checks")) {
+            throw new Error("Self-merge must not require branch protection admin API.");
+          }
+          if (text.endsWith("/pulls/43/merge")) {
+            throw new Error("Pending or failed catalog checks must not merge.");
+          }
+          if (text.includes(`/commits/${"6".repeat(40)}/check-runs`)) {
+            return jsonResponse(200, {
+              check_runs: [
+                {
+                  conclusion: status === "failure" ? "failure" : null,
+                  name: config.requiredCheck,
+                  status: status === "failure" ? "completed" : "in_progress"
+                }
+              ]
+            });
+          }
+
+          throw new Error(`Unexpected GitHub URL ${text}`);
+        }
+      });
+
+      await expect(provider.getRequiredCatalogCheckStatus(publicationRecord({
+        headSha: "6".repeat(40),
+        number: 43
+      }))).resolves.toEqual({
+        configured: true,
+        status
+      });
+      expect(requested.some((request) => request.endsWith("/pulls/43/merge"))).toBe(false);
+    }
+  });
+
 });
+
+function publicationRecord(overrides: Partial<PagesCatalogPublicationRecord> = {}): PagesCatalogPublicationRecord {
+  return {
+    action: "update",
+    branch: "catalog/publish/00000000-0000-4000-8000-00000000b005",
+    cardId: "phase-two-self-merge",
+    headSha: "3".repeat(40),
+    lifecycleAction: "publish",
+    mergeableState: "clean",
+    noOp: false,
+    number: 42,
+    prNumber: 42,
+    requestFingerprint: "f".repeat(64),
+    requestId: "00000000-0000-4000-8000-00000000b005",
+    state: "open",
+    ...overrides
+  };
+}
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {

@@ -120,14 +120,22 @@ export function createGitHubPagesCatalogProvider(options: {
         }),
         method: "POST"
       }) as {
+        head?: { sha?: unknown };
         html_url?: unknown;
+        merge_commit_sha?: unknown;
+        mergeable_state?: unknown;
         node_id?: unknown;
         number?: unknown;
       };
+      const headSha = readSha(response.head?.sha);
+      const testMergeSha = readSha(response.merge_commit_sha);
 
       return {
+        ...(headSha === null ? {} : { headSha }),
+        ...(typeof response.mergeable_state === "string" ? { mergeableState: response.mergeable_state } : {}),
         nodeId: requireString(response.node_id, "node_id"),
         number: requireNumber(response.number, "number"),
+        ...(testMergeSha === null ? {} : { testMergeSha }),
         url: requireString(response.html_url, "html_url")
       };
     },
@@ -184,22 +192,6 @@ export function createGitHubPagesCatalogProvider(options: {
       await client.deleteOptional(`/git/refs/heads/${encodeURIComponentPath(input.branch)}`);
     },
 
-    async enableAutoMerge(input) {
-      await graphQlRequest(options, `
-        mutation EnableCatalogAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
-          enablePullRequestAutoMerge(input: {
-            mergeMethod: $mergeMethod,
-            pullRequestId: $pullRequestId
-          }) {
-            pullRequest { id }
-          }
-        }
-      `, {
-        mergeMethod: input.mergeMethod,
-        pullRequestId: input.pullRequestNodeId
-      });
-    },
-
     async findPublicationRequest(requestId) {
       const branch = `catalog/publish/${requestId}`;
       const pulls = await client.request(`/pulls?state=all&head=${encodeURIComponent(`${options.config.owner}:${branch}`)}&base=${encodeURIComponent(options.config.baseBranch)}`) as unknown[];
@@ -215,7 +207,8 @@ export function createGitHubPagesCatalogProvider(options: {
         return null;
       }
 
-      return mapPullRequestToPublicationRecord(pull, markers, options.config.pagesWorkflow, options.config.baseBranch, client);
+      const detail = await readOpenPullRequestDetail(client, pull);
+      return mapPullRequestToPublicationRecord(detail, markers, options.config.pagesWorkflow, options.config.baseBranch, client);
     },
 
     async getBaseBranchHead() {
@@ -273,19 +266,21 @@ export function createGitHubPagesCatalogProvider(options: {
     },
 
     async getRequiredCatalogCheckStatus(request) {
-      const required = await readRequiredStatusChecks(client, options.config.baseBranch, options.config.requiredCheck);
-      if (!required) {
-        return {
-          configured: false,
-          status: "failure"
-        };
-      }
-
       const checkStatus = await readPullRequestCheckStatus(client, request, options.config.requiredCheck);
       return {
         configured: true,
         status: checkStatus
       };
+    },
+
+    async mergeCatalogPullRequest(input) {
+      const merge = await requestMergePullRequestWithRetry(client, input);
+      const mergeCommitSha = readSha(merge.sha);
+      if (merge.merged !== true || mergeCommitSha === null) {
+        throw githubError("GITHUB_API_CONFLICT", "GitHub pull request merge did not complete.", 409);
+      }
+
+      return { mergeCommitSha };
     },
 
     async listRecentPublicationRequests(input) {
@@ -415,10 +410,10 @@ function createUnavailableGitHubPagesCatalogProvider(): PagesCatalogGitHubProvid
     createPublicationMarkerCommit: unavailable,
     createOrUpdateCardCommit: unavailable,
     deleteCardCommit: unavailable,
-    enableAutoMerge: unavailable,
     findPublicationRequest: async () => null,
     getBaseBranchHead: unavailable,
     getCatalogCard: unavailable,
+    mergeCatalogPullRequest: unavailable,
     getPublicationBranchRequest: async () => null,
     getRepositorySetup: setup,
     getRequiredCatalogCheckStatus: async () => ({
@@ -426,6 +421,66 @@ function createUnavailableGitHubPagesCatalogProvider(): PagesCatalogGitHubProvid
       status: "failure"
     })
   };
+}
+
+async function readOpenPullRequestDetail(
+  client: ReturnType<typeof createGitHubClient>,
+  pull: unknown
+): Promise<unknown> {
+  const value = pull as {
+    mergeable_state?: unknown;
+    merged_at?: unknown;
+    number?: unknown;
+    state?: unknown;
+  };
+  if (value.state !== "open" || typeof value.merged_at === "string") {
+    return pull;
+  }
+  if (typeof value.mergeable_state === "string") {
+    return pull;
+  }
+
+  const number = requireNumber(value.number, "number");
+  return client.request(`/pulls/${encodeURIComponent(String(number))}`);
+}
+
+async function requestMergePullRequestWithRetry(
+  client: ReturnType<typeof createGitHubClient>,
+  input: { headSha: string; number: number }
+): Promise<{ merged?: unknown; sha?: unknown }> {
+  if (!Number.isInteger(input.number) || input.number <= 0 || readSha(input.headSha) === null) {
+    throw githubError("GITHUB_API_FAILED", "GitHub pull request merge request was invalid.", 502);
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await client.request(`/pulls/${encodeURIComponent(String(input.number))}/merge`, {
+        body: JSON.stringify({
+          merge_method: "squash",
+          sha: input.headSha
+        }),
+        method: "PUT"
+      }, {
+        operation: "merge_pull_request"
+      }) as { merged?: unknown; sha?: unknown };
+    } catch (error) {
+      if (!isRetryableGitHubError(error) || attempt === 2) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+
+  throw lastError;
+}
+
+function isRetryableGitHubError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  return code === "GITHUB_API_RETRYABLE" || code === "GITHUB_API_TIMEOUT";
 }
 
 function createGitHubClient(options: {
@@ -494,33 +549,6 @@ function createGitHubClient(options: {
   };
 }
 
-async function graphQlRequest(
-  options: { config: PagesCatalogGitHubConfig; fetchFn: FetchLike; requestTimeoutMs?: number },
-  query: string,
-  variables: Record<string, unknown>
-): Promise<unknown> {
-  const response = await fetchWithTimeout(options, `${GITHUB_API}/graphql`, {
-    body: JSON.stringify({ query, variables }),
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${options.config.token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "WEB00-Direct-Pages-Publisher",
-      "X-GitHub-Api-Version": "2022-11-28"
-    },
-    method: "POST"
-  }, normalizeRequestTimeoutMs(options.requestTimeoutMs));
-  if (!response.ok) {
-    throw await classifyGitHubHttpError(response, "graphql");
-  }
-  const payload = await response.json() as { errors?: unknown[] };
-  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-    throw githubError("GITHUB_API_FAILED", "GitHub GraphQL request failed.", 502);
-  }
-
-  return payload;
-}
-
 async function fetchWithTimeout(
   options: { fetchFn: FetchLike },
   url: string,
@@ -570,6 +598,9 @@ async function classifyGitHubHttpError(response: Response, operation?: string): 
   if (status === 401 || status === 403) {
     return githubError("GITHUB_REPOSITORY_SETUP_REQUIRED", "GitHub repository publication is not authorized.", 503);
   }
+  if (operation === "merge_pull_request" && (status === 405 || status === 409)) {
+    return githubError("GITHUB_API_CONFLICT", "GitHub pull request is not mergeable.", 409);
+  }
   if (status === 408 || status === 429 || status >= 500) {
     return githubError("GITHUB_API_RETRYABLE", "GitHub request failed with a retryable status.", 503);
   }
@@ -586,28 +617,6 @@ function githubError(code: ErrorCode, message: string, statusCode: number): AppE
     message,
     statusCode
   });
-}
-
-async function readRequiredStatusChecks(
-  client: ReturnType<typeof createGitHubClient>,
-  baseBranch: string,
-  requiredCheck: string
-): Promise<boolean> {
-  const protection = await client.requestOptional(`/branches/${encodeURIComponentPath(baseBranch)}/protection/required_status_checks`);
-  if (protection === null) {
-    return false;
-  }
-  const contexts = (protection as { contexts?: unknown }).contexts;
-  const checks = (protection as { checks?: unknown }).checks;
-
-  return (
-    (Array.isArray(contexts) && contexts.includes(requiredCheck)) ||
-    (Array.isArray(checks) && checks.some((check) => (
-      typeof check === "object" &&
-      check !== null &&
-      (check as { context?: unknown }).context === requiredCheck
-    )))
-  );
 }
 
 async function readPullRequestCheckStatus(
@@ -673,7 +682,6 @@ async function mapPullRequestToPublicationRecord(
   client: ReturnType<typeof createGitHubClient>
 ): Promise<PagesCatalogPublicationRecord> {
   const value = pull as {
-    auto_merge?: unknown;
     base?: { ref?: unknown };
     body?: unknown;
     head?: { ref?: unknown; sha?: unknown };
@@ -693,7 +701,6 @@ async function mapPullRequestToPublicationRecord(
 
   return {
     action: markers.action,
-    autoMergeEnabled: value.auto_merge !== null && value.auto_merge !== undefined,
     body: typeof value.body === "string" ? value.body : undefined,
     branch: typeof value.head?.ref === "string" ? value.head.ref : undefined,
     cardId: markers.cardId,
@@ -710,7 +717,6 @@ async function mapPullRequestToPublicationRecord(
       ? await readPagesWorkflowStatus(client, pagesWorkflow, baseBranch, mergeCommitSha)
       : null,
     prNumber: requireNumber(value.number, "number"),
-    pullRequestNodeId: requireString(value.node_id, "node_id"),
     requestId: markers.requestId,
     requestFingerprint: markers.requestFingerprint,
     siteId: markers.siteId,
