@@ -12,13 +12,16 @@ test("service worker keeps runtime config and API requests network-only", async 
   const firstCacheOpen = fetchHandler.indexOf("caches.open");
   const firstCachePut = fetchHandler.indexOf("cache.put");
 
-  assert.match(source, /const WEB00_CACHE = "web00-shell-v5-catalog-lkg";/);
+  assert.match(source, /const WEB00_CACHE = "web00-shell-v6-catalog-network-first";/);
   assert.match(source, /function isRuntimeConfigRequest\(url\)/);
+  assert.match(source, /function isCatalogDataRequest\(url\)/);
   assert.match(source, /function isApiRequest\(url\)/);
+  assert.match(source, /function networkFirstCatalogData\(request\)/);
   assert.match(source, /if \(isRuntimeConfigRequest\(url\) \|\| isApiRequest\(url\)\) return;/);
+  assert.match(source, /if \(isCatalogDataRequest\(url\)\) \{\s*event\.respondWith\(networkFirstCatalogData\(request\)\);\s*return;\s*\}/);
   assert.match(source, /url\.pathname\.endsWith\("\/assets\/js\/runtime-config\.js"\)/);
+  assert.match(source, /url\.pathname\.endsWith\("\/assets\/js\/data\.js"\)/);
   assert.match(source, /url\.pathname\.startsWith\("\/api\/"\) \|\| url\.pathname === "\/api"/);
-  assert.doesNotMatch(source, /url\.href|url\.search/);
   assert.doesNotMatch(shellAssets, /runtime-config\.js/);
   assert.match(shellAssets, /"assets\/js\/data\.js"/);
   assert.match(shellAssets, /"assets\/js\/catalog-api\.js"/);

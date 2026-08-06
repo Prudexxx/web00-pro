@@ -11,6 +11,14 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function classList() {
+  return { add: () => undefined, remove: () => undefined, toggle: () => undefined };
+}
+
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
   return {
@@ -41,6 +49,35 @@ function apiResponse(items) {
   });
 }
 
+function freshSmokeStaticData() {
+  return {
+    SOLUTIONS: [{
+      id: "web00-smoke-create",
+      slug: "web00-smoke-create",
+      title: "WEB00 Smoke Updated",
+      active: true,
+      sortOrder: 0,
+    }],
+    SERVICES: [],
+    PRICING: [],
+  };
+}
+
+function staleBusiLkgSnapshot() {
+  return {
+    [LKG_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      savedAt: "2026-08-03T00:00:00.000Z",
+      items: [{
+        slug: "dom-dlya-busi",
+        title: "Дом для Буси",
+        category: "Goods",
+        categorySlug: "goods",
+      }],
+    }),
+  };
+}
+
 async function loadCatalog({ fetch, storage = createStorage(), data = staticData(), config } = {}) {
   const browser = createFakeBrowser();
   browser.window.WEB00_TEST_MODE = true;
@@ -55,6 +92,76 @@ async function loadCatalog({ fetch, storage = createStorage(), data = staticData
   });
   await loadClassicScript("assets/js/catalog-api.js", browser);
   return { catalog: browser.window.WEB00_CATALOG, storage, tests: browser.window.WEB00_CATALOG_TESTS };
+}
+
+function createSolutionsPage(fetch, options = {}) {
+  const browser = createFakeBrowser({ page: "solutions" });
+  const history = [];
+  const statusNodes = {
+    "[data-catalog-loading]": { hidden: true },
+    "[data-catalog-fallback]": { hidden: true },
+    "[data-catalog-empty]": { hidden: true },
+    "[data-catalog-fatal]": { hidden: true },
+  };
+  const leadForm = { addEventListener: () => undefined, elements: {} };
+  const leadContent = {
+    querySelector(selector) {
+      return selector === "[data-lead-form]" ? leadForm : null;
+    },
+    set innerHTML(value) {
+      this.html = String(value);
+    },
+    html: "",
+  };
+  const leadModal = { classList: classList(), setAttribute: () => undefined };
+  let gridHtml = "";
+  const grid = {
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+    get innerHTML() {
+      return gridHtml;
+    },
+    set innerHTML(value) {
+      gridHtml = String(value);
+      history.push(gridHtml);
+    },
+  };
+  browser.window.fetch = fetch;
+  browser.window.addEventListener = () => undefined;
+  browser.window.navigator = {};
+  browser.window.localStorage = options.storage || createStorage();
+  browser.document.body.classList = classList();
+  browser.document.documentElement = { classList: classList() };
+  browser.document.querySelector = (selector) => {
+    if (selector === "[data-solutions-grid]") return grid;
+    if (selector === "[data-lead-modal-content]") return leadContent;
+    if (selector === "[data-modal=\"lead\"]") return leadModal;
+    return statusNodes[selector] || null;
+  };
+  browser.document.querySelectorAll = () => [];
+  browser.window.WEB00_DATA = options.data || staticData();
+  browser.window.WEB00_TEST_MODE = true;
+  return { browser, grid, history, statusNodes };
+}
+
+async function bootSolutionsPage(fetch, options = {}) {
+  const page = createSolutionsPage(fetch, options);
+  const { browser } = page;
+  await loadClassicScript("assets/js/runtime-config.js", browser);
+  browser.window.WEB00_CONFIG = Object.freeze(options.config || {
+    apiBaseUrl: "https://api.example.test",
+    requestTimeoutMs: 1000,
+    staticFallbackEnabled: true,
+  });
+  await loadClassicScript("assets/js/catalog-api.js", browser);
+  await loadClassicScript("assets/js/main.js", browser);
+  const [onReady] = browser.listeners.get("DOMContentLoaded");
+  await onReady();
+  return page;
 }
 
 test("API timeout keeps the populated static catalog available", async () => {
@@ -93,15 +200,64 @@ test("API transport and validation failures keep the populated current catalog",
   }
 });
 
-test("an empty API catalog cannot replace populated static cards", async () => {
+test("fresh static catalog takes precedence over stale last-known-good while backend is unavailable", async () => {
+  const storage = createStorage(staleBusiLkgSnapshot());
+  const { catalog } = await loadCatalog({
+    fetch: createFakeFetch(() => jsonResponse({ error: "asleep" }, { status: 503 })),
+    storage,
+    data: freshSmokeStaticData(),
+  });
+
+  const initial = catalog.getInitialCatalog();
+  const result = await catalog.resolveCatalogForPage({ kind: "solutions", currentState: initial });
+
+  assert.equal(initial.source, "static");
+  assert.deepEqual(plain(initial.items.map((item) => item.slug)), ["web00-smoke-create"]);
+  assert.deepEqual(plain(initial.items.map((item) => item.title)), ["WEB00 Smoke Updated"]);
+  assert.equal(initial.items.some((item) => item.title === "Дом для Буси"), false);
+  assert.equal(result.source, "static");
+  assert.deepEqual(plain(result.items.map((item) => item.slug)), ["web00-smoke-create"]);
+  assert.equal(result.items.some((item) => item.title === "Дом для Буси"), false);
+  assert.equal(result.staticFallbackActive, true);
+  assert.equal(result.lifecycle, "ready");
+});
+
+test("solutions render never paints stale last-known-good when fresh static catalog exists", async () => {
+  const storage = createStorage(staleBusiLkgSnapshot());
+  const fetch = createFakeFetch(() => Promise.reject(new Error("backend asleep")));
+  const { history, statusNodes } = await bootSolutionsPage(fetch, {
+    storage,
+    data: freshSmokeStaticData(),
+  });
+
+  await delay(70);
+
+  assert.ok(history.length > 0);
+  assert.match(history[0], /WEB00 Smoke Updated/);
+  assert.doesNotMatch(history[0], /Дом для Буси/);
+  for (const html of history) {
+    assert.match(html, /WEB00 Smoke Updated/);
+    assert.doesNotMatch(html, /Дом для Буси/);
+  }
+  assert.match(history.at(-1), /WEB00 Smoke Updated/);
+  assert.notEqual(history.at(-1), "");
+  assert.equal(statusNodes["[data-catalog-loading]"].hidden, true);
+  assert.equal(statusNodes["[data-catalog-fallback]"].hidden, false);
+});
+
+test("an empty API catalog resolves as non-applyable while callers keep populated current cards", async () => {
   const { catalog } = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([])) });
   const initial = catalog.getInitialCatalog();
 
   const result = await catalog.resolveCatalogForPage({ kind: "solutions", currentState: initial });
 
-  assert.deepEqual(plain(result.items.map((item) => item.slug)), ["static-site"]);
-  assert.equal(result.lifecycle, "ready");
-  assert.equal(result.errorCode, "WEB00_API_EMPTY");
+  assert.deepEqual(plain(initial.items.map((item) => item.slug)), ["static-site"]);
+  assert.deepEqual(plain(result.items), []);
+  assert.equal(result.source, "api");
+  assert.equal(result.lifecycle, "empty");
+  assert.equal(result.errorCode, "");
+  assert.equal(result.apiAvailable, true);
+  assert.equal(result.staticFallbackActive, false);
 });
 
 test("a complete non-empty API catalog replaces the current catalog and becomes last-known-good", async () => {
@@ -120,19 +276,25 @@ test("a complete non-empty API catalog replaces the current catalog and becomes 
   assert.deepEqual(saved.items.map((item) => item.slug), ["site-custom"]);
 });
 
-test("last-known-good renders synchronously on a new page load and survives a later failure", async () => {
+test("last-known-good renders synchronously when bundled static catalog is empty and survives a later API failure", async () => {
   const storage = createStorage();
   const first = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([apiSite()])), storage });
   await first.catalog.resolveCatalogForPage({ kind: "solutions", currentState: first.catalog.getInitialCatalog() });
 
-  const second = await loadCatalog({ fetch: createFakeFetch(() => jsonResponse({ error: "asleep" }, { status: 503 })), storage });
+  const second = await loadCatalog({
+    fetch: createFakeFetch(() => jsonResponse({ error: "asleep" }, { status: 503 })),
+    storage,
+    data: { SOLUTIONS: [] },
+  });
   const initial = second.catalog.getInitialCatalog();
   const result = await second.catalog.resolveCatalogForPage({ kind: "solutions", currentState: initial });
 
   assert.equal(initial.source, "lkg");
   assert.deepEqual(plain(initial.items.map((item) => item.slug)), ["site-custom"]);
+  assert.equal(result.source, "lkg");
   assert.deepEqual(plain(result.items.map((item) => item.slug)), ["site-custom"]);
   assert.equal(result.errorCode, "WEB00_API_HTTP_503");
+  assert.equal(result.staticFallbackActive, true);
 });
 
 test("corrupted and unsafe last-known-good data falls back to bundled static items", async () => {
@@ -166,7 +328,11 @@ test("cached catalog item text and URLs are normalized before rendering helpers 
       }],
     }),
   });
-  const { catalog } = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([])), storage });
+  const { catalog } = await loadCatalog({
+    fetch: createFakeFetch(() => apiResponse([])),
+    storage,
+    data: { SOLUTIONS: [] },
+  });
 
   const [item] = catalog.getInitialCatalog().items;
 
@@ -223,7 +389,11 @@ test("API and last-known-good catalog URLs reject backslash authority forms", as
       }],
     }),
   });
-  const cached = await loadCatalog({ fetch: createFakeFetch(() => apiResponse([])), storage });
+  const cached = await loadCatalog({
+    fetch: createFakeFetch(() => apiResponse([])),
+    storage,
+    data: { SOLUTIONS: [] },
+  });
   const [lkgItem] = cached.catalog.getInitialCatalog().items;
 
   assert.equal(lkgItem.demoUrl, "");

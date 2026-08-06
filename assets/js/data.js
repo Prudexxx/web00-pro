@@ -44,6 +44,44 @@
   // BEGIN GENERATED SOLUTIONS
   const SOLUTIONS = [
     {
+      "id": "web00-smoke-create",
+      "slug": "web00-smoke-create",
+      "sortOrder": 0,
+      "legacyTitle": "WEB00 Smoke Updated",
+      "title": "WEB00 Smoke Updated",
+      "editableTitle": true,
+      "category": "Индивидуально",
+      "description": "UPDATE PASS — временная карточка для проверки автоматического редактирования через GitHub Pages.",
+      "priceFrom": "Тестовая цена",
+      "deliveryTime": "1 день",
+      "features": [
+        "Создание карточки",
+        "Автоматический Pull Request",
+        "Автоматический merge",
+        "GitHub Pages deploy"
+      ],
+      "tags": [
+        "smoke",
+        "test",
+        "web00"
+      ],
+      "previewImage": "https://qcizrrqkvdgpcgvnnfpb.supabase.co/storage/v1/object/public/web00-catalog-images/sites/6c4252f9-b88e-4281-88b5-6ede59ff99dc/preview/7036ae61-bdb8-4c26-a1c2-809c6d25a885/1448.webp",
+      "filter": "individual",
+      "demoMode": "none",
+      "demoLocalUrl": null,
+      "externalDemoUrl": "",
+      "originalDemoUrl": "",
+      "demoUrl": "",
+      "siteUrl": "",
+      "galleryImages": [
+        "https://qcizrrqkvdgpcgvnnfpb.supabase.co/storage/v1/object/public/web00-catalog-images/sites/6c4252f9-b88e-4281-88b5-6ede59ff99dc/preview/7036ae61-bdb8-4c26-a1c2-809c6d25a885/1448.webp"
+      ],
+      "aliases": [
+        "web00-smoke-create"
+      ],
+      "active": true
+    },
+    {
       "id": "site-custom",
       "slug": "site-custom",
       "sortOrder": 10,
@@ -616,6 +654,7 @@
   ];
 
   const SOLUTION_GALLERIES = {
+    "web00-smoke-create": [],
     "site-custom": [
       "site-custom-01",
       "site-custom-02",

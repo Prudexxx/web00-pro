@@ -141,7 +141,7 @@ test("static cards remain visible while the initial API request is loading", asy
   await delay(20);
 });
 
-test("last-known-good cards paint before a sleeping API responds", async () => {
+test("last-known-good cards paint before a sleeping API responds when static catalog is empty", async () => {
   const pending = createDeferred();
   const storage = {
     getItem() {
@@ -153,7 +153,10 @@ test("last-known-good cards paint before a sleeping API responds", async () => {
     },
     setItem: () => undefined,
   };
-  const { history, statusNodes } = await bootSolutionsPage(createFakeFetch(() => pending.promise), { storage });
+  const { history, statusNodes } = await bootSolutionsPage(createFakeFetch(() => pending.promise), {
+    storage,
+    data: { SOLUTIONS: [], SERVICES: [], PRICING: [] },
+  });
 
   assert.match(history.at(-1), /LKG site/);
   assert.equal(statusNodes["[data-catalog-loading]"].hidden, false);
