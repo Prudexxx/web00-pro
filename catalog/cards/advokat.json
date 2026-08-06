@@ -1,0 +1,38 @@
+{
+  "id": "advokat",
+  "slug": "advokat",
+  "sortOrder": 90,
+  "legacyTitle": "Услуга адвоката",
+  "title": "Услуга адвоката",
+  "editableTitle": true,
+  "category": "Услуги",
+  "description": "Юридический сайт для консультаций, услуг адвоката, преимуществ и заявки на связь.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Юридические услуги",
+    "Преимущества",
+    "Форма консультации",
+    "Контакты"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/advokat-home.png",
+  "previewType": "services",
+  "filter": "services",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/Advokat/",
+  "originalDemoUrl": "https://prudexxx.github.io/Advokat/",
+  "demoUrl": "https://prudexxx.github.io/Advokat/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/advokat-01.png",
+    "assets/img/solution-gallery/advokat-02.png",
+    "assets/img/solution-gallery/advokat-03.png",
+    "assets/img/solution-gallery/advokat-04.png"
+  ],
+  "aliases": [
+    "advokat"
+  ],
+  "active": true
+}

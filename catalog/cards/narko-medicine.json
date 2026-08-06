@@ -1,0 +1,38 @@
+{
+  "id": "narko-medicine",
+  "slug": "narko-medicine",
+  "sortOrder": 60,
+  "legacyTitle": "Наркологическая медицина",
+  "title": "Наркологическая медицина",
+  "editableTitle": true,
+  "category": "Медицина",
+  "description": "Медицинский лендинг для консультаций, записи и аккуратной подачи услуг клиники.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Услуги клиники",
+    "Преимущества",
+    "Запись",
+    "Контакты"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/narko-home.png",
+  "previewType": "medicine",
+  "filter": "medicine",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+  "originalDemoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+  "demoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/narko-medicine-01.png",
+    "assets/img/solution-gallery/narko-medicine-02.png",
+    "assets/img/solution-gallery/narko-medicine-03.png",
+    "assets/img/solution-gallery/narko-medicine-04.png"
+  ],
+  "aliases": [
+    "narko-medicine"
+  ],
+  "active": true
+}

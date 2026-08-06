@@ -1,0 +1,38 @@
+{
+  "id": "ruberoid-roof",
+  "slug": "ruberoid-roof",
+  "sortOrder": 120,
+  "legacyTitle": "Услуга кровли рубероида",
+  "title": "Услуга кровли рубероида",
+  "editableTitle": true,
+  "category": "Строительство",
+  "description": "Узкий лендинг под кровлю рубероидом с описанием материалов, расчётом и заявкой.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Услуги",
+    "Материалы",
+    "Расчёт",
+    "Заявка"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/ruberoid-home.png",
+  "previewType": "construction",
+  "filter": "construction",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/Ruberoid/",
+  "originalDemoUrl": "https://prudexxx.github.io/Ruberoid/",
+  "demoUrl": "https://prudexxx.github.io/Ruberoid/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/ruberoid-roof-01.png",
+    "assets/img/solution-gallery/ruberoid-roof-02.png",
+    "assets/img/solution-gallery/ruberoid-roof-03.png",
+    "assets/img/solution-gallery/ruberoid-roof-04.png"
+  ],
+  "aliases": [
+    "ruberoid-roof"
+  ],
+  "active": true
+}

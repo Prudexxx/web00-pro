@@ -4,7 +4,7 @@
   const CONFIG_DEFAULTS = Object.freeze({
     apiBaseUrl: "",
     requestTimeoutMs: 8000,
-    staticFallbackEnabled: true,
+    staticFallbackEnabled: false,
   });
 
   const LKG_KEY = "web00.catalog.api.lkg.v1";
@@ -226,8 +226,9 @@
   function normalizeStaticSite(input, options = {}) {
     if (!input || typeof input !== "object" || input.active === false) return null;
     const id = text(input.id);
+    const slug = text(input.slug) || id;
     const title = text(input.title);
-    if (!id || !title) return null;
+    if (!id || !SAFE_SLUG_RE.test(slug) || !title) return null;
 
     const previewImageUrl = sanitizePublicUrl(input.previewImage, {
       purpose: "image",
@@ -239,11 +240,14 @@
     const aliases = [id];
     const legacyTitle = text(input.legacyTitle);
     if (legacyTitle && legacyTitle !== id && legacyTitle !== title) aliases.push(legacyTitle);
+    normalizeArray(input.aliases).forEach((alias) => {
+      if (!aliases.includes(alias)) aliases.push(alias);
+    });
 
     return {
-      key: id,
+      key: slug,
       id,
-      slug: id,
+      slug,
       title,
       shortDescription: text(input.description),
       category: text(input.category),
@@ -254,7 +258,7 @@
       deliveryLabel: text(input.deliveryTime),
       demoMode: text(input.demoMode),
       demoUrl: sanitizePublicUrl(demoUrl, { purpose: "internal", allowRelative: true }),
-      siteUrl: "",
+      siteUrl: sanitizePublicUrl(input.siteUrl, { purpose: "destination" }),
       previewImageUrl,
       previewImage,
       galleryImages: galleryImages.length ? galleryImages : (previewImage ? [previewImage] : []),
@@ -630,7 +634,7 @@
         return null;
       }
       if (!hasCatalogItems(result)) {
-        return preservedCatalogState(currentState, "WEB00_API_EMPTY", { apiAvailable: true, config });
+        return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
       }
       if (kind === "solutions") saveLastKnownGoodCatalog(result.items);
       return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
@@ -638,6 +642,17 @@
       const errorCode = error && error.code ? error.code : (request.signal.aborted ? "WEB00_API_ABORTED" : "WEB00_API_ERROR");
       if (channel.isStale(request.sequence)) {
         return null;
+      }
+      if (config.staticFallbackEnabled) {
+        const fallback = getStaticCatalog();
+        if (fallback.items.length > 0) {
+          const items = kind === "popular" ? fallback.items.slice(0, Number(options.limit || 3)) : fallback.items;
+          return withStateFlags({
+            ...fallback,
+            items,
+            errorCode,
+          }, { apiAvailable: false, staticFallbackActive: true });
+        }
       }
       return preservedCatalogState(currentState, errorCode, { config });
     } finally {

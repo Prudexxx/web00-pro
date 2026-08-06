@@ -13,6 +13,11 @@ import type { MultipartImageParser } from "../images/image.types.js";
 import { createAdminUserRouter } from "./users/user.routes.js";
 import type { AdminUserService } from "./users/user.service.js";
 import type { AuthService } from "../auth/auth.types.js";
+import { createAdminPublicationRouter } from "./publication/publication.routes.js";
+import type {
+  AdminPublicationService,
+  PagesCatalogPublicationService
+} from "./publication/publication.service.js";
 
 export interface AdminRouterOptions {
   authService: Pick<AuthService, "authenticateAccessToken">;
@@ -21,6 +26,8 @@ export interface AdminRouterOptions {
   imageParser?: MultipartImageParser;
   imageService?: SiteImageService;
   now?: () => Date;
+  pagesPublicationService?: PagesCatalogPublicationService;
+  publicationService?: AdminPublicationService;
   siteService: AdminSiteService;
   userService?: AdminUserService;
 }
@@ -57,6 +64,13 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
   router.use(createAdminCategoryRouter(categoryRouterOptions));
   if (userRouterOptions !== undefined) {
     router.use(createAdminUserRouter(userRouterOptions));
+  }
+  if (options.publicationService !== undefined) {
+    router.use(createAdminPublicationRouter({
+      service: options.publicationService,
+      ...(options.now === undefined ? {} : { now: options.now }),
+      ...(options.pagesPublicationService === undefined ? {} : { pagesService: options.pagesPublicationService })
+    }));
   }
   router.use(createAdminAuditLogRouter({ service: options.auditLogService }));
 

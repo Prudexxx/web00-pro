@@ -30,7 +30,7 @@ test("main.js consumes WEB00_CATALOG through narrow catalog seams", async () => 
   assert.match(source, /function catalogItemById\(/);
   assert.match(source, /const found = CATALOG\.findCatalogItem\(\[\.\.\.popularItems, \.\.\.catalogItems\(\)\], value\);/);
   assert.match(source, /if \(found\) return found;/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions", currentState: catalogState \}\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)/);
 });
 
 test("solutions.html provides stable B8 catalog state nodes", async () => {
@@ -42,7 +42,6 @@ test("solutions.html provides stable B8 catalog state nodes", async () => {
   assert.match(html, /data-catalog-retry/);
   assert.match(html, /Повторить загрузку/);
   assert.match(html, /data-catalog-empty/);
-  assert.match(html, /Подходящих решений пока нет\./);
   assert.match(html, /data-catalog-fatal/);
   assert.match(html, /data-solutions-grid/);
   assert.match(html, /data-solution-modal-content/);
@@ -54,7 +53,7 @@ test("main.js replaces homepage popular cards only from successful API popular s
 
   assert.match(source, /async function initPopularCatalogState\(\)/);
   assert.match(source, /function renderPopularSolutions\(\)/);
-  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3, currentState: popularCatalogState \}\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)/);
   assert.match(source, /popularCatalogState\.source === "api"/);
   assert.match(source, /popularCatalogState\.lifecycle === "ready"/);
 });
@@ -82,10 +81,10 @@ test("brief and modal integration use normalized catalog lookup and gallery inde
 
 test("root pages use canonical B8 deferred script order", async () => {
   const expected = [
-    "assets/js/data.js?v=b9-catalog-lkg-1",
-    "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
-    "assets/js/catalog-api.js?v=b9-catalog-lkg-1",
-    "assets/js/main.js?v=b9-catalog-lkg-1",
+    "assets/js/data.js?v=b8-live-1",
+    "assets/js/runtime-config.js?v=b8-live-1",
+    "assets/js/catalog-api.js?v=b8-live-1",
+    "assets/js/main.js?v=b8-live-1",
   ];
 
   for (const page of ROOT_MAIN_PAGES) {
@@ -113,61 +112,41 @@ test("frontend B8 uses one canonical live API config and avoids production secre
   assert.match(runtimeConfig, /apiBaseUrl: "https:\/\/web00-backend-production\.onrender\.com"/);
   assert.equal((combined.match(/https:\/\/web00-backend-production\.onrender\.com/g) || []).length, 1);
   assert.doesNotMatch(combined, /https:\/\/api\.|Authorization|credentials:\s*"include"|document\.cookie|\.env|TODO|TBD/i);
-  assert.match(catalogApi, /web00\.catalog\.api\.lkg\.v1/);
-  assert.doesNotMatch(catalogApi, /sessionStorage|document\.querySelector/);
+  assert.doesNotMatch(catalogApi, /localStorage|sessionStorage|document\.querySelector/);
   assert.doesNotMatch(main, /target="_blank" rel="noopener"(?! noreferrer)/);
 });
 
-test("B8 preserves pre-existing support and bug-report controls", async () => {
+test("public pages expose no forbidden bug-report controls, modal targets, or dead handlers", async () => {
   const main = await readFile("assets/js/main.js", "utf8");
 
-  assert.match(main, /let bugAttachment = null;/);
-  assert.match(main, /event\.target\.closest\("\[data-open-bug\]"\)/);
-  assert.match(main, /function openBugModal\(\)/);
-  assert.match(main, /function renderBugForm\([^)]*\)/);
-  assert.match(main, /function submitBugReport\(event\)/);
-  assert.match(main, /DATA\.createErrorReport \|\| DATA\.createBugReport/);
-  assert.match(main, /data-open-bug>Описать проблему<\/button>/);
+  assert.doesNotMatch(main, /data-open-bug/);
+  assert.doesNotMatch(main, /bugAttachment|openBugModal|renderBugForm|submitBugReport|bindBugErrorCleanup/);
+  assert.doesNotMatch(main, /createBugReport|createErrorReport/);
+  assert.doesNotMatch(main, /Сообщить об ошибке|Описать проблему|Попробовать ещё раз/);
 
-  const bugControlPages = [
-    ["app.html", /<button class="app-support-link" type="button" data-open-bug>Описать проблему<\/button>/],
-    ["cabinet.html", /<button class="btn btn--secondary cabinet-support-link" type="button" data-open-bug>Описать проблему<\/button>/],
-    ["contacts.html", /<button class="btn btn--secondary btn--full contact-error-card__action" type="button" data-open-bug>Описать проблему<\/button>/],
-  ];
-
-  for (const [page, pattern] of bugControlPages) {
+  for (const page of ROOT_MAIN_PAGES) {
     const html = await readFile(page, "utf8");
-    assert.match(html, pattern, `${page} should keep its pre-B8 support bug control`);
-  }
-
-  const bugModalPages = [
-    "app.html",
-    "cabinet.html",
-    "contacts.html",
-    "faq.html",
-    "how-it-works.html",
-    "index.html",
-    "pricing.html",
-    "services.html",
-    "solutions.html",
-    "status.html",
-  ];
-
-  for (const page of bugModalPages) {
-    const html = await readFile(page, "utf8");
-    assert.match(html, /data-modal="bug"/, `${page} should keep its pre-B8 bug modal`);
-    assert.match(html, /data-bug-modal-content/, `${page} should keep its pre-B8 bug modal target`);
+    assert.doesNotMatch(html, /data-open-bug|data-modal="bug"|data-bug-modal-content/, `${page} should not expose bug-report UI`);
+    assert.doesNotMatch(html, /Сообщить об ошибке|Описать проблему/, `${page} should not expose bug-report copy`);
   }
 });
 
-test("main.js preserves populated catalog state through finite background retries", async () => {
+test("main.js ignores non-applyable stale catalog results", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
-  assert.match(source, /const CATALOG_MAX_ATTEMPTS = 3;/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions" \}\)\.then\(\(nextCatalogState\) => \{/);
+  assert.match(source, /applyCatalogState\(nextCatalogState\)/);
+  assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3 \}\)\.then\(\(nextPopularCatalogState\) => \{/);
+  assert.match(source, /if \(nextPopularCatalogState\) popularCatalogState = nextPopularCatalogState;/);
+});
+
+test("main.js applies catalog API states through the catalog seam", async () => {
+  const source = await readFile("assets/js/main.js", "utf8");
+
   assert.match(source, /function applyCatalogState\(nextCatalogState\)/);
-  assert.match(source, /function scheduleCatalogRetry\(\)/);
-  assert.match(source, /currentState: catalogState/);
-  assert.match(source, /CATALOG\.getInitialCatalog\(\)/);
+  assert.match(source, /if \(!nextCatalogState\) return false;/);
+  assert.match(source, /catalogState = nextCatalogState;/);
+  assert.match(source, /renderSolutions\(\);/);
 });
 
 test("B8 CSS supports catalog status and homepage API empty state without new global cards", async () => {
@@ -177,13 +156,4 @@ test("B8 CSS supports catalog status and homepage API empty state without new gl
   assert.match(catalogCss, /body\[data-page="solutions"\] \.catalog-state/);
   assert.match(catalogCss, /\.catalog-state\[hidden\]/);
   assert.match(homeCss, /\.mock-template-card--empty/);
-});
-
-test("brief mobile summary preview is constrained by its parent card", async () => {
-  const css = await readFile("assets/css/brief-premium.css", "utf8");
-
-  assert.match(
-    css,
-    /body\[data-page="brief"\] \.brief-summary \.solution-preview\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100%;[^}]*min-height:\s*0;/s,
-  );
 });

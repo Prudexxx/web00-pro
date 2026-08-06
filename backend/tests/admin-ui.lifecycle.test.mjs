@@ -105,10 +105,28 @@ describe("admin site lifecycle UI", () => {
           return Promise.resolve({ data: [], meta: metaFixture(0) });
         }
         if (requestPath === "/api/admin/sites") {
-          return Promise.resolve({ data: [siteFixture({ status: "draft" })], meta: metaFixture(1) });
+          const loadCount = requests.filter((request) => request.requestPath === "/api/admin/sites").length;
+          return Promise.resolve({
+            data: [siteFixture({ status: loadCount > 1 ? "published" : "draft" })],
+            meta: metaFixture(1)
+          });
         }
-        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish") {
-          return deferred.promise.then(() => ({ data: siteFixture({ status: "published" }) }));
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
+          return Promise.resolve({ data: siteFixture({ status: "draft" }) });
+        }
+        if (requestPath === "/api/admin/publication/pages/card/crm-site" && options.method === "GET") {
+          return Promise.resolve({ data: { blobSha: null, card: null, cardId: "crm-site" } });
+        }
+        if (requestPath === "/api/admin/publication/pages" && options.method === "POST") {
+          return deferred.promise.then(() => ({
+            data: publicationDto({
+              action: "create",
+              cardId: "crm-site",
+              operationId: "00000000-0000-4000-8000-000000000701",
+              requestId: "00000000-0000-4000-8000-000000000701",
+              statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000701"
+            })
+          }));
         }
         throw new Error(`Unexpected path ${requestPath}`);
       })
@@ -128,15 +146,22 @@ describe("admin site lifecycle UI", () => {
     confirm.dispatchEvent(fakeEvent("click"));
     confirm.dispatchEvent(fakeEvent("click"));
 
-    expect(requests.filter((request) => request.requestPath.endsWith("/publish"))).toHaveLength(1);
+    await waitFor(() => requests.filter((request) => request.requestPath === "/api/admin/publication/pages").length === 1);
+    expect(requests.filter((request) => request.requestPath === "/api/admin/publication/pages")).toHaveLength(1);
+    expect(requests.map((request) => request.requestPath)).not.toContain("/api/admin/sites/00000000-0000-4000-8000-000000000101/publish");
 
     deferred.resolve();
     await waitFor(() => requests.filter((request) => request.requestPath === "/api/admin/sites").length === 2);
 
-    expect(requests.find((request) => request.requestPath.endsWith("/publish")).options).toMatchObject({
+    expect(requests.find((request) => request.requestPath === "/api/admin/publication/pages").options).toMatchObject({
+      body: expect.objectContaining({
+        action: "create",
+        cardId: "crm-site",
+        expectedBlobSha: null,
+        lifecycleAction: "publish"
+      }),
       method: "POST"
     });
-    expect(requests.find((request) => request.requestPath.endsWith("/publish")).options).not.toHaveProperty("body");
   });
 
   it("requires typed confirmation for permanent delete and sends no invented body", async () => {
@@ -349,6 +374,23 @@ function metaFixture(total) {
     page: 1,
     total,
     totalPages: total > 0 ? 1 : 0
+  };
+}
+
+function publicationDto(overrides = {}) {
+  return {
+    action: "create",
+    buttonLabel: "Опубликовано",
+    cardId: "crm-site",
+    noOp: false,
+    operationId: "00000000-0000-4000-8000-000000000701",
+    prNumber: 77,
+    requestId: "00000000-0000-4000-8000-000000000701",
+    retryable: false,
+    stableStatus: "Опубликовано",
+    status: "published",
+    statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-000000000701",
+    ...overrides
   };
 }
 

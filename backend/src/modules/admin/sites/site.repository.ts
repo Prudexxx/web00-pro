@@ -24,6 +24,8 @@ import {
   type SiteCreateDraftStage
 } from "./site-create-observability.js";
 
+const DIRECT_PAGES_SYSTEM_ACTOR_ID = "00000000-0000-4000-8000-000000000901";
+
 export interface AdminSiteRepository {
   createDraft(input: CreateAdminSiteInput, context: AdminMutationContext): Promise<AdminSiteRecord>;
   getSite(id: string): Promise<AdminSiteRecord | null>;
@@ -406,12 +408,19 @@ async function lifecycleUpdate(
       context,
       entityId: id
     });
+    await createSiteAudit(tx, {
+      action: "public_catalog.dirty",
+      afterJson: Prisma.DbNull,
+      beforeJson: Prisma.DbNull,
+      context,
+      entityId: id
+    });
 
     return after;
   });
 }
 
-function createListWhere(
+export function createAdminSiteListWhere(
   query: AdminSiteListQuery,
   includeDeleted: boolean
 ): Prisma.SiteWhereInput {
@@ -432,10 +441,18 @@ function createListWhere(
       : {
           OR: [
             { title: { contains: query.search, mode: "insensitive" } },
-            { shortDescription: { contains: query.search, mode: "insensitive" } }
+            { shortDescription: { contains: query.search, mode: "insensitive" } },
+            { slug: { contains: query.search, mode: "insensitive" } }
           ]
         })
   };
+}
+
+function createListWhere(
+  query: AdminSiteListQuery,
+  includeDeleted: boolean
+): Prisma.SiteWhereInput {
+  return createAdminSiteListWhere(query, includeDeleted);
 }
 
 function toSiteUpdateData(input: UpdateAdminSiteInput): Prisma.SiteUpdateInput {
@@ -494,7 +511,9 @@ async function createSiteAudit(
   await tx.auditLog.create({
     data: {
       action: input.action,
-      actorUserId: input.context.actor.id,
+      actorUserId: input.context.actor.id === DIRECT_PAGES_SYSTEM_ACTOR_ID
+        ? null
+        : input.context.actor.id,
       afterJson: input.afterJson,
       beforeJson: input.beforeJson,
       entityId: input.entityId,
