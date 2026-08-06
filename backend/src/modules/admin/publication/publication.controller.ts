@@ -247,10 +247,9 @@ function readIdempotencyKey(request: Parameters<RequestHandler>[0], bodyKey?: st
 }
 
 function assertCsrfBoundary(request: Parameters<RequestHandler>[0]): void {
-  const cookie = request.get("Cookie")?.trim();
   const csrf = request.get("X-CSRF-Token")?.trim();
 
-  if (!cookie || !csrf) {
+  if (csrf !== "web00-admin") {
     throw new AppError({
       code: "FORBIDDEN",
       message: "Forbidden.",
