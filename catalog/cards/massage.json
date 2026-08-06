@@ -1,0 +1,38 @@
+{
+  "id": "massage",
+  "slug": "massage",
+  "sortOrder": 140,
+  "legacyTitle": "Массаж",
+  "title": "Массаж",
+  "editableTitle": true,
+  "category": "Услуги",
+  "description": "Сайт для специалиста или салона с услугами массажа, записью, акциями и отзывами.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 2 дней",
+  "features": [
+    "Услуги и цены",
+    "Онлайн-запись",
+    "Отзывы",
+    "Блок доверия"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/massage-home.png",
+  "previewType": "services",
+  "filter": "services",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/m/",
+  "originalDemoUrl": "https://prudexxx.github.io/m/",
+  "demoUrl": "https://prudexxx.github.io/m/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/massage-01.png",
+    "assets/img/solution-gallery/massage-02.png",
+    "assets/img/solution-gallery/massage-03.png",
+    "assets/img/solution-gallery/massage-04.png"
+  ],
+  "aliases": [
+    "massage"
+  ],
+  "active": true
+}

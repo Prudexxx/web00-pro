@@ -1,6 +1,7 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { AppError } from "../src/lib/errors.js";
 import { requestIdMiddleware } from "../src/lib/request-id.js";
 import { errorHandler } from "../src/middleware/error-handler.js";
 import { createAdminSiteRouter } from "../src/modules/admin/sites/site.routes.js";
@@ -73,6 +74,95 @@ describe("admin site route validation", () => {
       });
       expect(service.createDraft).not.toHaveBeenCalled();
     }
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "ftp://example.test/file",
+    "not a URL",
+    "https://user:password@example.test/private"
+  ])("returns validation before create service for invalid URLs", async (demoUrl) => {
+    const service = createSiteService();
+    const response = await request(createApp(service))
+      .post("/api/admin/sites")
+      .send({
+        ...validCreatePayload(),
+        demoUrl
+      })
+      .expect(400);
+
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(response.body.error.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "demoUrl"
+        })
+      ])
+    );
+    expect(service.createDraft).not.toHaveBeenCalled();
+  });
+
+  it("returns conflict without leaking raw database details for duplicate slug", async () => {
+    const service = createSiteService();
+
+    vi.mocked(service.createDraft).mockRejectedValue(new AppError({
+      code: "SLUG_CONFLICT",
+      message: "Slug already exists.",
+      statusCode: 409
+    }));
+
+    const response = await request(createApp(service))
+      .post("/api/admin/sites")
+      .send(validCreatePayload())
+      .expect(409);
+
+    expect(response.body.error).toMatchObject({
+      code: "SLUG_CONFLICT",
+      message: "Slug already exists."
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/duplicate key|sites_slug_key|SQL|valid-site/i);
+  });
+
+  it("returns safe internal error with requestId for unknown database failures", async () => {
+    const service = createSiteService();
+
+    vi.mocked(service.createDraft).mockRejectedValue(new Error(
+      "INSERT INTO sites VALUES ('secret-title', 'https://private.example.test') failed"
+    ));
+
+    const response = await request(createApp(service))
+      .post("/api/admin/sites")
+      .set("X-Request-Id", "req_unknown_db")
+      .send(validCreatePayload())
+      .expect(500);
+
+    expect(response.body.error).toEqual({
+      code: "INTERNAL_ERROR",
+      message: "Internal server error.",
+      requestId: "req_unknown_db"
+    });
+    expect(JSON.stringify(response.body)).not.toMatch(/INSERT|secret-title|private\.example|valid-site/i);
+  });
+
+  it("rejects legacy DB-only public lifecycle routes before mutating site state", async () => {
+    const service = createSiteService();
+    const app = createApp(service);
+
+    for (const [method, path] of [
+      ["post", "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish"],
+      ["post", "/api/admin/sites/00000000-0000-4000-8000-000000000101/unpublish"],
+      ["delete", "/api/admin/sites/00000000-0000-4000-8000-000000000101"]
+    ] as const) {
+      const response = await request(app)[method](path).expect(409);
+
+      expect(response.body.error).toMatchObject({
+        code: "DIRECT_PAGES_PUBLICATION_REQUIRED"
+      });
+    }
+
+    expect(service.publishSite).not.toHaveBeenCalled();
+    expect(service.unpublishSite).not.toHaveBeenCalled();
+    expect(service.deleteSite).not.toHaveBeenCalled();
   });
 });
 

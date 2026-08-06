@@ -1,6 +1,14 @@
 const JSON_CONTENT_TYPE = "application/json";
 const REFRESHABLE_AUTH_CODE = "UNAUTHORIZED";
 
+export const ADMIN_REQUEST_TIMEOUTS = Object.freeze({
+  jsonGet: 25_000,
+  jsonMutation: 45_000,
+  multipart: 240_000,
+  readinessAttempt: 15_000,
+  readinessTotal: 90_000
+});
+
 export class AdminApiError extends Error {
   constructor({ code, details, message, requestId, status }) {
     super(message);

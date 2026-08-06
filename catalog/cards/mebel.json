@@ -1,0 +1,38 @@
+{
+  "id": "mebel",
+  "slug": "mebel",
+  "sortOrder": 20,
+  "legacyTitle": "Мебельный магазин",
+  "title": "Мебельный магазин",
+  "editableTitle": true,
+  "category": "Товары",
+  "description": "Витрина мебельного магазина с категориями, карточками товаров, условиями доставки и заявкой на расчёт.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Каталог товаров",
+    "Категории",
+    "Карточки товаров",
+    "Заявка на расчёт"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/mebel-home.png",
+  "previewType": "goods",
+  "filter": "goods",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/MEBELPlanet/",
+  "originalDemoUrl": "https://prudexxx.github.io/MEBELPlanet/",
+  "demoUrl": "https://prudexxx.github.io/MEBELPlanet/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/mebel-01.png",
+    "assets/img/solution-gallery/mebel-02.png",
+    "assets/img/solution-gallery/mebel-03.png",
+    "assets/img/solution-gallery/mebel-04.png"
+  ],
+  "aliases": [
+    "mebel"
+  ],
+  "active": true
+}

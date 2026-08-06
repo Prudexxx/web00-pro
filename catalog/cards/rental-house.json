@@ -1,0 +1,38 @@
+{
+  "id": "rental-house",
+  "slug": "rental-house",
+  "sortOrder": 130,
+  "legacyTitle": "Дом под сдачу",
+  "title": "Дом под сдачу",
+  "editableTitle": true,
+  "category": "Недвижимость",
+  "description": "Сайт для сдачи дома: описание объекта, условия, галерея и заявка на бронирование.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Описание объекта",
+    "Условия",
+    "Галерея",
+    "Заявка"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/dom-arenda-home.png",
+  "previewType": "realty",
+  "filter": "realty",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/Dom/",
+  "originalDemoUrl": "https://prudexxx.github.io/Dom/",
+  "demoUrl": "https://prudexxx.github.io/Dom/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/rental-house-01.png",
+    "assets/img/solution-gallery/rental-house-02.png",
+    "assets/img/solution-gallery/rental-house-03.png",
+    "assets/img/solution-gallery/rental-house-04.png"
+  ],
+  "aliases": [
+    "rental-house"
+  ],
+  "active": true
+}

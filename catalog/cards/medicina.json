@@ -1,0 +1,38 @@
+{
+  "id": "medicina",
+  "slug": "medicina",
+  "sortOrder": 50,
+  "legacyTitle": "Медицина услуги",
+  "title": "Медицина услуги",
+  "editableTitle": true,
+  "category": "Медицина",
+  "description": "Сайт медицинской услуги с описанием направлений, доверием, записью и контактами.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Описание услуг",
+    "Блок доверия",
+    "Запись",
+    "Контакты"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/medicina-home.png",
+  "previewType": "medicine",
+  "filter": "medicine",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/MedizinaPlanet/",
+  "originalDemoUrl": "https://prudexxx.github.io/MedizinaPlanet/",
+  "demoUrl": "https://prudexxx.github.io/MedizinaPlanet/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/medicina-01.png",
+    "assets/img/solution-gallery/medicina-02.png",
+    "assets/img/solution-gallery/medicina-03.png",
+    "assets/img/solution-gallery/medicina-04.png"
+  ],
+  "aliases": [
+    "medicina"
+  ],
+  "active": true
+}

@@ -1,0 +1,38 @@
+{
+  "id": "doma-bani",
+  "slug": "doma-bani",
+  "sortOrder": 40,
+  "legacyTitle": "Дома, бани из сруба",
+  "title": "Дома, бани из сруба",
+  "editableTitle": true,
+  "category": "Строительство",
+  "description": "Сайт для строительной компании с проектами домов и бань, преимуществами и заявкой на расчёт.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Каталог проектов",
+    "Карточки объектов",
+    "Портфолио",
+    "Заявка на расчёт"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/doma-bani-home.png",
+  "previewType": "construction",
+  "filter": "construction",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/DomaBani/",
+  "originalDemoUrl": "https://prudexxx.github.io/DomaBani/",
+  "demoUrl": "https://prudexxx.github.io/DomaBani/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/doma-bani-01.png",
+    "assets/img/solution-gallery/doma-bani-02.png",
+    "assets/img/solution-gallery/doma-bani-03.png",
+    "assets/img/solution-gallery/doma-bani-04.png"
+  ],
+  "aliases": [
+    "doma-bani"
+  ],
+  "active": true
+}

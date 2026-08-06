@@ -1,0 +1,38 @@
+{
+  "id": "digital-projects",
+  "slug": "digital-projects",
+  "sortOrder": 110,
+  "legacyTitle": "Цифровые проекты",
+  "title": "Цифровые проекты",
+  "editableTitle": true,
+  "category": "Индивидуально",
+  "description": "Сайт для цифровых услуг, проектной деятельности, портфолио и сбора заявок.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Оффер",
+    "Проекты",
+    "Портфолио",
+    "Заявка"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/digital-projects-home.png",
+  "previewType": "individual",
+  "filter": "individual",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/ProektyPlanet/",
+  "originalDemoUrl": "https://prudexxx.github.io/ProektyPlanet/",
+  "demoUrl": "https://prudexxx.github.io/ProektyPlanet/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/digital-projects-01.png",
+    "assets/img/solution-gallery/digital-projects-02.png",
+    "assets/img/solution-gallery/digital-projects-03.png",
+    "assets/img/solution-gallery/digital-projects-04.png"
+  ],
+  "aliases": [
+    "digital-projects"
+  ],
+  "active": true
+}

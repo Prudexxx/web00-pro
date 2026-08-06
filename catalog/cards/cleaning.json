@@ -1,0 +1,38 @@
+{
+  "id": "cleaning",
+  "slug": "cleaning",
+  "sortOrder": 80,
+  "legacyTitle": "Услуга клининга",
+  "title": "Услуга клининга",
+  "editableTitle": true,
+  "category": "Услуги",
+  "description": "Лендинг клининга с пакетами уборки, преимуществами, расчётом и заявкой.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 3 дней",
+  "features": [
+    "Виды уборки",
+    "Пакеты услуг",
+    "Форма расчёта",
+    "Telegram-уведомления"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/cleaning-home.png",
+  "previewType": "services",
+  "filter": "services",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/Klining/",
+  "originalDemoUrl": "https://prudexxx.github.io/Klining/",
+  "demoUrl": "https://prudexxx.github.io/Klining/",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/cleaning-01.png",
+    "assets/img/solution-gallery/cleaning-02.png",
+    "assets/img/solution-gallery/cleaning-03.png",
+    "assets/img/solution-gallery/cleaning-04.png"
+  ],
+  "aliases": [
+    "cleaning"
+  ],
+  "active": true
+}

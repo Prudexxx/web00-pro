@@ -1,0 +1,38 @@
+{
+  "id": "drova",
+  "slug": "drova",
+  "sortOrder": 150,
+  "legacyTitle": "Доставка и продажа дров",
+  "title": "Доставка и продажа дров",
+  "editableTitle": true,
+  "category": "Доставка",
+  "description": "Сайт для локальной продажи и доставки дров с ассортиментом, условиями и быстрым заказом.",
+  "priceFrom": "Стоимость после анкеты",
+  "deliveryTime": "от 2 дней",
+  "features": [
+    "Ассортимент",
+    "Зоны доставки",
+    "Прайс",
+    "Быстрый заказ"
+  ],
+  "tags": [],
+  "previewImage": "assets/img/previews/drova-home.png",
+  "previewType": "delivery",
+  "filter": "delivery",
+  "demoMode": "none",
+  "demoLocalUrl": null,
+  "externalDemoUrl": null,
+  "originalDemoUrl": null,
+  "demoUrl": "",
+  "siteUrl": "",
+  "galleryImages": [
+    "assets/img/solution-gallery/drova-01.png",
+    "assets/img/solution-gallery/drova-02.png",
+    "assets/img/solution-gallery/drova-03.png",
+    "assets/img/solution-gallery/drova-04.png"
+  ],
+  "aliases": [
+    "drova"
+  ],
+  "active": true
+}
