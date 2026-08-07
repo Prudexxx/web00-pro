@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
 import { AppError } from "../../../lib/errors.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import {
   categoryInactive,
@@ -225,6 +226,13 @@ export function createPrismaAdminSiteRepository(
           context,
           entityId: id
         });
+        if (isPublicCatalogSite(before as AdminSiteRecord)) {
+          await markPublicCatalogDirty(tx, "site.permanent_delete", {
+            actorUserId: publicCatalogActorUserId(context),
+            reasonContext: { siteId: id },
+            requestId: context.requestId
+          });
+        }
       });
     },
     async publishSite(id, context) {
@@ -347,6 +355,13 @@ export function createPrismaAdminSiteRepository(
             context,
             entityId: id
           });
+          if (shouldMarkPublicCatalogDirtyForSiteChange(before as AdminSiteRecord, after as AdminSiteRecord)) {
+            await markPublicCatalogDirty(tx, "site.update", {
+              actorUserId: publicCatalogActorUserId(context),
+              reasonContext: { siteId: id },
+              requestId: context.requestId
+            });
+          }
 
           return after as AdminSiteRecord;
         });
@@ -408,13 +423,13 @@ async function lifecycleUpdate(
       context,
       entityId: id
     });
-    await createSiteAudit(tx, {
-      action: "public_catalog.dirty",
-      afterJson: Prisma.DbNull,
-      beforeJson: Prisma.DbNull,
-      context,
-      entityId: id
-    });
+    if (shouldMarkPublicCatalogDirtyForSiteChange(before, after)) {
+      await markPublicCatalogDirty(tx, options.action, {
+        actorUserId: publicCatalogActorUserId(context),
+        reasonContext: { siteId: id },
+        requestId: context.requestId
+      });
+    }
 
     return after;
   });
@@ -525,6 +540,10 @@ async function createSiteAudit(
   });
 }
 
+function publicCatalogActorUserId(context: AdminMutationContext): string | null {
+  return context.actor.id === DIRECT_PAGES_SYSTEM_ACTOR_ID ? null : context.actor.id;
+}
+
 function siteSnapshot(site: AdminSiteRecord): Prisma.InputJsonValue {
   return {
     active: site.active,
@@ -583,3 +602,51 @@ function changedSiteFields(from: AdminSiteRecord, to: AdminSiteRecord): Prisma.I
 
   return changed as Prisma.InputJsonValue;
 }
+
+function shouldMarkPublicCatalogDirtyForSiteChange(
+  before: AdminSiteRecord,
+  after: AdminSiteRecord
+): boolean {
+  const beforePublic = isPublicCatalogSite(before);
+  const afterPublic = isPublicCatalogSite(after);
+  if (beforePublic !== afterPublic) {
+    return true;
+  }
+  if (!beforePublic && !afterPublic) {
+    return false;
+  }
+
+  for (const key of PUBLIC_CATALOG_SITE_FIELDS) {
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isPublicCatalogSite(site: AdminSiteRecord): boolean {
+  return site.active && site.deletedAt === null && site.status === "published";
+}
+
+const PUBLIC_CATALOG_SITE_FIELDS = [
+  "categoryId",
+  "deliveryLabel",
+  "demoMode",
+  "demoUrl",
+  "developmentDays",
+  "featured",
+  "features",
+  "fullDescription",
+  "galleryImages",
+  "previewImageUrl",
+  "previewType",
+  "priceAmountCents",
+  "priceLabel",
+  "shortDescription",
+  "siteUrl",
+  "slug",
+  "sortOrder",
+  "tags",
+  "title"
+] as const satisfies readonly (keyof AdminSiteRecord)[];

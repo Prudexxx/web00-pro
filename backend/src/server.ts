@@ -9,6 +9,10 @@ import type { RuntimeDatabaseEnv } from "./config/database-env.js";
 import { parseRuntimeDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
 import { parseEnv } from "./config/env.js";
+import {
+  parseCloudRuRuntimeEnv,
+  type CloudRuRuntimeEnvConfig
+} from "./config/cloudru-runtime-env.js";
 import type { PublicCorsConfig } from "./config/public-cors-env.js";
 import { parsePublicCorsEnv, toPublicCorsConfig } from "./config/public-cors-env.js";
 import type { StorageConfig } from "./config/storage-env.js";
@@ -52,6 +56,7 @@ import { createPrismaStorageCleanupRepository } from "./modules/storage-cleanup/
 import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cleanup.worker.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
+import { createPublicRuntimeShadowDependencies } from "./modules/public-catalog/public-runtime-shadow.js";
 import {
   createPrismaReadinessProbe,
   createReadinessService
@@ -76,6 +81,7 @@ export interface StartServerOptions {
   logger?: AppLogger;
   now?: () => Date;
   publicCorsConfig: PublicCorsConfig;
+  publicRuntimeShadowEnv?: CloudRuRuntimeEnvConfig;
   registerSignalHandlers?: boolean;
   storageConfig: StorageConfig;
 }
@@ -117,6 +123,11 @@ export function startServer(options: StartServerOptions): StartedServer {
   const publicCatalogService = createPublicCatalogService({
     imageUrlPolicy,
     repository
+  });
+  const publicRuntimeShadow = createPublicRuntimeShadowDependencies({
+    env: options.publicRuntimeShadowEnv ?? { enabled: false },
+    now: options.now ?? (() => new Date()),
+    prisma
   });
   const authRepository = createAuthRepository({ prisma });
   const authService = createAuthService({
@@ -234,6 +245,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     }),
     pagesPublicationService,
     publicationService: createAdminPublicationService(),
+    ...(publicRuntimeShadow === null ? {} : { publicRuntimeShadow }),
     userService: createAdminUserService({
       repository: createPrismaAdminUserRepository({ prisma })
     })
@@ -403,9 +415,17 @@ export function main(): StartedServer {
   const publicCorsConfig = toPublicCorsConfig(
     parsePublicCorsEnv(process.env, { nodeEnv: env.NODE_ENV })
   );
+  const publicRuntimeShadowEnv = parseCloudRuRuntimeEnv(process.env);
   const storageConfig = toStorageConfig(parseStorageEnv(process.env));
 
-  return startServer({ authEnv, databaseEnv, env, publicCorsConfig, storageConfig });
+  return startServer({
+    authEnv,
+    databaseEnv,
+    env,
+    publicCorsConfig,
+    publicRuntimeShadowEnv,
+    storageConfig
+  });
 }
 
 if (isDirectRun()) {

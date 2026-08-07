@@ -3,6 +3,7 @@ import { AppError } from "../../../lib/errors.js";
 import { runSerializableWithRetry } from "../../../cli/cli-user.repository.js";
 import type { ManagedGalleryImage } from "../../images/image.types.js";
 import type { PreviewUploadStage } from "../../images/preview-upload-observability.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import type { SiteImageMutationSite } from "./site-image.types.js";
 import type { SiteImageRepository } from "./site-image.service.js";
 
@@ -54,6 +55,7 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        await markDirtyForPublicImageMutation(tx, before, after as SiteImageMutationSite, "site.image.gallery_add", input.context);
 
         return after as SiteImageMutationSite;
       });
@@ -89,6 +91,7 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        await markDirtyForPublicImageMutation(tx, before, after as SiteImageMutationSite, "site.image.gallery_delete", input.context);
 
         return after as SiteImageMutationSite;
       });
@@ -114,6 +117,7 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        await markDirtyForPublicImageMutation(tx, before, after as SiteImageMutationSite, "site.image.preview_delete", input.context);
 
         return after as SiteImageMutationSite;
       });
@@ -159,6 +163,7 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        await markDirtyForPublicImageMutation(tx, before, after as SiteImageMutationSite, "site.image.preview_replace", input.context);
 
         return after as SiteImageMutationSite;
       });
@@ -169,6 +174,7 @@ export function createPrismaSiteImageRepository(options: {
     },
     async reorderGallery(input) {
       return runSerializableWithRetry(prisma, async (tx) => {
+        const before = await getSiteOrThrow(tx, input.siteId);
         const next = normalizeGallery(input.images.map(storedGalleryImage));
         const after = await tx.site.update({
           data: { galleryImages: next as Prisma.InputJsonValue },
@@ -186,6 +192,7 @@ export function createPrismaSiteImageRepository(options: {
           context: input.context,
           siteId: input.siteId
         });
+        await markDirtyForPublicImageMutation(tx, before, after as SiteImageMutationSite, "site.image.gallery_update", input.context);
 
         return after as SiteImageMutationSite;
       });
@@ -309,4 +316,35 @@ async function createImageAudit(
       userAgentHash: null
     }
   });
+}
+
+async function markDirtyForPublicImageMutation(
+  tx: Prisma.TransactionClient,
+  before: SiteImageMutationSite,
+  after: SiteImageMutationSite,
+  reason: string,
+  context: {
+    actor: { id: string };
+    requestId: string;
+  }
+): Promise<void> {
+  if (!isPublicCatalogImageSite(before) && !isPublicCatalogImageSite(after)) {
+    return;
+  }
+  if (
+    before.previewImageUrl === after.previewImageUrl &&
+    JSON.stringify(before.galleryImages) === JSON.stringify(after.galleryImages)
+  ) {
+    return;
+  }
+
+  await markPublicCatalogDirty(tx, reason, {
+    actorUserId: context.actor.id,
+    reasonContext: { siteId: after.id },
+    requestId: context.requestId
+  });
+}
+
+function isPublicCatalogImageSite(site: SiteImageMutationSite): boolean {
+  return site.active && site.deletedAt === null && site.status === "published";
 }
