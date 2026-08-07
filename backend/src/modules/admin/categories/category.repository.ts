@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "../../../generated/prisma/client.js";
+import { markPublicCatalogDirty } from "../../public-catalog/public-catalog-control.repository.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import {
   categoryNotFound,
@@ -178,6 +179,23 @@ export function createPrismaAdminCategoryRepository(
             context,
             entityId: id
           });
+          if (hasPublicCategoryProjectionChange(before, after)) {
+            const linkedPublicSites = await tx.site.count({
+              where: {
+                active: true,
+                categoryId: id,
+                deletedAt: null,
+                status: "published"
+              }
+            });
+            if (linkedPublicSites > 0) {
+              await markPublicCatalogDirty(tx, "category.update", {
+                actorUserId: context.actor.id,
+                reasonContext: { categoryId: id },
+                requestId: context.requestId
+              });
+            }
+          }
 
           return after;
         });
@@ -262,4 +280,17 @@ function changedCategoryFields(
   }
 
   return changed as Prisma.InputJsonValue;
+}
+
+function hasPublicCategoryProjectionChange(
+  before: AdminCategoryRecord,
+  after: AdminCategoryRecord
+): boolean {
+  for (const key of ["active", "slug", "sortOrder", "title"] as const) {
+    if (before[key] !== after[key]) {
+      return true;
+    }
+  }
+
+  return false;
 }

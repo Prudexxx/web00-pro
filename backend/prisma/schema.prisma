@@ -139,3 +139,25 @@ model StorageCleanupJob {
   @@index([entityType, entityId], map: "idx_storage_cleanup_jobs_entity")
   @@map("storage_cleanup_jobs")
 }
+
+model PublicCatalogControl {
+  id                         String    @id @db.Text
+  showDemoInModal            Boolean   @default(false) @map("show_demo_in_modal")
+  desiredRevision            Int       @default(1) @map("desired_revision")
+  publishedRevision          Int       @default(0) @map("published_revision")
+  syncStatus                 String    @default("pending") @map("sync_status") @db.Text
+  currentSnapshotPath        String?   @map("current_snapshot_path") @db.Text
+  currentSnapshotChecksum    String?   @map("current_snapshot_checksum") @db.Text
+  currentSnapshotGeneratedAt DateTime? @map("current_snapshot_generated_at") @db.Timestamptz(6)
+  currentItemsCount          Int?      @map("current_items_count")
+  lastSyncErrorCode          String?   @map("last_sync_error_code") @db.Text
+  lastSyncRequestId          String?   @map("last_sync_request_id") @db.Text
+  syncLeaseId                String?   @map("sync_lease_id") @db.Text
+  syncLeaseExpiresAt         DateTime? @map("sync_lease_expires_at") @db.Timestamptz(6)
+  createdAt                  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([syncStatus], map: "idx_public_catalog_control_sync_status")
+  @@index([syncLeaseExpiresAt], map: "idx_public_catalog_control_sync_lease_expires_at")
+  @@map("public_catalog_control")
+}
