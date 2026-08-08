@@ -1,4 +1,5 @@
 export type ImageSlot = "gallery" | "preview";
+export type ImageSourceFormat = "avif" | "jpeg" | "png" | "webp";
 export type OutputFormat = "avif" | "webp";
 
 export interface ImageVariant {
@@ -12,7 +13,10 @@ export interface ImageVariant {
 
 export interface ProcessedImage {
   assetId: string;
+  originalFormat?: ImageSourceFormat;
   originalHeight: number;
+  originalOrientation?: number | null;
+  originalPixels?: number;
   originalWidth: number;
   variants: ImageVariant[];
   widths: number[];
@@ -32,6 +36,29 @@ export type ImageProcessorDiagnosticStage =
   | "IMAGE_AVIF_ENCODED"
   | "IMAGE_PROCESS_COMPLETED";
 
+export type ImageProcessingDiagnosticStage =
+  | "QUEUE_ACQUIRED"
+  | "QUEUE_REJECTED"
+  | "QUEUE_TIMEOUT"
+  | "METADATA_READ"
+  | "PROCESSING_COMPLETED"
+  | "PROCESSING_STARTED"
+  | "PROCESSING_TIMEOUT"
+  | "PROCESSOR_DRAIN_FAILED";
+
+export interface ImageProcessingDiagnosticEvent {
+  durationMs?: number | undefined;
+  errorCategory?: string | undefined;
+  format?: ImageSourceFormat | undefined;
+  height?: number | undefined;
+  orientation?: number | null | undefined;
+  pixels?: number | undefined;
+  stage: ImageProcessingDiagnosticStage;
+  timeoutMs?: number | undefined;
+  variantCount?: number | undefined;
+  width?: number | undefined;
+}
+
 export interface MultipartImageParser {
   parseBatch(request: NodeJS.ReadableStream): Promise<ParsedImageFile[]>;
   parseBatchStream(request: NodeJS.ReadableStream): AsyncIterable<ParsedImageFile>;
@@ -39,18 +66,25 @@ export interface MultipartImageParser {
 }
 
 export interface ImageProcessor {
+  readonly timeoutMs?: number;
   process(input: {
     assetId: string;
     declaredMimeType: string;
+    onDiagnostic?: (event: ImageProcessingDiagnosticEvent) => void;
     onStage?: (stage: ImageProcessorDiagnosticStage) => void;
     siteId: string;
     slot: ImageSlot;
+    signal?: AbortSignal | undefined;
     source: Buffer;
   }): Promise<ProcessedImage>;
 }
 
 export interface ImagePipelineSemaphore {
-  run<T>(operation: () => Promise<T>): Promise<T>;
+  run<T>(
+    operation: () => Promise<T>,
+    options?: { signal?: AbortSignal | undefined }
+  ): Promise<T>;
+  stats?(): { active: number; queued: number };
 }
 
 export interface AssetUploadCoordinator {

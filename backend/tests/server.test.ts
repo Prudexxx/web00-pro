@@ -192,6 +192,76 @@ describe("app/server auth integration boundary", () => {
     expect(source).toContain("parseAuthEnv(process.env, { nodeEnv: env.NODE_ENV })");
   });
 
+  it("parses image processing env during startup and passes config to the Sharp processor", async () => {
+    vi.resetModules();
+    const listen = vi.fn();
+    const close = vi.fn();
+    const server = { close, listen } as unknown as Server;
+    const createSharpImageProcessor = vi.fn(() => ({
+      process: vi.fn(),
+      timeoutMs: 90_000
+    }));
+
+    vi.doMock("node:http", () => ({
+      createServer: vi.fn(() => server)
+    }));
+    vi.doMock("../src/modules/images/image-processor.js", () => ({
+      createSharpImageProcessor
+    }));
+
+    const { startServer } = await import("../src/server.js");
+    const imageProcessingConfig = {
+      maxConcurrency: 1,
+      maxPixels: 16_000_000,
+      maxQueued: 2,
+      queueWaitTimeoutMs: 5_000,
+      timeoutMs: 90_000
+    };
+
+    startServer({
+      authEnv: {
+        ACCESS_TOKEN_TTL_SECONDS: 900,
+        AUTH_FINGERPRINT_SECRET: Buffer.alloc(32, 2),
+        AUTH_FINGERPRINT_SECRET_BASE64: Buffer.alloc(32, 2).toString("base64"),
+        JWT_ACCESS_SECRET: Buffer.alloc(32, 1),
+        JWT_ACCESS_SECRET_BASE64: Buffer.alloc(32, 1).toString("base64"),
+        JWT_AUDIENCE: "web00-admin",
+        JWT_ISSUER: "web00-backend",
+        REFRESH_TOKEN_TTL_SECONDS: 604_800,
+        TRUST_PROXY_HOPS: 1
+      },
+      createPrisma: vi.fn(() => ({ $disconnect: vi.fn() }) as never),
+      databaseEnv: { DATABASE_URL: "postgresql://user:pass@127.0.0.1:5432/web00_backend_dev" },
+      env: { ...testEnv, PORT: 53_202 },
+      imageProcessingConfig,
+      logger: { log: vi.fn() },
+      publicCorsConfig: {
+        allowedMethods: ["GET", "HEAD", "OPTIONS"],
+        allowedOrigins: new Set(["https://prudexxx.github.io"]),
+        maxOrigins: 10
+      },
+      registerSignalHandlers: false,
+      storageConfig: {
+        bucket: "web00-catalog-images",
+        credentials: {
+          serviceRoleKey: "sb_secret_fake",
+          supabaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co"
+        },
+        publicBaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co",
+        workerEnabled: false,
+        workerPollIntervalSeconds: 60
+      }
+    } as never);
+
+    expect(createSharpImageProcessor).toHaveBeenCalledWith(imageProcessingConfig);
+
+    const source = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+
+    expect(source).toContain("parseImageProcessingEnv(process.env)");
+    vi.doUnmock("node:http");
+    vi.doUnmock("../src/modules/images/image-processor.js");
+  });
+
   it("wires public CORS and readiness through app/server composition", () => {
     const appSource = readFileSync(join(process.cwd(), "src", "app.ts"), "utf8");
     const serverSource = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
