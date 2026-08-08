@@ -8,6 +8,7 @@ import { createCloudRuS3PublicRuntimeStorage } from "./cloudru-s3-public-runtime
 import {
   createPrismaPublicCatalogControlStatusReader,
   createPrismaPublicCatalogSyncRepository,
+  isPublicCatalogReadyForTarget,
   type PublicCatalogControlStatusReader,
   type PublicCatalogControlState
 } from "./public-catalog-control.repository.js";
@@ -46,6 +47,7 @@ export interface PublicRuntimeShadowDependencies {
   statusService: PublicRuntimeShadowStatusService;
   storage: PublicRuntimeStorage;
   syncService: PublicCatalogSyncService;
+  targetKey: string;
 }
 
 export function createPublicRuntimeShadowDependencies(options: {
@@ -55,33 +57,41 @@ export function createPublicRuntimeShadowDependencies(options: {
   now?: () => Date;
   prisma: PrismaClient;
 }): PublicRuntimeShadowDependencies | null {
-  if (!options.env.enabled) {
+  if (!options.env.shadow.enabled) {
     return null;
   }
 
   const createStorage = options.createStorage ??
     ((config: CloudRuRuntimeStorageConfig) => createCloudRuS3PublicRuntimeStorage({ config }));
-  const storage = createStorage(options.env.storage);
+  const storage = createStorage(options.env.shadow.storage);
   const repository = createPrismaPublicCatalogSyncRepository({ prisma: options.prisma });
 
   return {
     statusService: createPublicRuntimeShadowStatusService({
-      reader: createPrismaPublicCatalogControlStatusReader({ prisma: options.prisma })
+      ...(options.now === undefined ? {} : { now: options.now }),
+      reader: createPrismaPublicCatalogControlStatusReader({ prisma: options.prisma }),
+      targetKey: options.env.shadow.targetKey
     }),
     storage,
     syncService: createPublicCatalogSyncService({
       ...(options.createLeaseId === undefined ? {} : { createLeaseId: options.createLeaseId }),
       ...(options.now === undefined ? {} : { now: options.now }),
-      pathPrefix: options.env.storage.prefix,
+      pathPrefix: options.env.shadow.storage.prefix,
       repository,
-      storage
-    })
+      storage,
+      target: options.env.shadow.target
+    }),
+    targetKey: options.env.shadow.targetKey
   };
 }
 
 export function createPublicRuntimeShadowStatusService(options: {
+  now?: () => Date;
   reader: PublicCatalogControlStatusReader;
+  targetKey: string;
 }): PublicRuntimeShadowStatusService {
+  const now = options.now ?? (() => new Date());
+
   return {
     async getStatus() {
       const result = await options.reader.readState();
@@ -93,7 +103,9 @@ export function createPublicRuntimeShadowStatusService(options: {
         return idleStatus();
       }
 
-      return normalizePublicRuntimeShadowStatusDto(stateToStatus(result.state));
+      return normalizePublicRuntimeShadowStatusDto(stateToStatus(result.state, {
+        targetReady: isPublicCatalogReadyForTarget(result.state, options.targetKey, now())
+      }));
     }
   };
 }
@@ -155,7 +167,14 @@ export function publicRuntimeShadowSetupRequired(): AppError {
   });
 }
 
-function stateToStatus(state: PublicCatalogControlState): PublicRuntimeShadowStatusDto {
+function stateToStatus(
+  state: PublicCatalogControlState,
+  options: { targetReady: boolean }
+): PublicRuntimeShadowStatusDto {
+  const status = state.syncStatus === "ready" && !options.targetReady
+    ? "pending"
+    : state.syncStatus;
+
   return {
     desiredRevision: state.desiredRevision,
     enabled: true,
@@ -163,7 +182,7 @@ function stateToStatus(state: PublicCatalogControlState): PublicRuntimeShadowSta
     lastSyncErrorCode: safeLastSyncErrorCode(state.lastSyncErrorCode),
     mode: "shadow",
     publishedRevision: state.publishedRevision,
-    status: state.syncStatus
+    status
   };
 }
 

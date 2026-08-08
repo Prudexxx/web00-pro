@@ -155,6 +155,8 @@ test("invalid runtime config disables API and keeps static mode safe", async () 
   })), {
     apiBaseUrl: "",
     apiEnabled: false,
+    catalogManifestUrl: "",
+    catalogRuntimeMode: "static",
     requestTimeoutMs: 8000,
     staticFallbackEnabled: false,
     valid: false,

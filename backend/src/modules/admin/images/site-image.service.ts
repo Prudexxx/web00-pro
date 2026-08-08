@@ -1,5 +1,6 @@
 import { AppError } from "../../../lib/errors.js";
 import type { AppLogger } from "../../../lib/logger.js";
+import type { PublicCatalogReconciler } from "../../public-catalog/public-catalog-reconciler.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import { createPermissionPolicy } from "../rbac.policy.js";
 import type { PermissionPolicy } from "../rbac.types.js";
@@ -105,6 +106,7 @@ export interface CreateSiteImageServiceOptions {
   };
   imageUrlPolicy: ManagedImageUrlPolicy;
   processor: ImageProcessor;
+  publicCatalogReconciler?: Pick<PublicCatalogReconciler, "requestReconcile">;
   repository: SiteImageRepository;
   storage: ImageStorage;
 }
@@ -349,6 +351,10 @@ async function attachGalleryBatchCandidates(
     } catch (error) {
       failed.push(toGalleryBatchFailure(candidate.file, error));
     }
+  }
+
+  if (succeeded.some((item) => item.replayed === false)) {
+    requestPublicCatalogReconcile(options, "site.image.gallery_add", input.context);
   }
 
   return { failed, succeeded };
@@ -598,6 +604,7 @@ async function replacePreview(
         const preview = parseCurrentPreview(options.imageUrlPolicy, updated);
 
         setStage("REQUEST_COMPLETED");
+        requestPublicCatalogReconcile(options, "site.image.preview_replace", input.context);
 
         return {
           previewImage: preview === null ? null : toPublicPreview(preview, options.imageUrlPolicy),
@@ -651,6 +658,7 @@ async function deletePreview(
     context: input.context,
     siteId: input.siteId
   });
+  requestPublicCatalogReconcile(options, "site.image.preview_delete", input.context);
 
   return {
     previewImage: null,
@@ -740,6 +748,8 @@ async function addSingleGallery(
         throw imageNotFound();
       }
 
+      requestPublicCatalogReconcile(options, "site.image.gallery_add", input.context);
+
       return {
         image: toPublicGalleryImage(added, options.imageUrlPolicy, updated.title),
         replayed: false
@@ -784,6 +794,7 @@ async function reorderGallery(
     images: reordered,
     siteId: input.siteId
   });
+  requestPublicCatalogReconcile(options, "site.image.gallery_update", input.context);
 
   return {
     images: parseManagedGallery(
@@ -815,6 +826,7 @@ async function deleteGalleryImage(
     context: input.context,
     siteId: input.siteId
   });
+  requestPublicCatalogReconcile(options, "site.image.gallery_delete", input.context);
 
   return {
     images: parseManagedGallery(
@@ -1197,6 +1209,17 @@ function buildCleanupPaths(storagePath: string, widths: readonly number[]): stri
 
 function addMinutes(value: Date, minutes: number): Date {
   return new Date(value.getTime() + minutes * 60_000);
+}
+
+function requestPublicCatalogReconcile(
+  options: Pick<CreateSiteImageServiceOptions, "publicCatalogReconciler">,
+  reason: string,
+  context: AdminMutationContext
+): void {
+  options.publicCatalogReconciler?.requestReconcile({
+    reason,
+    requestId: context.requestId
+  });
 }
 
 function forbidden(): AppError {

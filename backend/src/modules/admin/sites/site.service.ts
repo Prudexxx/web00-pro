@@ -1,6 +1,7 @@
 import { Prisma } from "../../../generated/prisma/client.js";
 import { AppError } from "../../../lib/errors.js";
 import type { AuthenticatedPrincipal } from "../../auth/auth.types.js";
+import type { PublicCatalogReconciler } from "../../public-catalog/public-catalog-reconciler.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import { createPermissionPolicy } from "../rbac.policy.js";
 import type { PermissionPolicy } from "../rbac.types.js";
@@ -39,6 +40,7 @@ export interface AdminSiteService {
 
 export function createAdminSiteService(options: {
   now?: () => Date;
+  publicCatalogReconciler?: Pick<PublicCatalogReconciler, "requestReconcile">;
   repository: AdminSiteRepository;
 }): AdminSiteService {
   const policy = createPermissionPolicy();
@@ -51,10 +53,9 @@ export function createAdminSiteService(options: {
       );
     },
     async deleteSite(id, context) {
-      return mapAdminSiteDetail(
-        await options.repository.softDeleteSite(id, context),
-        context.actor.role
-      );
+      const record = await options.repository.softDeleteSite(id, context);
+      requestPublicCatalogReconcile(options, "site.soft_delete", context);
+      return mapAdminSiteDetail(record, context.actor.role);
     },
     async getSite(id, principal) {
       const site = await options.repository.getSite(id);
@@ -81,24 +82,22 @@ export function createAdminSiteService(options: {
     },
     async permanentlyDeleteSite(id, context) {
       await options.repository.permanentlyDeleteSite(id, context);
+      requestPublicCatalogReconcile(options, "site.permanent_delete", context);
     },
     async publishSite(id, context) {
-      return mapAdminSiteDetail(
-        await options.repository.publishSite(id, context),
-        context.actor.role
-      );
+      const record = await options.repository.publishSite(id, context);
+      requestPublicCatalogReconcile(options, "site.publish", context);
+      return mapAdminSiteDetail(record, context.actor.role);
     },
     async restoreSite(id, context) {
-      return mapAdminSiteDetail(
-        await options.repository.restoreSite(id, context),
-        context.actor.role
-      );
+      const record = await options.repository.restoreSite(id, context);
+      requestPublicCatalogReconcile(options, "site.restore", context);
+      return mapAdminSiteDetail(record, context.actor.role);
     },
     async unpublishSite(id, context) {
-      return mapAdminSiteDetail(
-        await options.repository.unpublishSite(id, context),
-        context.actor.role
-      );
+      const record = await options.repository.unpublishSite(id, context);
+      requestPublicCatalogReconcile(options, "site.unpublish", context);
+      return mapAdminSiteDetail(record, context.actor.role);
     },
     async updateSite(id, input, context) {
       const current = await options.repository.getSite(id);
@@ -108,12 +107,22 @@ export function createAdminSiteService(options: {
       }
       assertCanUpdateSite(context.actor, current, input, policy);
 
-      return mapAdminSiteDetail(
-        await options.repository.updateSite(id, input, context),
-        context.actor.role
-      );
+      const record = await options.repository.updateSite(id, input, context);
+      requestPublicCatalogReconcile(options, "site.update", context);
+      return mapAdminSiteDetail(record, context.actor.role);
     }
   };
+}
+
+function requestPublicCatalogReconcile(
+  options: { publicCatalogReconciler?: Pick<PublicCatalogReconciler, "requestReconcile"> },
+  reason: string,
+  context: AdminMutationContext
+): void {
+  options.publicCatalogReconciler?.requestReconcile({
+    reason,
+    requestId: context.requestId
+  });
 }
 
 export function assertCanUpdateSite(

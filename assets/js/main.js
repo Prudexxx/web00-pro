@@ -928,7 +928,7 @@
       return false;
     }
     catalogState = nextCatalogState;
-    if (nextCatalogState.source === "api" && nextCatalogState.lifecycle === "ready" && hasCatalogItems(nextCatalogState)) {
+    if ((nextCatalogState.source === "cloud" || nextCatalogState.source === "api") && nextCatalogState.lifecycle === "ready" && hasCatalogItems(nextCatalogState)) {
       renderSolutions();
       return true;
     }
@@ -1199,7 +1199,7 @@
   function renderPopularSolutions() {
     const grid = $("#popular-templates .mock-card-grid");
     if (!grid || !popularCatalogState) return;
-    if (popularCatalogState.source === "api" && popularCatalogState.lifecycle === "empty") {
+    if ((popularCatalogState.source === "cloud" || popularCatalogState.source === "api") && popularCatalogState.lifecycle === "empty") {
       grid.innerHTML = `
         <article class="mock-template-card mock-template-card--empty">
           <div class="mock-card-body">
@@ -1211,7 +1211,7 @@
       `;
       return;
     }
-    if (!(popularCatalogState.source === "api" && popularCatalogState.lifecycle === "ready")) return;
+    if (!((popularCatalogState.source === "cloud" || popularCatalogState.source === "api") && popularCatalogState.lifecycle === "ready")) return;
 
     grid.innerHTML = popularCatalogState.items.slice(0, 3).map((solution, index) => {
       const identifier = solutionIdentifier(solution);

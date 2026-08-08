@@ -54,7 +54,7 @@ test("main.js replaces homepage popular cards only from successful API popular s
   assert.match(source, /async function initPopularCatalogState\(\)/);
   assert.match(source, /function renderPopularSolutions\(\)/);
   assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "popular", limit: 3, currentState: popularCatalogState \}\)/);
-  assert.match(source, /popularCatalogState\.source === "api"/);
+  assert.match(source, /popularCatalogState\.source === "cloud" \|\| popularCatalogState\.source === "api"/);
   assert.match(source, /popularCatalogState\.lifecycle === "ready"/);
 });
 
@@ -83,6 +83,7 @@ test("root pages use canonical B9 deferred script order", async () => {
   const expected = [
     "assets/js/data.js?v=b9-catalog-lkg-1",
     "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
+    "assets/js/catalog-runtime.js?v=b9-catalog-lkg-1",
     "assets/js/catalog-api.js?v=b9-catalog-lkg-1",
     "assets/js/main.js?v=b9-catalog-lkg-1",
   ];
@@ -92,8 +93,8 @@ test("root pages use canonical B9 deferred script order", async () => {
     const scripts = [...html.matchAll(/<script\s+defer\s+src="([^"]+)"><\/script>/g)].map((match) => match[1]);
     const b8Start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
     assert.notEqual(b8Start, -1, `${page} should load data.js`);
-    assert.deepEqual(scripts.slice(b8Start, b8Start + 4), expected, `${page} script order`);
-    assert.equal(scripts.filter((src) => expected.includes(src)).length, 4, `${page} should not duplicate B9 scripts`);
+    assert.deepEqual(scripts.slice(b8Start, b8Start + 5), expected, `${page} script order`);
+    assert.equal(scripts.filter((src) => expected.includes(src)).length, 5, `${page} should not duplicate B9 scripts`);
     assert.doesNotMatch(html, /<script\s+async/i, `${page} should not async public scripts`);
     assert.doesNotMatch(html, /<base\s/i, `${page} should not use base href`);
   }
@@ -110,6 +111,9 @@ test("frontend B9 uses one canonical live API config and avoids production secre
   const combined = [runtimeConfig, catalogApi, main, sw].join("\n");
 
   assert.match(runtimeConfig, /apiBaseUrl: "https:\/\/web00-backend-production\.onrender\.com"/);
+  assert.match(runtimeConfig, /catalogRuntimeMode: "cloud-primary"/);
+  assert.match(runtimeConfig, /catalogManifestUrl: "https:\/\/web00-public-runtime\.s3-website\.cloud\.ru\/runtime\/production\/catalog\/v1\/manifest\.json"/);
+  assert.doesNotMatch(runtimeConfig, /canary\/shadow/);
   assert.equal((combined.match(/https:\/\/web00-backend-production\.onrender\.com/g) || []).length, 1);
   assert.doesNotMatch(combined, /https:\/\/api\.|Authorization|credentials:\s*"include"|document\.cookie|\.env|TODO|TBD/i);
   assert.match(catalogApi, /const LKG_KEY = "web00\.catalog\.api\.lkg\.v1";/);

@@ -6,6 +6,7 @@ import {
   acquirePublicCatalogLeaseState,
   createPrismaPublicCatalogSyncRepository,
   finalizePublicCatalogLeaseState,
+  isPublicCatalogReadyForTarget,
   markPublicCatalogDirty,
   markPublicCatalogDirtyState,
   recoverStalePublicCatalogLeaseState,
@@ -13,6 +14,10 @@ import {
   validatePublicCatalogControlState,
   type PublicCatalogControlState
 } from "../src/modules/public-catalog/public-catalog-control.repository.js";
+import {
+  createPublicRuntimeTargetKey,
+  type PublicRuntimeTargetConfig
+} from "../src/modules/public-catalog/public-runtime-target.js";
 
 const now = new Date("2026-08-07T12:00:00.000Z");
 
@@ -27,6 +32,7 @@ function control(overrides: Partial<PublicCatalogControlState> = {}): PublicCata
     lastSyncErrorCode: null,
     lastSyncRequestId: null,
     publishedRevision: 0,
+    publishedRuntimeTargetKey: null,
     showDemoInModal: false,
     syncLeaseExpiresAt: null,
     syncLeaseId: null,
@@ -54,6 +60,9 @@ function applyControlMutation(
   }
   if (typeof data.publishedRevision === "number") {
     state.publishedRevision = data.publishedRevision;
+  }
+  if ("publishedRuntimeTargetKey" in data) {
+    state.publishedRuntimeTargetKey = data.publishedRuntimeTargetKey as string | null;
   }
   if (typeof data.showDemoInModal === "boolean") {
     state.showDemoInModal = data.showDemoInModal;
@@ -156,6 +165,41 @@ function publicCatalogContext(requestId: string) {
 }
 
 describe("public catalog durable control state", () => {
+  it("rejects false-ready durable state when published target key is legacy null", () => {
+    const state = validatePublicCatalogControlState(control({
+      desiredRevision: 4,
+      publishedRevision: 4,
+      publishedRuntimeTargetKey: null,
+      syncStatus: "ready"
+    }));
+    const targetKey = createPublicRuntimeTargetKey(primaryTargetFixture());
+
+    expect(isPublicCatalogReadyForTarget(state, targetKey, now)).toBe(false);
+  });
+
+  it("stores the current target key when finalizing a fenced publication", () => {
+    const targetKey = createPublicRuntimeTargetKey(primaryTargetFixture());
+    const finalized = finalizePublicCatalogLeaseState(control({
+      desiredRevision: 5,
+      publishedRevision: 4,
+      syncLeaseExpiresAt: new Date("2026-08-07T12:01:00.000Z"),
+      syncLeaseId: "lease-5",
+      syncStatus: "syncing"
+    }), {
+      checksum: "a".repeat(64),
+      generatedAt: now,
+      itemsCount: 17,
+      leaseId: "lease-5",
+      publishedRevision: 5,
+      publishedRuntimeTargetKey: targetKey,
+      requestId: "req-target-identity",
+      snapshotPath: `runtime/production/catalog/v1/releases/revision-5-${"a".repeat(64)}.json`
+    });
+
+    expect(finalized.publishedRuntimeTargetKey).toBe(targetKey);
+    expect(finalized.syncStatus).toBe("ready");
+  });
+
   it("validates singleton revision and sync status invariants", () => {
     expect(validatePublicCatalogControlState(control())).toEqual(control());
     expect(() => validatePublicCatalogControlState(control({ id: "other" }))).toThrow(/singleton/i);
@@ -172,6 +216,7 @@ describe("public catalog durable control state", () => {
     const acquired = acquirePublicCatalogLeaseState(control(), {
       leaseId: "lease-one",
       now,
+      targetKey: primaryTargetKey(),
       ttlMs: 60_000
     });
 
@@ -186,6 +231,7 @@ describe("public catalog durable control state", () => {
       acquirePublicCatalogLeaseState(acquired.state, {
         leaseId: "lease-two",
         now,
+        targetKey: primaryTargetKey(),
         ttlMs: 60_000
       })
     ).toThrow(/active|lease/i);
@@ -218,6 +264,7 @@ describe("public catalog durable control state", () => {
     const acquired = acquirePublicCatalogLeaseState(control(), {
       leaseId: "lease-current",
       now,
+      targetKey: primaryTargetKey(),
       ttlMs: 60_000
     });
 
@@ -228,6 +275,7 @@ describe("public catalog durable control state", () => {
         itemsCount: 1,
         leaseId: "lease-old",
         publishedRevision: acquired.revision,
+        publishedRuntimeTargetKey: primaryTargetKey(),
         requestId: "req-old",
         snapshotPath: "catalog/v1/releases/revision-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
       })
@@ -240,6 +288,7 @@ describe("public catalog durable control state", () => {
       itemsCount: 1,
       leaseId: "lease-current",
       publishedRevision: acquired.revision,
+      publishedRuntimeTargetKey: primaryTargetKey(),
       requestId: "req-current",
       snapshotPath: "catalog/v1/releases/revision-1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"
     });
@@ -599,6 +648,7 @@ describe("public catalog durable control state", () => {
       itemsCount: 1,
       leaseId: "lease-current",
       publishedRevision: 1,
+      publishedRuntimeTargetKey: primaryTargetKey(),
       requestId: "req-finalize-after-settings",
       snapshotPath: "catalog/v1/releases/revision-1-cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json"
     });
@@ -744,6 +794,7 @@ describe("public catalog durable control state", () => {
     await expect(repository.acquireLease({
       leaseId: "lease-contender",
       now,
+      targetKey: primaryTargetKey(),
       ttlMs: 60_000
     })).resolves.toBeNull();
 
@@ -769,6 +820,7 @@ describe("public catalog durable control state", () => {
     await expect(repository.acquireLease({
       leaseId: "lease-contender",
       now,
+      targetKey: primaryTargetKey(),
       ttlMs: 60_000
     })).resolves.toBeNull();
 
@@ -809,6 +861,7 @@ describe("public catalog durable control state", () => {
       itemsCount: 1,
       leaseId: "lease-current",
       publishedRevision: 1,
+      publishedRuntimeTargetKey: primaryTargetKey(),
       requestId: "req-finalize-race",
       snapshotPath: "catalog/v1/releases/revision-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
     })).rejects.toMatchObject({
@@ -823,3 +876,19 @@ describe("public catalog durable control state", () => {
     });
   });
 });
+
+function primaryTargetFixture(): PublicRuntimeTargetConfig {
+  return {
+    bucket: "web00-public-runtime",
+    catalogVersion: "v1",
+    manifestPath: "runtime/production/catalog/v1/manifest.json",
+    prefix: "runtime/production",
+    provider: "cloudru",
+    publicBaseUrl: "https://web00-public-runtime.s3-website.cloud.ru",
+    role: "primary"
+  };
+}
+
+function primaryTargetKey(): string {
+  return createPublicRuntimeTargetKey(primaryTargetFixture());
+}

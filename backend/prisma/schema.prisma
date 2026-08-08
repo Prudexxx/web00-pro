@@ -145,6 +145,7 @@ model PublicCatalogControl {
   showDemoInModal            Boolean   @default(false) @map("show_demo_in_modal")
   desiredRevision            Int       @default(1) @map("desired_revision")
   publishedRevision          Int       @default(0) @map("published_revision")
+  publishedRuntimeTargetKey  String?   @map("published_runtime_target_key") @db.Text
   syncStatus                 String    @default("pending") @map("sync_status") @db.Text
   currentSnapshotPath        String?   @map("current_snapshot_path") @db.Text
   currentSnapshotChecksum    String?   @map("current_snapshot_checksum") @db.Text

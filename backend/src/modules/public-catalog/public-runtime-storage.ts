@@ -79,6 +79,20 @@ export function normalizeRuntimePrefix(value: string): string {
   return assertSafePathSegmentPath(raw, "prefix");
 }
 
+export function assertConfiguredRuntimePrefix(
+  prefix: string,
+  role: "primary" | "shadow"
+): string {
+  const normalized = normalizeRuntimePrefix(prefix);
+  if (role === "primary" && normalized !== "runtime/production") {
+    throw storageConfigurationInvalid();
+  }
+  if (role === "shadow" && normalized !== "canary/shadow") {
+    throw storageConfigurationInvalid();
+  }
+  return normalized;
+}
+
 export function assertRuntimeObjectPath(path: string): string {
   const raw = String(path ?? "").trim();
   if (raw === "") throw storageConfigurationInvalid();

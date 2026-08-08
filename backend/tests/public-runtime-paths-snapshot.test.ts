@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   PUBLIC_RUNTIME_MANIFEST_PATH,
+  assertConfiguredRuntimePrefix,
   createPublicRuntimePathBuilder
 } from "../src/modules/public-catalog/public-runtime-storage.js";
 import {
@@ -88,6 +89,19 @@ describe("public runtime paths and catalog snapshot", () => {
 
     expect(PUBLIC_RUNTIME_MANIFEST_PATH).toBe("catalog/v1/manifest.json");
     expect(builder.manifestPath()).toBe("catalog/v1/manifest.json");
+  });
+
+  it("keeps generic path building separate from configured runtime prefix policy", () => {
+    expect(() =>
+      createPublicRuntimePathBuilder({
+        prefix: "",
+        publicBaseUrl: "https://web00-public-runtime.s3-website.cloud.ru"
+      }).manifestPath()
+    ).not.toThrow();
+    expect(() => assertConfiguredRuntimePrefix("", "primary")).toThrow(/runtime/i);
+    expect(assertConfiguredRuntimePrefix("runtime/production", "primary")).toBe("runtime/production");
+    expect(assertConfiguredRuntimePrefix("canary/shadow", "shadow")).toBe("canary/shadow");
+    expect(() => assertConfiguredRuntimePrefix("runtime/production", "shadow")).toThrow(/runtime/i);
   });
 
   it("includes both revision and SHA-256 in immutable snapshot paths", async () => {

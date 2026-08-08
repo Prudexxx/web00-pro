@@ -8,6 +8,10 @@ import {
   createPublicCatalogSyncService,
   type PublicCatalogSyncRepository
 } from "../src/modules/public-catalog/public-catalog-sync.service.js";
+import {
+  createPublicRuntimeTargetKey,
+  type PublicRuntimeTargetConfig
+} from "../src/modules/public-catalog/public-runtime-target.js";
 import type { PublicRuntimeStorage, RuntimeReadResult } from "../src/modules/public-catalog/public-runtime-storage.js";
 import type { PublicSiteRecord } from "../src/modules/public-catalog/public-catalog.types.js";
 
@@ -48,6 +52,7 @@ function control(overrides: Partial<PublicCatalogControlState> = {}): PublicCata
     lastSyncErrorCode: null,
     lastSyncRequestId: null,
     publishedRevision: 0,
+    publishedRuntimeTargetKey: null,
     showDemoInModal: false,
     syncLeaseExpiresAt: null,
     syncLeaseId: null,
@@ -71,6 +76,7 @@ function createRepository(overrides: Partial<PublicCatalogSyncRepository> = {}):
       currentSnapshotPath: input.snapshotPath,
       desiredRevision: input.publishedRevision,
       publishedRevision: input.publishedRevision,
+      publishedRuntimeTargetKey: input.publishedRuntimeTargetKey,
       syncStatus: "ready"
     })),
     listSnapshotSites: vi.fn().mockResolvedValue([siteRecord]),
@@ -168,7 +174,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       now: () => now,
       pathPrefix: "",
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-sync" });
@@ -215,7 +222,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const service = createPublicCatalogSyncService({
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-sha-mismatch" });
@@ -242,7 +250,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const service = createPublicCatalogSyncService({
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     await service.syncOnce({ requestId: "req-settings-snapshot" });
@@ -277,7 +286,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const service = createPublicCatalogSyncService({
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-public-fail" });
@@ -298,7 +308,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       maxPasses: 1,
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-lost-lease-before-manifest" });
@@ -322,7 +333,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const serviceA = createPublicCatalogSyncService({
       now: () => now,
       repository: snapshotFailureRepository,
-      storage: snapshotFailureStorage
+      storage: snapshotFailureStorage,
+      target: runtimeTargetFixture("")
     });
 
     const snapshotFailure = await serviceA.syncOnce({ requestId: "req-snapshot-fail" });
@@ -340,7 +352,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const serviceB = createPublicCatalogSyncService({
       now: () => now,
       repository: manifestFailureRepository,
-      storage: manifestFailureStorage
+      storage: manifestFailureStorage,
+      target: runtimeTargetFixture("")
     });
 
     const manifestFailure = await serviceB.syncOnce({ requestId: "req-manifest-fail" });
@@ -371,7 +384,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       maxPasses: 2,
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-edit-edit" });
@@ -406,7 +420,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const service = createPublicCatalogSyncService({
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-recover-manifest" });
@@ -444,7 +459,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       now: () => now,
       pathPrefix: "canary/shadow",
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("canary/shadow")
     });
 
     const result = await service.syncOnce({ requestId: "req-prefixed-recover" });
@@ -486,7 +502,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       now: () => now,
       pathPrefix: "canary/shadow",
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("canary/shadow")
     });
 
     await service.syncOnce({ requestId: "req-prefixed-reject-unprefixed-snapshot" });
@@ -516,7 +533,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       now: () => now,
       pathPrefix: "canary/shadow",
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("canary/shadow")
     });
 
     await service.syncOnce({ requestId: "req-prefixed-reject-wrong-url" });
@@ -550,7 +568,8 @@ describe("public catalog sync service manifest-last protocol", () => {
       now: () => now,
       pathPrefix: "canary/shadow",
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("canary/shadow")
     });
 
     const result = await service.syncOnce({ requestId: "req-prefixed-ignore-unprefixed" });
@@ -579,6 +598,7 @@ describe("public catalog sync service manifest-last protocol", () => {
       currentSnapshotPath: "canary/shadow/catalog/v1/releases/revision-4-clean.json",
       desiredRevision: 4,
       publishedRevision: 4,
+      publishedRuntimeTargetKey: runtimeTargetKey(""),
       syncStatus: "ready"
     });
     const readCurrentState = vi.fn(async () => cleanState);
@@ -592,7 +612,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const service = createPublicCatalogSyncService({
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-clean-ready" });
@@ -607,6 +628,39 @@ describe("public catalog sync service manifest-last protocol", () => {
     });
     expect(storage.operations).toEqual([]);
     expect(readCurrentState).toHaveBeenCalledTimes(1);
+    expect(repository.finalizeLease).not.toHaveBeenCalled();
+  });
+
+  it("returns pending without storage writes when durable state is ready for a different target", async () => {
+    const readCurrentState = vi.fn(async () => control({
+      desiredRevision: 4,
+      publishedRevision: 4,
+      publishedRuntimeTargetKey: runtimeTargetKey("canary/shadow"),
+      syncStatus: "ready"
+    }));
+    const repository = {
+      ...createRepository({
+        acquireLease: vi.fn().mockResolvedValue(null)
+      }),
+      readCurrentState
+    } as PublicCatalogSyncRepository & { readCurrentState: typeof readCurrentState };
+    const storage = createStorage();
+    const service = createPublicCatalogSyncService({
+      now: () => now,
+      repository,
+      storage,
+      target: runtimeTargetFixture("")
+    });
+
+    const result = await service.syncOnce({ requestId: "req-target-mismatch" });
+
+    expect(result).toEqual({
+      desiredRevision: 4,
+      publishedRevision: 4,
+      requestId: "req-target-mismatch",
+      status: "pending"
+    });
+    expect(storage.operations).toEqual([]);
     expect(repository.finalizeLease).not.toHaveBeenCalled();
   });
 
@@ -629,7 +683,8 @@ describe("public catalog sync service manifest-last protocol", () => {
     const service = createPublicCatalogSyncService({
       now: () => now,
       repository,
-      storage
+      storage,
+      target: runtimeTargetFixture("")
     });
 
     const result = await service.syncOnce({ requestId: "req-active-lease" });
@@ -644,3 +699,23 @@ describe("public catalog sync service manifest-last protocol", () => {
     expect(repository.finalizeLease).not.toHaveBeenCalled();
   });
 });
+
+function runtimeTargetFixture(prefix: string): PublicRuntimeTargetConfig {
+  const normalizedPrefix = prefix.replace(/^\/+|\/+$/g, "");
+  const manifestPath = normalizedPrefix === ""
+    ? "catalog/v1/manifest.json"
+    : `${normalizedPrefix}/catalog/v1/manifest.json`;
+  return {
+    bucket: "web00-public-runtime",
+    catalogVersion: "v1",
+    manifestPath,
+    prefix: normalizedPrefix,
+    provider: "cloudru",
+    publicBaseUrl: "https://web00-public-runtime.s3-website.cloud.ru",
+    role: normalizedPrefix === "canary/shadow" ? "shadow" : "primary"
+  };
+}
+
+function runtimeTargetKey(prefix: string): string {
+  return createPublicRuntimeTargetKey(runtimeTargetFixture(prefix));
+}
