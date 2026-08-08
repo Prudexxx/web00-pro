@@ -62,7 +62,12 @@ import { createPrismaStorageCleanupRepository } from "./modules/storage-cleanup/
 import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cleanup.worker.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
+import {
+  createPrismaPublicCatalogControlStatusReader,
+  updatePublicCatalogSettings
+} from "./modules/public-catalog/public-catalog-control.repository.js";
 import { createPublicCatalogReconciler } from "./modules/public-catalog/public-catalog-reconciler.js";
+import type { PublicCatalogSnapshotSettings } from "./modules/public-catalog/public-catalog-sync.service.js";
 import { createPublicRuntimePrimaryDependencies } from "./modules/public-catalog/public-runtime-primary.js";
 import { createPublicRuntimeShadowDependencies } from "./modules/public-catalog/public-runtime-shadow.js";
 import {
@@ -290,6 +295,25 @@ export function startServer(options: StartServerOptions): StartedServer {
     }),
     pagesPublicationService,
     publicationService: createAdminPublicationService(),
+    ...(publicCatalogReconciler === null
+      ? {}
+      : {
+          publicCatalogSettings: {
+            reconciler: publicCatalogReconciler,
+            statusReader: createPrismaPublicCatalogControlStatusReader({ prisma }),
+            updateSettings: async (
+              input: PublicCatalogSnapshotSettings,
+              context: { actor: AuthenticatedPrincipal; requestId: string }
+            ) =>
+              prisma.$transaction((tx) =>
+                updatePublicCatalogSettings(tx, input, {
+                  actorUserId: context.actor.id,
+                  reasonContext: { showDemoInModal: input.showDemoInModal },
+                  requestId: context.requestId
+                })
+              )
+          }
+        }),
     ...(publicRuntimeShadow === null ? {} : { publicRuntimeShadow }),
     userService: createAdminUserService({
       repository: createPrismaAdminUserRepository({ prisma })

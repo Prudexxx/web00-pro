@@ -168,6 +168,175 @@ describe("admin site editor screen", () => {
     expect(demoMode.value).toBe("none");
   });
 
+  it("keeps the demo modal switch off and disabled when the durable catalog setting is unavailable", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.reject({ code: "PUBLIC_CATALOG_SETUP_REQUIRED", requestId: "req_demo_status", status: 503 });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      createRetryBackoffMs: 0,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    const toggle = demoSwitch(screen.element);
+    const status = demoSwitchStatus(screen.element);
+
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.getAttribute("data-state")).toBe("off");
+    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(status.textContent).toBe("Ошибка");
+
+    toggle.dispatchEvent(fakeEvent("click"));
+    await flushPromises();
+
+    expect(apiClient.requestJson.mock.calls.map(([path]) => path)).toEqual([
+      "/api/admin/categories?limit=100&page=1",
+      "/api/admin/public-catalog/status"
+    ]);
+  });
+
+  it.each([
+    [false, "false", "off"],
+    [true, "true", "on"]
+  ])("renders the demo modal switch from confirmed durable status %s", async (showDemoInModal, expectedChecked, expectedState) => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.resolve({ data: { showDemoInModal, syncStatus: "ready" } });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      createRetryBackoffMs: 0,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    const toggle = demoSwitch(screen.element);
+
+    expect(toggle.getAttribute("aria-checked")).toBe(expectedChecked);
+    expect(toggle.getAttribute("data-state")).toBe(expectedState);
+    expect(toggle.hasAttribute("disabled")).toBe(false);
+    expect(toggle.getAttribute("aria-disabled")).toBe("false");
+    expect(demoSwitchStatus(screen.element).textContent).toBe("Сохранено");
+  });
+
+  it("persists the demo modal switch through the Atomic settings API and waits for ready state", async () => {
+    const documentRef = createFakeDocument();
+    let statusReads = 0;
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          statusReads += 1;
+          return Promise.resolve({
+            data: {
+              showDemoInModal: statusReads > 1,
+              syncStatus: "ready"
+            }
+          });
+        }
+        if (requestPath === "/api/admin/public-catalog/settings") {
+          return Promise.resolve({ data: { showDemoInModal: options.body.showDemoInModal, sync: { status: "pending" } } });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      createRetryBackoffMs: 0,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      pollIntervalMs: 0,
+      role: "admin"
+    });
+
+    await screen.load();
+    demoSwitch(screen.element).dispatchEvent(fakeEvent("click"));
+    await waitFor(() => demoSwitchStatus(screen.element).textContent === "Сохранено");
+
+    const patchCall = apiClient.requestJson.mock.calls.find(([path]) => path === "/api/admin/public-catalog/settings");
+
+    expect(patchCall).toEqual([
+      "/api/admin/public-catalog/settings",
+      expect.objectContaining({
+        body: { showDemoInModal: true },
+        headers: { "X-CSRF-Token": "web00-admin" },
+        method: "PATCH"
+      })
+    ]);
+    expect(demoSwitch(screen.element).getAttribute("aria-checked")).toBe("true");
+    expect(demoSwitch(screen.element).getAttribute("data-state")).toBe("on");
+  });
+
+  it("rolls the demo modal switch back to the last confirmed state when PATCH fails", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: "ready" } });
+        }
+        if (requestPath === "/api/admin/public-catalog/settings") {
+          return Promise.reject({ code: "PUBLIC_CATALOG_SYNC_CONFLICT", requestId: "req_demo_patch", status: 409 });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      createRetryBackoffMs: 0,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+    demoSwitch(screen.element).dispatchEvent(fakeEvent("click"));
+    await waitFor(() => demoSwitchStatus(screen.element).textContent.includes("req_demo_patch"));
+
+    expect(demoSwitch(screen.element).getAttribute("aria-checked")).toBe("false");
+    expect(demoSwitch(screen.element).getAttribute("data-state")).toBe("off");
+    expect(apiClient.requestJson.mock.calls.filter(([path]) => path === "/api/admin/public-catalog/settings")).toHaveLength(1);
+  });
+
   it("loads edit data and keeps editor patch payloads away from admin-only fields", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {
@@ -221,18 +390,34 @@ describe("admin site editor screen", () => {
         if (requestPath.startsWith("/api/admin/categories")) {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: "ready" } });
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
         if (options.method === "GET") {
+          if (requestPath === "/api/admin/publication/pages/card/crm-site") {
+            return Promise.resolve({
+              data: {
+                blobSha: "old-card-sha",
+                card: { id: "crm-site", slug: "crm-site" },
+                cardId: "crm-site"
+              }
+            });
+          }
           return Promise.resolve({ data: siteFixture() });
         }
-        if (requestPath.endsWith("/publication") && options.method === "POST") {
+        if (requestPath === "/api/admin/publication/pages" && options.method === "POST") {
           return Promise.resolve({ data: publicationDto({
             buttonLabel: "Опубликовано",
             retryable: false,
             stableStatus: "Опубликовано",
-            status: "succeeded"
+            status: "succeeded",
+            statusUrl: "/api/admin/publication/pages/00000000-0000-4000-8000-00000000feed"
           }) });
         }
-        return Promise.resolve({ data: { ...siteFixture(), ...options.body } });
+        return Promise.resolve({ data: { ...siteFixture({ previewImageUrl: "https://cdn.example.test/preview.webp" }), ...options.body } });
       })
     };
     const onSaved = vi.fn();
@@ -249,7 +434,9 @@ describe("admin site editor screen", () => {
 
     await screen.load();
     screen.element.querySelector('[data-section="advanced-site-settings"]').setAttribute("open", "");
-    setValue(screen.element, "slug", "admin-slug");
+    const slug = screen.element.querySelector('[name="slug"]');
+    expect(slug).not.toBeNull();
+    expect(slug.value).toBe("crm-site");
     const featured = screen.element.querySelector('[name="featured"]');
     featured.checked = true;
     screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
@@ -257,8 +444,7 @@ describe("admin site editor screen", () => {
 
     const patchBody = apiClient.requestJson.mock.calls.find(([, options]) => options.method === "PATCH")[1].body;
     expect(patchBody).toMatchObject({
-      featured: true,
-      slug: "admin-slug"
+      featured: true
     });
   });
 
@@ -1740,6 +1926,18 @@ function setValue(root, name, value) {
   input.value = value;
   input.dispatchEvent(fakeEvent("input"));
   input.dispatchEvent(fakeEvent("change"));
+}
+
+function demoSwitch(root) {
+  const toggle = root.querySelector('[data-action="toggle-demo-modal"]');
+  expect(toggle).not.toBeNull();
+  return toggle;
+}
+
+function demoSwitchStatus(root) {
+  const status = root.querySelector("[data-demo-switch-status]");
+  expect(status).not.toBeNull();
+  return status;
 }
 
 function setFiles(root, name, files) {

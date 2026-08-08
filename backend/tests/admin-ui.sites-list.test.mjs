@@ -113,6 +113,63 @@ describe("admin sites list screen", () => {
     expect(onEdit).toHaveBeenCalledWith("00000000-0000-4000-8000-000000000101");
   });
 
+  it("renders draft and published lifecycle actions inline without overflow menus", async () => {
+    const documentRef = createFakeDocument();
+    const apiClient = {
+      requestJson: vi.fn((requestPath) => {
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        return Promise.resolve({
+          data: [
+            siteFixture({
+              active: true,
+              deletedAt: null,
+              id: "00000000-0000-4000-8000-000000000101",
+              slug: "draft-site",
+              status: "draft",
+              title: "Draft Site"
+            }),
+            siteFixture({
+              active: true,
+              deletedAt: null,
+              id: "00000000-0000-4000-8000-000000000102",
+              slug: "published-site",
+              status: "published",
+              title: "Published Site"
+            })
+          ],
+          meta: metaFixture(2)
+        });
+      })
+    };
+    const screen = createSitesListScreen({
+      apiClient,
+      documentRef,
+      onCreate: vi.fn(),
+      onEdit: vi.fn(),
+      onImages: vi.fn(),
+      onStatus: vi.fn(),
+      role: "admin"
+    });
+
+    await screen.load();
+
+    expect(screen.element.textContent).not.toContain("⋯");
+    expect(elementsWithAttribute(screen.element, "data-action", "site-row-overflow")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-overflow-menu", "true")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-action", "edit-site")).toHaveLength(2);
+    expect(elementsWithAttribute(screen.element, "data-action", "manage-images")).toHaveLength(2);
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "publish")).toHaveLength(1);
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "unpublish")).toHaveLength(1);
+    expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "soft-delete")).toHaveLength(2);
+
+    elementsWithAttribute(screen.element, "data-lifecycle-action", "publish")[0].dispatchEvent(fakeEvent("click"));
+
+    expect(screen.element.textContent).toContain("Сайт станет доступен публичному каталогу после подтверждения сервером.");
+    expect(screen.element.textContent).toContain("Сайт: Draft Site / draft-site.");
+  });
+
   it("renders loading, empty, filtered-empty, and error states", async () => {
     const documentRef = createFakeDocument();
     const siteResponses = [
@@ -229,7 +286,16 @@ describe("admin sites list screen", () => {
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "soft-delete")).toHaveLength(0);
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "publish")).toHaveLength(0);
     expect(elementsWithAttribute(screen.element, "data-lifecycle-action", "unpublish")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-action", "edit-site")).toHaveLength(0);
     expect(elementsWithAttribute(screen.element, "data-action", "manage-images")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-action", "site-row-overflow")).toHaveLength(0);
+    expect(elementsWithAttribute(screen.element, "data-overflow-menu", "true")).toHaveLength(0);
+    expect(screen.element.textContent).not.toContain("⋯");
+
+    elementsWithAttribute(screen.element, "data-lifecycle-action", "restore")[0].dispatchEvent(fakeEvent("click"));
+
+    expect(screen.element.textContent).toContain("Сайт вернётся из удалённых после подтверждения сервером.");
+    expect(screen.element.textContent).toContain(`Сайт: Temporary deleted cleanup site / ${CLEANUP_SITE_SLUG}.`);
   });
 });
 

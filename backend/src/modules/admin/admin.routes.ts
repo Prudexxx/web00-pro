@@ -19,6 +19,10 @@ import type {
   PagesCatalogPublicationService
 } from "./publication/publication.service.js";
 import { createAdminPublicRuntimeMaintenanceRouter } from "./maintenance/public-runtime.routes.js";
+import {
+  createAdminPublicCatalogSettingsRouter,
+  type AdminPublicCatalogSettingsRouterOptions
+} from "./public-catalog/public-catalog-settings.routes.js";
 import type { PublicRuntimeShadowDependencies } from "../public-catalog/public-runtime-shadow.js";
 
 export interface AdminRouterOptions {
@@ -30,6 +34,7 @@ export interface AdminRouterOptions {
   now?: () => Date;
   pagesPublicationService?: PagesCatalogPublicationService;
   publicationService?: AdminPublicationService;
+  publicCatalogSettings?: AdminPublicCatalogSettingsRouterOptions;
   publicRuntimeShadow?: PublicRuntimeShadowDependencies;
   siteService: AdminSiteService;
   userService?: AdminUserService;
@@ -79,6 +84,9 @@ export function createAdminRouter(options: AdminRouterOptions): Router {
     router.use(createAdminPublicRuntimeMaintenanceRouter({
       dependencies: options.publicRuntimeShadow
     }));
+  }
+  if (options.publicCatalogSettings !== undefined) {
+    router.use(createAdminPublicCatalogSettingsRouter(options.publicCatalogSettings));
   }
   router.use(createAdminAuditLogRouter({ service: options.auditLogService }));
 

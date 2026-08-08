@@ -1017,7 +1017,8 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
     );
   }
 
-  const lifecycleOverflow = createSiteLifecycleOverflow({
+  const isDeleted = isDeletedSite(site);
+  const lifecycleActions = createSiteLifecycleActionButtons({
     documentRef,
     onLifecycleAction,
     role,
@@ -1034,18 +1035,22 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
         documentRef,
         className: "admin-site-actions",
         children: [
-          createElement("button", {
-            documentRef,
-            text: "Редактировать",
-            attributes: {
-              "data-action": "edit-site",
-              "data-site-id": site.id,
-              type: "button"
-            },
-            on: {
-              click: () => onEdit(site.id)
-            }
-          }),
+          ...(isDeleted
+            ? []
+            : [
+                createElement("button", {
+                  documentRef,
+                  text: "Редактировать",
+                  attributes: {
+                    "data-action": "edit-site",
+                    "data-site-id": site.id,
+                    type: "button"
+                  },
+                  on: {
+                    click: () => onEdit(site.id)
+                  }
+                })
+              ]),
           ...(canManageSiteImages(site, role)
             ? [
                 createElement("button", {
@@ -1062,9 +1067,9 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
                 })
               ]
             : []),
+          ...lifecycleActions
         ]
-      }),
-      ...(lifecycleOverflow === null ? [] : [lifecycleOverflow])
+      })
     ]
   }));
 
@@ -1074,119 +1079,23 @@ function createSiteRow({ documentRef, onEdit, onImages, onLifecycleAction, role,
   });
 }
 
-function createSiteLifecycleOverflow({ documentRef, onLifecycleAction, role, site }) {
+function createSiteLifecycleActionButtons({ documentRef, onLifecycleAction, role, site }) {
   const actions = getAvailableLifecycleActions(site, role);
 
-  if (actions.length === 0) {
-    return null;
-  }
-
-  const menuId = `admin-site-overflow-${site.id}`;
-  const menu = createElement("div", {
-    documentRef,
-    className: "admin-site-overflow-menu",
-    attributes: {
-      "data-overflow-menu": "true",
-      hidden: "",
-      id: menuId,
-      role: "menu"
-    },
-    children: actions.map((action) => createElement("button", {
+  return actions.map((action) => createElement("button", {
       documentRef,
       text: action.label,
       attributes: {
         "data-lifecycle-action": action.id,
         "data-site-id": site.id,
-        role: "menuitem",
         type: "button"
       },
       on: {
         click: (event) => {
-          closeSiteOverflowMenu(toggle, menu);
           onLifecycleAction(site, action.id, event.currentTarget ?? event.target);
         }
       }
-    }))
-  });
-  const toggle = createElement("button", {
-    documentRef,
-    className: "admin-site-overflow-toggle",
-    text: "⋯",
-    attributes: {
-      "aria-controls": menuId,
-      "aria-expanded": "false",
-      "aria-haspopup": "menu",
-      "aria-label": `Действия сайта: ${site.title}`,
-      "data-action": "site-row-overflow",
-      type: "button"
-    },
-    on: {
-      click: () => {
-        setSiteOverflowMenuOpen(toggle, menu, menu.hasAttribute("hidden"));
-      }
-    }
-  });
-
-  toggle.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowDown" && event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-
-    event.preventDefault?.();
-    setSiteOverflowMenuOpen(toggle, menu, true);
-    menu.querySelector("button")?.focus?.();
-  });
-  menu.addEventListener("keydown", (event) => {
-    const items = Array.from(menu.querySelectorAll("button"));
-    const currentIndex = items.indexOf(event.target);
-
-    if (event.key === "Escape") {
-      event.preventDefault?.();
-      closeSiteOverflowMenu(toggle, menu);
-      toggle.focus?.();
-      return;
-    }
-
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault?.();
-      const direction = event.key === "ArrowDown" ? 1 : -1;
-      const nextIndex = currentIndex < 0
-        ? 0
-        : (currentIndex + direction + items.length) % items.length;
-
-      items[nextIndex]?.focus?.();
-      return;
-    }
-
-    if (event.key === "Home" || event.key === "End") {
-      event.preventDefault?.();
-      const nextIndex = event.key === "Home" ? 0 : items.length - 1;
-
-      items[nextIndex]?.focus?.();
-    }
-  });
-
-  return createElement("div", {
-    documentRef,
-    className: "admin-site-overflow",
-    children: [
-      toggle,
-      menu
-    ]
-  });
-}
-
-function setSiteOverflowMenuOpen(toggle, menu, open) {
-  if (open) {
-    menu.removeAttribute("hidden");
-  } else {
-    menu.setAttribute("hidden", "");
-  }
-  toggle.setAttribute("aria-expanded", String(open));
-}
-
-function closeSiteOverflowMenu(toggle, menu) {
-  setSiteOverflowMenuOpen(toggle, menu, false);
+  }));
 }
 
 function tableCell(documentRef, label, text) {
@@ -1217,8 +1126,8 @@ function canManageSiteImages(site, role) {
   if (typeof site !== "object" || site === null) {
     return false;
   }
-  if ("deletedAt" in site && site.deletedAt !== null && site.deletedAt !== undefined) {
-    return role === "admin";
+  if (isDeletedSite(site)) {
+    return false;
   }
   if ("active" in site && site.active !== true) {
     return false;
@@ -1231,6 +1140,10 @@ function canManageSiteImages(site, role) {
   }
 
   return role === "admin" && (site.status === "draft" || site.status === "published");
+}
+
+function isDeletedSite(site) {
+  return typeof site === "object" && site !== null && site.deletedAt !== undefined && site.deletedAt !== null;
 }
 
 function actionDescriptor(id) {

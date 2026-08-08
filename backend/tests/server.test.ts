@@ -262,6 +262,118 @@ describe("app/server auth integration boundary", () => {
     vi.doUnmock("../src/modules/images/image-processor.js");
   });
 
+  it("wires Atomic-native public catalog settings dependencies into the admin router", async () => {
+    vi.resetModules();
+    const listen = vi.fn();
+    const close = vi.fn();
+    const server = { close, listen } as unknown as Server;
+    const createAdminRouter = vi.fn(() => express.Router());
+    const requestReconcile = vi.fn();
+    const reconciler = {
+      requestReconcile,
+      start: vi.fn(),
+      stop: vi.fn(async () => undefined)
+    };
+
+    vi.doMock("node:http", () => ({
+      createServer: vi.fn(() => server)
+    }));
+    vi.doMock("../src/modules/admin/admin.routes.js", () => ({
+      createAdminRouter
+    }));
+    vi.doMock("../src/modules/public-catalog/public-runtime-primary.js", () => ({
+      createPublicRuntimePrimaryDependencies: vi.fn(() => ({
+        storage: {},
+        syncService: { syncOnce: vi.fn() },
+        targetKey: "runtime/production"
+      }))
+    }));
+    vi.doMock("../src/modules/public-catalog/public-catalog-reconciler.js", () => ({
+      createPublicCatalogReconciler: vi.fn(() => reconciler)
+    }));
+
+    const { startServer } = await import("../src/server.js");
+
+    startServer({
+      authEnv: {
+        ACCESS_TOKEN_TTL_SECONDS: 900,
+        AUTH_FINGERPRINT_SECRET: Buffer.alloc(32, 2),
+        AUTH_FINGERPRINT_SECRET_BASE64: Buffer.alloc(32, 2).toString("base64"),
+        JWT_ACCESS_SECRET: Buffer.alloc(32, 1),
+        JWT_ACCESS_SECRET_BASE64: Buffer.alloc(32, 1).toString("base64"),
+        JWT_AUDIENCE: "web00-admin",
+        JWT_ISSUER: "web00-backend",
+        REFRESH_TOKEN_TTL_SECONDS: 604_800,
+        TRUST_PROXY_HOPS: 1
+      },
+      createPrisma: vi.fn(() => ({
+        $disconnect: vi.fn(),
+        $transaction: vi.fn()
+      }) as never),
+      databaseEnv: { DATABASE_URL: "postgresql://user:pass@127.0.0.1:5432/web00_backend_dev" },
+      env: { ...testEnv, PORT: 53_203 },
+      logger: { log: vi.fn() },
+      publicCorsConfig: {
+        allowedMethods: ["GET", "HEAD", "OPTIONS"],
+        allowedOrigins: new Set(["https://prudexxx.github.io"]),
+        maxOrigins: 10
+      },
+      publicRuntimeShadowEnv: {
+        primary: {
+          enabled: true,
+          storage: {
+            accessKeyId: "public-runtime-access-key",
+            bucket: "web00-public-runtime",
+            endpoint: "https://s3.cloud.ru",
+            prefix: "runtime/production",
+            publicBaseUrl: "https://web00-public-runtime.website.cloud.ru",
+            region: "ru-central-1",
+            secretAccessKey: "public-runtime-secret-key"
+          },
+          target: {
+            bucket: "web00-public-runtime",
+            catalogVersion: "v1",
+            manifestPath: "runtime/production/catalog/v1/manifest.json",
+            prefix: "runtime/production",
+            provider: "cloudru",
+            publicBaseUrl: "https://web00-public-runtime.website.cloud.ru",
+            role: "primary"
+          },
+          targetKey: "runtime/production"
+        },
+        shadow: { enabled: false }
+      },
+      registerSignalHandlers: false,
+      storageConfig: {
+        bucket: "web00-catalog-images",
+        credentials: {
+          serviceRoleKey: "sb_secret_fake",
+          supabaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co"
+        },
+        publicBaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co",
+        workerEnabled: false,
+        workerPollIntervalSeconds: 60
+      }
+    });
+
+    expect(createAdminRouter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        publicCatalogSettings: expect.objectContaining({
+          reconciler,
+          statusReader: expect.objectContaining({
+            readState: expect.any(Function)
+          }),
+          updateSettings: expect.any(Function)
+        })
+      })
+    );
+
+    vi.doUnmock("node:http");
+    vi.doUnmock("../src/modules/admin/admin.routes.js");
+    vi.doUnmock("../src/modules/public-catalog/public-runtime-primary.js");
+    vi.doUnmock("../src/modules/public-catalog/public-catalog-reconciler.js");
+  });
+
   it("wires public CORS and readiness through app/server composition", () => {
     const appSource = readFileSync(join(process.cwd(), "src", "app.ts"), "utf8");
     const serverSource = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
