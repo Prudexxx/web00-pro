@@ -49,7 +49,6 @@ const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
 const DRAFT_AUTOSAVE_MS = 1000;
 const CREATE_RETRY_BACKOFF_MS = 1000;
 const PUBLICATION_POLL_INTERVAL_MS = 1500;
-const PUBLICATION_RECONNECT_STORAGE_KEY = "web00_admin_publication_reconnect_v1";
 const DEMO_MODE_OPTIONS = Object.freeze([
   {
     label: "Без демо",
@@ -82,100 +81,6 @@ const REQUIRED_FIELDS = new Set(["categoryId", "shortDescription", "slug", "titl
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVALID_RESPONSE_MESSAGE = "Сервер вернул некорректный ответ.";
 const DRAFT_STORAGE_WARNING = "Локальное автосохранение недоступно.";
-const PUBLICATION_BUSY_STATUSES = new Set([
-  "deploying",
-  "merge_queued",
-  "merged",
-  "preparing",
-  "pull_request_open",
-  "queued",
-  "retry_wait",
-  "running",
-  "validating"
-]);
-const PUBLICATION_TERMINAL_STATUSES = new Set([
-  "cancelled",
-  "failed",
-  "published",
-  "setup_required",
-  "succeeded",
-  "superseded",
-  "version_conflict"
-]);
-const PUBLICATION_ALLOWED_LABELS = new Set([
-  "Конфликт версии",
-  "Опубликовать",
-  "Ошибка публикации",
-  "Публикуется…",
-  "Публикуется",
-  "Опубликовано",
-  "Повторить публикацию",
-  "Проверяется",
-  "Развёртывается",
-  "Состояние обновлено"
-]);
-const PUBLICATION_ALLOWED_STABLE_STATUSES = new Set([
-  "Конфликт версии",
-  "Не опубликовано",
-  "Опубликовано",
-  "Ошибка публикации",
-  "Публикуется",
-  "Проверяется",
-  "Развёртывается",
-  "Состояние обновлено"
-]);
-const PUBLICATION_DTO_TUPLES = Object.freeze({
-  cancelled: [
-    ["Опубликовать", "Не опубликовано", true]
-  ],
-  deploying: [
-    ["Развёртывается", "Развёртывается", false]
-  ],
-  failed: [
-    ["Ошибка публикации", "Ошибка публикации", true],
-    ["Повторить публикацию", "Ошибка публикации", true]
-  ],
-  merge_queued: [
-    ["Проверяется", "Проверяется", false]
-  ],
-  merged: [
-    ["Развёртывается", "Развёртывается", false]
-  ],
-  preparing: [
-    ["Публикуется", "Публикуется", false]
-  ],
-  published: [
-    ["Опубликовано", "Опубликовано", false]
-  ],
-  pull_request_open: [
-    ["Публикуется", "Публикуется", false]
-  ],
-  queued: [
-    ["Публикуется…", "Публикуется", false]
-  ],
-  retry_wait: [
-    ["Публикуется…", "Публикуется", false]
-  ],
-  running: [
-    ["Публикуется…", "Публикуется", false]
-  ],
-  succeeded: [
-    ["Опубликовано", "Опубликовано", false],
-    ["Опубликовать", "Не опубликовано", false]
-  ],
-  superseded: [
-    ["Состояние обновлено", "Состояние обновлено", false]
-  ],
-  setup_required: [
-    ["Ошибка публикации", "Ошибка публикации", true]
-  ],
-  validating: [
-    ["Проверяется", "Проверяется", false]
-  ],
-  version_conflict: [
-    ["Конфликт версии", "Конфликт версии", false]
-  ]
-});
 
 export function createSiteEditorScreen(options) {
   const documentRef = options?.documentRef ?? document;
@@ -218,9 +123,6 @@ export function createSiteEditorScreen(options) {
   let slugManuallyEdited = mode !== "create";
   let updatingSlug = false;
   let publicationPollController = null;
-  let publicationPollTimer = null;
-  let activePublicationOperationId = null;
-  let publicationAttempt = null;
   let publicationRetrySite = null;
   let demoModalConfirmed = false;
   let demoModalDesired = false;
@@ -316,12 +218,8 @@ export function createSiteEditorScreen(options) {
       renderForm(clientRequestIdError === null ? {} : {
         _form: [safeMessage(clientRequestIdError)]
       });
-      const reconnected = await reconnectRememberedPublication();
-
-      if (!reconnected) {
-        statusRegion.textContent = "Форма готова.";
-        onStatus("Форма готова.");
-      }
+      statusRegion.textContent = "Форма готова.";
+      onStatus("Форма готова.");
     } catch (error) {
       if (controller.signal.aborted || destroyed) {
         return;
@@ -698,22 +596,13 @@ export function createSiteEditorScreen(options) {
 
   async function finishPublicationSaga(saved, form, options = {}) {
     try {
-      const result = await startPublication(saved, form, mode === "create" ? "create" : "update");
+      const result = await startPublication(saved, form);
 
-      if (result.status === "succeeded" || result.status === "published") {
-        finishSuccessfulPublication(saved, form, {
-          notify: options.preNotified !== true
-        });
-        return result;
-      }
-      if (result.status === "superseded") {
-        await load();
-        statusRegion.textContent = result.stableStatus;
-        onStatus(result.stableStatus);
-        return result;
-      }
-
-      throw publicationTerminalError(result);
+      finishSuccessfulPublication(result.site, form, {
+        message: result.message,
+        notify: options.preNotified !== true
+      });
+      return result;
     } catch (error) {
       if (destroyed && error?.code === "PUBLICATION_ABORTED") {
         return null;
@@ -725,18 +614,14 @@ export function createSiteEditorScreen(options) {
       }
 
       setSaveState(form, "publicationFailed");
-      if (typeof error?.publicationButtonLabel === "string") {
-        setPublicationButtonText(form, error.publicationButtonLabel);
-      }
       renderFormLevelError(form, safeMessage(error), readRequestId(error));
       renderErrorStatus(error);
       return null;
     }
   }
 
-  async function startPublication(saved, form, action) {
+  async function startPublication(saved, form) {
     const siteIdForPublication = readSiteIdForPublication(saved);
-    const attempt = readOrCreatePublicationAttempt(siteIdForPublication, action);
 
     if (destroyed) {
       throw publicationAbortedError();
@@ -748,162 +633,83 @@ export function createSiteEditorScreen(options) {
     statusRegion.textContent = "Публикуем...";
     onStatus("Публикуем...");
 
-    const cardId = readCardIdForPublication(saved);
-    const currentCard = await readCurrentPagesCatalogCard(cardId);
-    const response = await apiClient.requestJson("/api/admin/publication/pages", {
-      body: {
-        action,
-        card: action === "delete" ? null : buildDirectPagesCatalogCard(saved),
-        cardId,
-        expectedBlobSha: action === "create" ? null : currentCard.blobSha,
-        lifecycleAction: action === "delete" ? "delete" : "publish",
-        requestId: attempt.idempotencyKey,
-        siteId: siteIdForPublication
-      },
-      credentials: "same-origin",
-      headers: {
-        "X-CSRF-Token": "web00-admin"
-      },
-      method: "POST",
-      signal: publicationPollController.signal
-    });
-    if (destroyed) {
-      throw publicationAbortedError();
-    }
-    const operation = readPublicationDto(response, null, { expectedAction: action });
-    rememberPublicationOperation(attempt, operation.operationId);
+    const publishedSite = saved?.status === "published"
+      ? saved
+      : await publishSavedSite(siteIdForPublication);
+    const message = await observePublicCatalogAfterPublication();
 
-    persistPublicationReconnect({
-      operationId: operation.operationId,
-      prNumber: operation.prNumber,
-      requestId: operation.requestId,
-      siteId: siteIdForPublication
-    });
-
-    return observePublicationOperation(operation, form, {
-      expectedOperationId: operation.operationId,
-      expectedAction: action,
-      immediate: true,
-      waitForTerminal: true
-    });
+    return {
+      message,
+      site: publishedSite,
+      status: message === null ? "published" : "warning"
+    };
   }
 
-  async function observePublicationOperation(operation, form, options = {}) {
-    if (destroyed) {
-      throw publicationAbortedError();
-    }
+  async function publishSavedSite(siteIdForPublication) {
+    try {
+      const response = await apiClient.requestJson(`${sitePath(siteIdForPublication)}/publish`, {
+        headers: {
+          "X-Request-Id": createStableClientRequestId()
+        },
+        method: "POST",
+        signal: publicationPollController?.signal
+      });
+      const site = readSiteResponseEntity(response);
 
-    const normalized = readPublicationDto(operation, options.expectedOperationId, {
-      expectedAction: options.expectedAction ?? null
-    });
-
-    activePublicationOperationId = normalized.operationId;
-    applyPublicationDto(normalized, form);
-
-    if (PUBLICATION_TERMINAL_STATUSES.has(normalized.status)) {
-      activePublicationOperationId = null;
-      clearPublicationPollTimer();
-      clearPublicationReconnect();
-      clearPublicationAttemptForOperation(normalized.operationId);
-      return normalized;
-    }
-
-    if (options.waitForTerminal === true) {
-      if (options.immediate !== true) {
-        await wait(publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50);
+      if (site.status !== "published") {
+        throw invalidSaveResponse();
       }
-      if (destroyed || activePublicationOperationId !== normalized.operationId) {
+
+      return site;
+    } catch (error) {
+      if (!isTransientPublicationStatusError(error)) {
+        throw error;
+      }
+
+      const verified = await verifySavedSiteById(siteIdForPublication);
+      if (verified.status !== "published") {
+        throw error;
+      }
+
+      return verified;
+    }
+  }
+
+  async function observePublicCatalogAfterPublication() {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (destroyed) {
         throw publicationAbortedError();
       }
-      const next = await fetchPublicationStatus(normalized);
+      if (attempt > 0) {
+        await wait(publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50);
+      }
+      if (destroyed) {
+        throw publicationAbortedError();
+      }
 
-      return observePublicationOperation(next, form, {
-        expectedOperationId: normalized.operationId,
-        expectedAction: options.expectedAction ?? null,
-        immediate: false,
-        waitForTerminal: true
-      });
-    }
-
-    if (publicationPollIntervalMs > 0) {
-      schedulePublicationPoll(normalized, form);
-    }
-
-    return normalized;
-  }
-
-  function schedulePublicationPoll(operation, form) {
-    clearPublicationPollTimer();
-    publicationPollTimer = setTimeout(() => {
-      void fetchPublicationStatus(operation)
-        .then((next) => {
-          if (!destroyed && activePublicationOperationId === operation.operationId) {
-            void observePublicationOperation(next, form, {
-              expectedOperationId: operation.operationId,
-              expectedAction: operation.expectedAction ?? null,
-              immediate: false
-            });
-          }
-        })
-        .catch(() => {
-          if (!destroyed && activePublicationOperationId === operation.operationId) {
-            schedulePublicationPoll(operation, form);
-          }
+      try {
+        publicationPollController?.abort();
+        publicationPollController = new AbortController();
+        const response = await apiClient.requestJson(PUBLIC_CATALOG_STATUS_PATH, {
+          method: "GET",
+          signal: publicationPollController.signal
         });
-    }, publicationPollIntervalMs);
-  }
+        const syncStatus = readPublicCatalogStatusSyncStatus(response);
 
-  async function fetchPublicationStatus(operation) {
-    publicationPollController?.abort();
-    publicationPollController = new AbortController();
-
-    const response = await apiClient.requestJson(operation.statusUrl, {
-      method: "GET",
-      signal: publicationPollController.signal
-    });
-
-    return readPublicationDto(response);
-  }
-
-  function applyPublicationDto(operation, form) {
-    const label = publicationLabelForOperation(operation);
-
-    setPublicationButtonText(form, label);
-    statusRegion.textContent = operation.stableStatus;
-    onStatus(operation.stableStatus);
-
-    if (PUBLICATION_BUSY_STATUSES.has(operation.status)) {
-      busy = true;
-      setPublicationControlBusy(form, true);
-      return;
+        if (syncStatus === "ready") {
+          return null;
+        }
+        if (syncStatus === "failed") {
+          return "Изменение сохранено, но каталог не опубликован.";
+        }
+      } catch (error) {
+        if (!isTransientPublicationStatusError(error)) {
+          return "Изменение сохранено, но каталог не опубликован.";
+        }
+      }
     }
 
-    busy = false;
-    setPublicationControlBusy(form, false);
-    flushQueuedDemoModalSetting();
-    if (operation.status === "succeeded") {
-      activePublicationOperationId = null;
-      clearPublicationPollTimer();
-    }
-  }
-
-  function setPublicationControlBusy(form, value) {
-    const control = form?.querySelector?.('[data-primary-publication-control="true"]');
-
-    if (control !== null && control !== undefined) {
-      setBusy(control, value);
-    }
-  }
-
-  function publicationTerminalError(operation) {
-    const error = new Error(operation.stableStatus);
-
-    error.code = operation.status === "cancelled"
-      ? "PUBLICATION_CANCELLED"
-      : "PUBLICATION_FAILED";
-    error.publicationButtonLabel = operation.buttonLabel;
-    error.status = 409;
-    return error;
+    return "Изменение сохранено. Каталог продолжает обновляться.";
   }
 
   function publicationAbortedError() {
@@ -922,8 +728,11 @@ export function createSiteEditorScreen(options) {
     unregisterDirtyGuard();
     setSaveState(form, "published");
     setPublicationButtonText(form, "Опубликовано");
-    statusRegion.textContent = "Опубликовано";
-    onStatus("Опубликовано");
+    statusRegion.textContent = options.message ?? "Опубликовано";
+    onStatus(options.message ?? "Опубликовано");
+    if (typeof options.message === "string") {
+      renderFormLevelError(form, options.message, null);
+    }
     if (options.notify !== false) {
       onSaved(saved);
     }
@@ -939,307 +748,10 @@ export function createSiteEditorScreen(options) {
     return id;
   }
 
-  function readCardIdForPublication(site) {
-    const slug = typeof site?.slug === "string" ? site.slug.trim() : "";
-
-    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-      throw invalidSaveResponse();
-    }
-
-    return slug;
-  }
-
-  async function readCurrentPagesCatalogCard(cardId) {
-    const response = await apiClient.requestJson(`/api/admin/publication/pages/card/${cardId}`, {
-      method: "GET",
-      signal: publicationPollController?.signal
-    });
-    const data = response?.data ?? response;
-
-    if (
-      typeof data !== "object" ||
-      data === null ||
-      data.cardId !== cardId ||
-      !(typeof data.blobSha === "string" || data.blobSha === null) ||
-      !(typeof data.card === "object" || data.card === null)
-    ) {
-      const error = new Error(INVALID_RESPONSE_MESSAGE);
-
-      error.code = "INVALID_PUBLICATION_CARD_DTO";
-      error.status = 0;
-      throw error;
-    }
-
-    return data;
-  }
-
-  function buildDirectPagesCatalogCard(site) {
-    const cardId = readCardIdForPublication(site);
-    const category = site?.category && typeof site.category === "object"
-      ? site.category
-      : categories.find((item) => item.id === site?.categoryId) ?? {};
-    const categoryTitle = typeof category.title === "string" && category.title.trim()
-      ? category.title.trim()
-      : "Каталог";
-    const categorySlug = typeof category.slug === "string" && category.slug.trim()
-      ? category.slug.trim()
-      : "";
-    const previewImage = readPublicationImageUrl(site?.previewImageUrl);
-    const galleryImages = readPublicationGalleryUrls(site?.galleryImages);
-
-    return {
-      id: cardId,
-      slug: cardId,
-      sortOrder: Number.isFinite(Number(site?.sortOrder)) ? Number(site.sortOrder) : Number.MAX_SAFE_INTEGER,
-      legacyTitle: optionalPublicationText(site?.legacyTitle) ?? optionalPublicationText(site?.title),
-      title: requiredPublicationText(site?.title),
-      editableTitle: true,
-      category: categoryTitle,
-      description: requiredPublicationText(site?.shortDescription),
-      priceFrom: optionalPublicationText(site?.priceLabel) ?? formatPublicationPrice(site?.priceAmountCents),
-      deliveryTime: optionalPublicationText(site?.deliveryLabel),
-      features: readPublicationTextArray(site?.features),
-      tags: readPublicationTextArray(site?.tags),
-      previewImage,
-      previewType: optionalPublicationText(site?.previewType),
-      filter: categorySlug || undefined,
-      demoMode: optionalPublicationText(site?.demoMode),
-      demoLocalUrl: site?.demoLocalUrl ?? null,
-      externalDemoUrl: optionalPublicationUrl(site?.externalDemoUrl),
-      originalDemoUrl: optionalPublicationUrl(site?.originalDemoUrl),
-      demoUrl: optionalPublicationUrl(site?.demoUrl),
-      siteUrl: optionalPublicationUrl(site?.siteUrl),
-      galleryImages: galleryImages.length > 0 ? galleryImages : [previewImage],
-      aliases: [cardId],
-      active: site?.active !== false && (site?.deletedAt === undefined || site.deletedAt === null)
-    };
-  }
-
-  function readPublicationImageUrl(value) {
-    const url = optionalPublicationUrl(value);
-
-    if (!url) {
-      throw invalidSaveResponse();
-    }
-
-    return url;
-  }
-
-  function readPublicationGalleryUrls(value) {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-
-    return value
-      .map((item) => typeof item === "string" ? item : item?.url)
-      .map(optionalPublicationUrl)
-      .filter(Boolean);
-  }
-
-  function readPublicationTextArray(value) {
-    if (!Array.isArray(value)) {
-      return [];
-    }
-
-    return [...new Set(value.map(optionalPublicationText).filter(Boolean))];
-  }
-
-  function requiredPublicationText(value) {
-    const text = optionalPublicationText(value);
-
-    if (!text) {
-      throw invalidSaveResponse();
-    }
-
-    return text;
-  }
-
-  function optionalPublicationText(value) {
-    const text = String(value ?? "").trim();
-
-    return text || undefined;
-  }
-
-  function optionalPublicationUrl(value) {
-    const text = optionalPublicationText(value);
-
-    return text ?? "";
-  }
-
-  function formatPublicationPrice(value) {
-    return Number.isFinite(Number(value)) && Number(value) > 0
-      ? formatCentsToRubles(Number(value))
-      : undefined;
-  }
-
-  function createPublicationIdempotencyKey() {
-    const candidate = uuidFactory();
-
-    if (typeof candidate === "string" && UUID_PATTERN.test(candidate)) {
-      return candidate;
-    }
-
-    return createRandomUuid();
-  }
-
-  function readOrCreatePublicationAttempt(siteIdForPublication, action) {
-    if (
-      publicationAttempt !== null &&
-      publicationAttempt.siteId === siteIdForPublication &&
-      publicationAttempt.action === action
-    ) {
-      return publicationAttempt;
-    }
-
-    publicationAttempt = {
-      action,
-      idempotencyKey: createPublicationIdempotencyKey(),
-      operationId: null,
-      siteId: siteIdForPublication
-    };
-    return publicationAttempt;
-  }
-
-  function rememberPublicationOperation(attempt, operationId) {
-    publicationAttempt = {
-      ...attempt,
-      operationId
-    };
-  }
-
-  function clearPublicationAttemptForOperation(operationId) {
-    if (publicationAttempt?.operationId === operationId) {
-      publicationAttempt = null;
-    }
-  }
-
-  function readPublicationDto(response, expectedOperationId = null, options = {}) {
-    const data = response?.data ?? response;
-    const status = typeof data?.status === "string" ? data.status : "";
-    const statusUrl = typeof data?.statusUrl === "string" ? data.statusUrl : "";
-    const buttonLabel = typeof data?.buttonLabel === "string" ? data.buttonLabel : "";
-    const stableStatus = typeof data?.stableStatus === "string" ? data.stableStatus : "";
-    const expectedStatusUrls = typeof data?.operationId === "string"
-      ? new Set([
-          `/api/admin/public-catalog/operations/${data.operationId}`,
-          `/api/admin/publication/pages/${data.operationId}`
-        ])
-      : new Set();
-
-    if (
-      typeof data !== "object" ||
-      data === null ||
-      typeof data.operationId !== "string" ||
-      !UUID_PATTERN.test(data.operationId) ||
-      (expectedOperationId !== null && data.operationId !== expectedOperationId) ||
-      (!PUBLICATION_BUSY_STATUSES.has(status) && !PUBLICATION_TERMINAL_STATUSES.has(status)) ||
-      !PUBLICATION_ALLOWED_LABELS.has(buttonLabel) ||
-      !PUBLICATION_ALLOWED_STABLE_STATUSES.has(stableStatus) ||
-      typeof data.retryable !== "boolean" ||
-      !isValidPublicationDtoTuple(status, buttonLabel, stableStatus, data.retryable, options.expectedAction ?? null) ||
-      !expectedStatusUrls.has(statusUrl)
-    ) {
-      const error = new Error(INVALID_RESPONSE_MESSAGE);
-
-      error.code = "INVALID_PUBLICATION_DTO";
-      error.status = 0;
-      throw error;
-    }
-
-    return {
-      buttonLabel,
-      operationId: data.operationId,
-      prNumber: Number.isInteger(data.prNumber) ? data.prNumber : null,
-      requestId: typeof data.requestId === "string" && UUID_PATTERN.test(data.requestId)
-        ? data.requestId
-        : data.operationId,
-      retryable: data.retryable,
-      stableStatus,
-      status,
-      statusUrl,
-      ...(options.expectedAction === null || options.expectedAction === undefined
-        ? {}
-        : { expectedAction: options.expectedAction })
-    };
-  }
-
-  function isValidPublicationDtoTuple(status, buttonLabel, stableStatus, retryable, expectedAction = null) {
-    if (status === "succeeded" && expectedAction === "publish") {
-      return buttonLabel === "Опубликовано" &&
-        stableStatus === "Опубликовано" &&
-        retryable === false;
-    }
-    if (status === "succeeded" && expectedAction === "unpublish") {
-      return buttonLabel === "Опубликовать" &&
-        stableStatus === "Не опубликовано" &&
-        retryable === false;
-    }
-
-    return (PUBLICATION_DTO_TUPLES[status] ?? []).some(([expectedLabel, expectedStableStatus, expectedRetryable]) => (
-      buttonLabel === expectedLabel &&
-      stableStatus === expectedStableStatus &&
-      retryable === expectedRetryable
-    ));
-  }
-
-  function publicationLabelForOperation(operation) {
-    if (operation.status === "failed" && operation.retryable !== true) {
-      return "Опубликовать";
-    }
-
-    return operation.buttonLabel;
-  }
-
-  function persistPublicationReconnect(metadata) {
-    if (storage === null) {
-      return;
-    }
-
-    try {
-      const isDirectPagesMetadata = typeof metadata.requestId === "string" &&
-        UUID_PATTERN.test(metadata.requestId);
-      const payload = isDirectPagesMetadata
-        ? {
-            operationId: metadata.operationId,
-            prNumber: Number.isInteger(metadata.prNumber) ? metadata.prNumber : null,
-            requestId: metadata.requestId,
-            siteId: metadata.siteId,
-            updatedAt: new Date().toISOString(),
-            version: 2
-          }
-        : {
-            operationId: metadata.operationId,
-            siteId: metadata.siteId,
-            updatedAt: new Date().toISOString(),
-            version: 1
-          };
-
-      storage.setItem(PUBLICATION_RECONNECT_STORAGE_KEY, JSON.stringify(payload));
-    } catch {
-      // Reconnect metadata is best-effort and intentionally small.
-    }
-  }
-
-  function clearPublicationReconnect() {
-    try {
-      storage?.removeItem?.(PUBLICATION_RECONNECT_STORAGE_KEY);
-    } catch {
-      // Ignore storage cleanup failures; publication state remains server-authoritative.
-    }
-  }
 
   function clearPublicationObserver() {
-    clearPublicationPollTimer();
     publicationPollController?.abort();
     publicationPollController = null;
-    activePublicationOperationId = null;
-  }
-
-  function clearPublicationPollTimer() {
-    if (publicationPollTimer !== null) {
-      clearTimeout(publicationPollTimer);
-      publicationPollTimer = null;
-    }
   }
 
   function isHarnessUnexpectedRequest(error) {
@@ -1248,76 +760,11 @@ export function createSiteEditorScreen(options) {
       /Unexpected (request|path|multipart request)/.test(error.message);
   }
 
-  async function reconnectRememberedPublication() {
-    if (!canPublish || mode !== "edit") {
-      return false;
-    }
-
-    const metadata = readPublicationReconnect();
-    const form = formHost.querySelector("form");
-
-    if (metadata === null || form === null) {
-      return false;
-    }
-
-    const expectedSiteId = typeof currentSite?.id === "string" ? currentSite.id : siteId;
-    if (typeof expectedSiteId !== "string" || !UUID_PATTERN.test(expectedSiteId)) {
-      return false;
-    }
-    if (metadata.siteId !== expectedSiteId) {
-      clearPublicationReconnect();
-      return false;
-    }
-
-    try {
-      const response = await apiClient.requestJson(publicationReconnectStatusUrl(metadata), {
-        method: "GET"
-      });
-      const operation = readPublicationDto(response, metadata.operationId);
-
-      await observePublicationOperation(operation, form, {
-        expectedOperationId: metadata.operationId,
-        immediate: false
-      });
-      return true;
-    } catch (error) {
-      if (isTransientPublicationStatusError(error)) {
-        await observePublicationOperation(reconnectingPublicationOperation(metadata), form, {
-          expectedOperationId: metadata.operationId,
-          immediate: false
-        });
-        return true;
-      }
-
-      clearPublicationReconnect();
-      return false;
-    }
-  }
-
-  function reconnectingPublicationOperation(metadata) {
-    return {
-      buttonLabel: metadata.version === 2 ? "Проверяется" : "Публикуется…",
-      operationId: metadata.operationId,
-      prNumber: metadata.prNumber ?? null,
-      requestId: metadata.requestId ?? metadata.operationId,
-      retryable: false,
-      stableStatus: metadata.version === 2 ? "Проверяется" : "Публикуется",
-      status: metadata.version === 2 ? "validating" : "running",
-      statusUrl: publicationReconnectStatusUrl(metadata)
-    };
-  }
-
-  function publicationReconnectStatusUrl(metadata) {
-    return metadata.version === 2
-      ? `/api/admin/publication/pages/${metadata.requestId}`
-      : `/api/admin/public-catalog/operations/${metadata.operationId}`;
-  }
-
   function isTransientPublicationStatusError(error) {
     if (destroyed) {
       return false;
     }
-    if (error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT") {
+    if (error?.code === "NETWORK_ERROR" || error?.code === "REQUEST_TIMEOUT" || error?.code === "TIMEOUT") {
       return true;
     }
     if (error?.code === undefined && Number(error?.status) === 0) {
@@ -1350,54 +797,6 @@ export function createSiteEditorScreen(options) {
         publicCatalogShowDemoInModal = null;
         demoModalStatusAvailable = false;
       }
-    }
-  }
-
-  function readPublicationReconnect() {
-    if (storage === null) {
-      return null;
-    }
-
-    try {
-      const raw = storage.getItem(PUBLICATION_RECONNECT_STORAGE_KEY);
-      if (typeof raw !== "string" || raw.length === 0) {
-        return null;
-      }
-
-      const parsed = JSON.parse(raw);
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        (parsed.version !== 1 && parsed.version !== 2) ||
-        typeof parsed.siteId !== "string" ||
-        !UUID_PATTERN.test(parsed.siteId) ||
-        typeof parsed.operationId !== "string" ||
-        !UUID_PATTERN.test(parsed.operationId) ||
-        (
-          parsed.version === 2 &&
-          (
-            typeof parsed.requestId !== "string" ||
-            !UUID_PATTERN.test(parsed.requestId) ||
-            !(Number.isInteger(parsed.prNumber) || parsed.prNumber === null)
-          )
-        )
-      ) {
-        return null;
-      }
-
-      return {
-        operationId: parsed.operationId,
-        ...(parsed.version === 2
-          ? {
-              prNumber: parsed.prNumber,
-              requestId: parsed.requestId,
-              version: 2
-            }
-          : { version: 1 }),
-        siteId: parsed.siteId
-      };
-    } catch {
-      return null;
     }
   }
 
@@ -2912,7 +2311,6 @@ export function createSiteEditorScreen(options) {
       return;
     }
     dirty = true;
-    publicationAttempt = null;
     publicationRetrySite = null;
     registerDirtyGuard();
     clearDraftSaveTimer();
@@ -3392,9 +2790,6 @@ function safeMessage(error) {
   }
   if (error?.code === "PUBLIC_CATALOG_V2_DISABLED") {
     return "Публикация временно недоступна.";
-  }
-  if (error?.code === "INVALID_PUBLICATION_DTO") {
-    return "Сервер вернул некорректный ответ публикации.";
   }
   if (error?.code === "INTERNAL_ERROR" || /prisma|sql|database|stack/i.test(String(error?.message ?? ""))) {
     return "Не удалось сохранить карточку.";

@@ -267,7 +267,7 @@ describe("app/server auth integration boundary", () => {
     const listen = vi.fn();
     const close = vi.fn();
     const server = { close, listen } as unknown as Server;
-    const createAdminRouter = vi.fn(() => express.Router());
+    const createAdminRouter = vi.fn((_options: Record<string, unknown>) => express.Router());
     const requestReconcile = vi.fn();
     const reconciler = {
       requestReconcile,
@@ -372,6 +372,101 @@ describe("app/server auth integration boundary", () => {
     vi.doUnmock("../src/modules/admin/admin.routes.js");
     vi.doUnmock("../src/modules/public-catalog/public-runtime-primary.js");
     vi.doUnmock("../src/modules/public-catalog/public-catalog-reconciler.js");
+  });
+
+  it("does not compose Direct Pages publication services during server startup", async () => {
+    vi.resetModules();
+    const listen = vi.fn();
+    const close = vi.fn();
+    const server = { close, listen } as unknown as Server;
+    const createAdminRouter = vi.fn((_options: Record<string, unknown>) => express.Router());
+    const createAdminPublicationService = vi.fn(() => ({}));
+    const createPagesCatalogPublicationService = vi.fn(() => ({}));
+    const createPagesCatalogPublicationReconciliationWorker = vi.fn(() => ({
+      start: vi.fn(),
+      stop: vi.fn(async () => undefined)
+    }));
+    const createGitHubPagesCatalogProviderFromEnv = vi.fn(() => ({}));
+
+    vi.doMock("node:http", () => ({
+      createServer: vi.fn(() => server)
+    }));
+    vi.doMock("../src/modules/admin/admin.routes.js", () => ({
+      createAdminRouter
+    }));
+    vi.doMock("../src/modules/admin/publication/publication.service.js", () => ({
+      createAdminPublicationService,
+      createPagesCatalogPublicationReconciliationWorker,
+      createPagesCatalogPublicationService
+    }));
+    vi.doMock("../src/modules/admin/publication/pages-publication.github.js", () => ({
+      createGitHubPagesCatalogProviderFromEnv
+    }));
+
+    const { startServer } = await import("../src/server.js");
+
+    startServer({
+      authEnv: {
+        ACCESS_TOKEN_TTL_SECONDS: 900,
+        AUTH_FINGERPRINT_SECRET: Buffer.alloc(32, 2),
+        AUTH_FINGERPRINT_SECRET_BASE64: Buffer.alloc(32, 2).toString("base64"),
+        JWT_ACCESS_SECRET: Buffer.alloc(32, 1),
+        JWT_ACCESS_SECRET_BASE64: Buffer.alloc(32, 1).toString("base64"),
+        JWT_AUDIENCE: "web00-admin",
+        JWT_ISSUER: "web00-backend",
+        REFRESH_TOKEN_TTL_SECONDS: 604_800,
+        TRUST_PROXY_HOPS: 1
+      },
+      createPrisma: vi.fn(() => ({
+        $disconnect: vi.fn(),
+        $transaction: vi.fn()
+      }) as never),
+      databaseEnv: { DATABASE_URL: "postgresql://user:pass@127.0.0.1:5432/web00_backend_dev" },
+      env: { ...testEnv, PORT: 53_204 },
+      logger: { log: vi.fn() },
+      publicCorsConfig: {
+        allowedMethods: ["GET", "HEAD", "OPTIONS"],
+        allowedOrigins: new Set(["https://prudexxx.github.io"]),
+        maxOrigins: 10
+      },
+      registerSignalHandlers: false,
+      storageConfig: {
+        bucket: "web00-catalog-images",
+        credentials: {
+          serviceRoleKey: "sb_secret_fake",
+          supabaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co"
+        },
+        publicBaseUrl: "https://qcizrrqkvdgpcgvnnfpb.supabase.co",
+        workerEnabled: false,
+        workerPollIntervalSeconds: 60
+      }
+    } as never);
+
+    expect(createGitHubPagesCatalogProviderFromEnv).not.toHaveBeenCalled();
+    expect(createPagesCatalogPublicationService).not.toHaveBeenCalled();
+    expect(createPagesCatalogPublicationReconciliationWorker).not.toHaveBeenCalled();
+    expect(createAdminPublicationService).not.toHaveBeenCalled();
+    const adminOptions = createAdminRouter.mock.calls[0]?.[0] ?? {};
+    expect("pagesPublicationService" in adminOptions).toBe(false);
+    expect("publicationService" in adminOptions).toBe(false);
+
+    vi.doUnmock("node:http");
+    vi.doUnmock("../src/modules/admin/admin.routes.js");
+    vi.doUnmock("../src/modules/admin/publication/publication.service.js");
+    vi.doUnmock("../src/modules/admin/publication/pages-publication.github.js");
+  });
+
+  it("keeps current admin lifecycle runtime surfaces off Direct Pages publication wiring", () => {
+    const editorSource = readFileSync(join(process.cwd(), "src", "admin", "assets", "screens", "site-editor.js"), "utf8");
+    const listSource = readFileSync(join(process.cwd(), "src", "admin", "assets", "screens", "sites-list.js"), "utf8");
+    const serverSource = readFileSync(join(process.cwd(), "src", "server.ts"), "utf8");
+
+    for (const source of [editorSource, listSource]) {
+      expect(source).not.toMatch(/\/api\/admin\/publication\/pages(?:\/card)?/);
+    }
+    expect(serverSource).not.toContain("createGitHubPagesCatalogProviderFromEnv(");
+    expect(serverSource).not.toContain("createPagesCatalogPublicationService(");
+    expect(serverSource).not.toContain("createPagesCatalogPublicationReconciliationWorker(");
   });
 
   it("wires public CORS and readiness through app/server composition", () => {

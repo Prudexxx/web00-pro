@@ -170,6 +170,133 @@ describe("admin sites list screen", () => {
     expect(screen.element.textContent).toContain("Сайт: Draft Site / draft-site.");
   });
 
+  it("uses admin site lifecycle routes and Atomic catalog status for publish, unpublish, and soft delete", async () => {
+    for (const scenario of [
+      {
+        action: "publish",
+        initial: siteFixture({ slug: "draft-site", status: "draft", title: "Draft Site" }),
+        method: "POST",
+        path: "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish",
+        result: siteFixture({ slug: "draft-site", status: "published", title: "Draft Site" }),
+        success: "Сайт опубликован."
+      },
+      {
+        action: "unpublish",
+        initial: siteFixture({ slug: "published-site", status: "published", title: "Published Site" }),
+        method: "POST",
+        path: "/api/admin/sites/00000000-0000-4000-8000-000000000101/unpublish",
+        result: siteFixture({ slug: "published-site", status: "draft", title: "Published Site" }),
+        success: "Сайт снят с публикации."
+      },
+      {
+        action: "soft-delete",
+        initial: siteFixture({ slug: "delete-site", status: "published", title: "Delete Site" }),
+        method: "DELETE",
+        path: "/api/admin/sites/00000000-0000-4000-8000-000000000101",
+        result: siteFixture({
+          deletedAt: "2026-07-30T12:00:00.000Z",
+          slug: "delete-site",
+          status: "published",
+          title: "Delete Site"
+        }),
+        success: "Сайт удалён."
+      }
+    ]) {
+      const { requests, screen } = await createLoadedSitesListLifecycleScreen({
+        initialSite: scenario.initial,
+        lifecycleHandler: (requestPath, options) => {
+          expect(requestPath).toBe(scenario.path);
+          expect(options.method).toBe(scenario.method);
+          return Promise.resolve({ data: scenario.result });
+        }
+      });
+
+      elementsWithAttribute(screen.element, "data-lifecycle-action", scenario.action)[0]
+        .dispatchEvent(fakeEvent("click"));
+      screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+
+      await waitFor(() => {
+        expect(screen.element.textContent).toContain(scenario.success);
+      });
+
+      expect(requests).toEqual(expect.arrayContaining([
+        expect.objectContaining({ method: scenario.method, requestPath: scenario.path }),
+        expect.objectContaining({ method: "GET", requestPath: "/api/admin/public-catalog/status" })
+      ]));
+      expect(requests.filter((request) => request.requestPath === "/api/admin/sites")).toHaveLength(2);
+      expect(requests.some((request) => request.requestPath.includes("/api/admin/publication/pages"))).toBe(false);
+    }
+  });
+
+  it("keeps the lifecycle mutation successful when Atomic catalog status reports failure or timeout", async () => {
+    const failed = await createLoadedSitesListLifecycleScreen({
+      initialSite: siteFixture({ status: "published" }),
+      statusResponses: [{ data: { syncStatus: "failed" } }]
+    });
+
+    elementsWithAttribute(failed.screen.element, "data-lifecycle-action", "unpublish")[0]
+      .dispatchEvent(fakeEvent("click"));
+    failed.screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+
+    await waitFor(() => {
+      expect(failed.screen.element.textContent).toContain("Изменение сохранено, но каталог не опубликован.");
+    });
+
+    const timedOut = await createLoadedSitesListLifecycleScreen({
+      initialSite: siteFixture({ status: "published" }),
+      statusResponses: [
+        { data: { syncStatus: "pending" } },
+        { data: { syncStatus: "pending" } },
+        { data: { syncStatus: "pending" } },
+        { data: { syncStatus: "pending" } },
+        { data: { syncStatus: "pending" } }
+      ]
+    });
+
+    elementsWithAttribute(timedOut.screen.element, "data-lifecycle-action", "unpublish")[0]
+      .dispatchEvent(fakeEvent("click"));
+    timedOut.screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+
+    await waitFor(() => {
+      expect(timedOut.screen.element.textContent).toContain("Изменение сохранено. Каталог продолжает обновляться.");
+    });
+
+    expect(failed.requests.some((request) => request.requestPath.includes("/api/admin/publication/pages"))).toBe(false);
+    expect(timedOut.requests.some((request) => request.requestPath.includes("/api/admin/publication/pages"))).toBe(false);
+  });
+
+  it("verifies the site state after an uncertain lifecycle response without duplicating the mutation", async () => {
+    const { requests, screen } = await createLoadedSitesListLifecycleScreen({
+      initialSite: siteFixture({ status: "draft" }),
+      lifecycleHandler: () => Promise.reject({ code: "NETWORK_ERROR", status: 0 }),
+      readSite: siteFixture({ status: "published" })
+    });
+
+    elementsWithAttribute(screen.element, "data-lifecycle-action", "publish")[0]
+      .dispatchEvent(fakeEvent("click"));
+    screen.element.querySelector('[data-action="confirm-dialog"]').dispatchEvent(fakeEvent("click"));
+
+    await waitFor(() => {
+      expect(screen.element.textContent).toContain("Сайт опубликован.");
+    });
+
+    expect(requests.filter((request) => (
+      request.requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish" &&
+      request.method === "POST"
+    ))).toHaveLength(1);
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        method: "GET",
+        requestPath: "/api/admin/sites/00000000-0000-4000-8000-000000000101"
+      }),
+      expect.objectContaining({
+        method: "GET",
+        requestPath: "/api/admin/public-catalog/status"
+      })
+    ]));
+    expect(requests.some((request) => request.requestPath.includes("/api/admin/publication/pages"))).toBe(false);
+  });
+
   it("renders loading, empty, filtered-empty, and error states", async () => {
     const documentRef = createFakeDocument();
     const siteResponses = [
@@ -298,6 +425,65 @@ describe("admin sites list screen", () => {
     expect(screen.element.textContent).toContain(`Сайт: Temporary deleted cleanup site / ${CLEANUP_SITE_SLUG}.`);
   });
 });
+
+async function createLoadedSitesListLifecycleScreen(options = {}) {
+  const documentRef = createFakeDocument();
+  const requests = [];
+  let currentSite = options.initialSite ?? siteFixture();
+  const statusResponses = [...(options.statusResponses ?? [{ data: { syncStatus: "ready" } }])];
+  const lifecycleHandler = options.lifecycleHandler ?? ((_requestPath, _requestOptions) => {
+    currentSite = options.resultSite ?? siteFixture({ status: "published" });
+    return Promise.resolve({ data: currentSite });
+  });
+  const apiClient = {
+    requestJson: vi.fn((requestPath, requestOptions = {}) => {
+      requests.push({ method: requestOptions.method, requestPath });
+      if (requestPath.startsWith("/api/admin/categories")) {
+        return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+      }
+      if (requestPath === "/api/admin/sites") {
+        return Promise.resolve({ data: [currentSite], meta: metaFixture(1) });
+      }
+      if (
+        requestOptions.method === "DELETE" &&
+        requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101"
+      ) {
+        return lifecycleHandler(requestPath, requestOptions);
+      }
+      if (
+        requestOptions.method === "GET" &&
+        requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101"
+      ) {
+        return Promise.resolve({ data: options.readSite ?? currentSite });
+      }
+      if (requestPath === "/api/admin/public-catalog/status") {
+        return Promise.resolve(statusResponses.shift() ?? statusResponses.at(-1) ?? { data: { syncStatus: "ready" } });
+      }
+      if (
+        requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish" ||
+        requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/unpublish"
+      ) {
+        return lifecycleHandler(requestPath, requestOptions);
+      }
+
+      throw new Error(`Unexpected path ${requestPath}`);
+    })
+  };
+  const screen = createSitesListScreen({
+    apiClient,
+    documentRef,
+    onCreate: vi.fn(),
+    onEdit: vi.fn(),
+    onImages: vi.fn(),
+    onStatus: vi.fn(),
+    pollIntervalMs: 0,
+    role: "admin"
+  });
+
+  await screen.load();
+
+  return { requests, screen };
+}
 
 function categoryFixture() {
   return {
