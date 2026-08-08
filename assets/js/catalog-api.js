@@ -296,7 +296,14 @@
       source,
       lifecycle: items.length ? "ready" : "empty",
       items,
+      settings: normalizeCatalogSettings(),
       errorCode: "",
+    };
+  }
+
+  function normalizeCatalogSettings(settings) {
+    return {
+      showDemoInModal: settings?.showDemoInModal === true,
     };
   }
 
@@ -369,7 +376,7 @@
       const savedAt = new Date(payload.savedAt);
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.savedAt) || Number.isNaN(savedAt.getTime()) || savedAt.toISOString() !== payload.savedAt) return null;
       const items = normalizeCachedCatalogItems(payload.items);
-      return items ? { source: "lkg", lifecycle: "ready", items, errorCode: "" } : null;
+      return items ? { source: "lkg", lifecycle: "ready", items, settings: normalizeCatalogSettings(), errorCode: "" } : null;
     } catch (_) {
       return null;
     }
@@ -511,11 +518,12 @@
     return { page, limit, total, totalPages };
   }
 
-  function catalogResultFromItems(items, source) {
+  function catalogResultFromItems(items, source, settings) {
     return {
       source,
       lifecycle: items.length ? "ready" : "empty",
       items,
+      settings: normalizeCatalogSettings(settings),
       errorCode: "",
     };
   }
@@ -543,7 +551,11 @@
       throw createCatalogError("WEB00_CLOUD_RUNTIME_UNAVAILABLE");
     }
     const result = await runtime.loadCatalogFromRuntime(config, { signal: options.signal });
-    return catalogResultFromItems(normalizeApiItems(result.snapshot.items, { source: "cloud" }), "cloud");
+    return catalogResultFromItems(
+      normalizeApiItems(result.snapshot.items, { source: "cloud" }),
+      "cloud",
+      result.snapshot.settings,
+    );
   }
 
   async function loadPopularSites(options = { limit: 3 }) {
@@ -595,6 +607,7 @@
       source: result.source,
       lifecycle: result.lifecycle,
       items: result.items || [],
+      settings: normalizeCatalogSettings(result.settings),
       errorCode: result.errorCode || "",
       apiAvailable: flags.apiAvailable === true,
       staticFallbackActive: flags.staticFallbackActive === true,
@@ -618,6 +631,7 @@
         source: fallback.source,
         lifecycle: "ready",
         items: fallback.items,
+        settings: normalizeCatalogSettings(),
         errorCode,
       }, {
         apiAvailable: flags.apiAvailable === true,

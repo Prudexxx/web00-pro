@@ -21,6 +21,95 @@ function classList() {
   return { add: () => undefined, remove: () => undefined, toggle: () => undefined };
 }
 
+class TestElement {
+  constructor(options = {}) {
+    this.classList = classList();
+    this.dataset = options.dataset || {};
+    this.hidden = false;
+    this.listeners = new Map();
+    this.style = { setProperty: () => undefined };
+    this.value = "";
+    this.html = "";
+  }
+
+  addEventListener(type, listener) {
+    const listeners = this.listeners.get(type) || [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  dispatchEvent(event) {
+    event.target = event.target || this;
+    for (const listener of this.listeners.get(event.type) || []) {
+      listener.call(this, event);
+    }
+  }
+
+  getAttribute() {
+    return null;
+  }
+
+  setAttribute() {}
+
+  closest() {
+    return null;
+  }
+
+  focus() {}
+
+  getBoundingClientRect() {
+    return { height: 520, width: 1180 };
+  }
+
+  querySelector() {
+    return null;
+  }
+
+  querySelectorAll() {
+    return [];
+  }
+
+  get innerHTML() {
+    return this.html;
+  }
+
+  set innerHTML(value) {
+    this.html = String(value);
+  }
+}
+
+class TestSolutionCard extends TestElement {
+  constructor(solution) {
+    super({ dataset: { solutionId: solution.id || solution.slug } });
+    this.action = new TestElement();
+    this.action.closest = (selector) => selector === ".solution-card__actions" ? this.action : null;
+  }
+
+  querySelector(selector) {
+    return selector === "[data-card-action]" ? this.action : null;
+  }
+}
+
+class TestSolutionsGrid extends TestElement {
+  constructor(solution) {
+    super();
+    this.card = new TestSolutionCard(solution);
+  }
+
+  querySelectorAll(selector) {
+    return selector === ".solution-card" ? [this.card] : [];
+  }
+}
+
+function fakeDomEvent(type) {
+  return {
+    preventDefault() {},
+    stopPropagation() {},
+    target: null,
+    type,
+  };
+}
+
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
   return {
@@ -178,6 +267,59 @@ async function bootSolutionsPage(fetch, options = {}) {
   return page;
 }
 
+async function renderDemoModalForCatalogState(catalogState) {
+  const [solution] = catalogState.items;
+  const browser = createFakeBrowser({
+    href: "https://prudexxx.github.io/web00-pro/solutions.html",
+    page: "solutions",
+  });
+  const grid = new TestSolutionsGrid(solution);
+  const demoContent = new TestElement();
+  const demoModal = new TestElement();
+  const demoDialog = new TestElement();
+  const statusNodes = {
+    "[data-catalog-loading]": new TestElement(),
+    "[data-catalog-fallback]": new TestElement(),
+    "[data-catalog-empty]": new TestElement(),
+    "[data-catalog-fatal]": new TestElement(),
+  };
+
+  browser.window.addEventListener = () => undefined;
+  browser.window.localStorage = createStorage();
+  browser.window.navigator = {};
+  browser.window.requestAnimationFrame = (callback) => callback();
+  browser.document.body.classList = classList();
+  browser.document.documentElement = { classList: classList() };
+  browser.document.querySelector = (selector) => {
+    if (selector === "[data-solutions-grid]") return grid;
+    if (selector === "[data-demo-modal-content]") return demoContent;
+    if (selector === "[data-modal=\"demo\"]") return demoModal;
+    if (selector === "[data-modal=\"demo\"] .modal__dialog") return demoDialog;
+    if (selector === ".modal.is-open") return null;
+    return statusNodes[selector] || null;
+  };
+  browser.document.querySelectorAll = () => [];
+  browser.window.WEB00_DATA = { SOLUTIONS: [], SERVICES: [], PRICING: [] };
+  browser.window.WEB00_CATALOG = {
+    findCatalogItem(items, value) {
+      return items.find((item) => item.id === value || item.slug === value || item.key === value) || null;
+    },
+    getInitialCatalog() {
+      return catalogState;
+    },
+    resolveCatalogForPage() {
+      return Promise.resolve(catalogState);
+    },
+  };
+
+  await loadClassicScript("assets/js/main.js", browser);
+  const [onReady] = browser.listeners.get("DOMContentLoaded");
+  await onReady();
+  grid.card.action.dispatchEvent(fakeDomEvent("click"));
+
+  return demoContent.innerHTML;
+}
+
 function sha256Hex(value) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -193,14 +335,14 @@ function cloudConfig(overrides = {}) {
   };
 }
 
-function cloudSnapshot(items, revision = 6) {
+function cloudSnapshot(items, revision = 6, options = {}) {
   const body = JSON.stringify({
     generatedAt: "2026-08-07T12:00:00.000Z",
     items,
     itemsCount: items.length,
     revision,
     schemaVersion: 1,
-    settings: { showDemoInModal: false },
+    settings: options.settings ?? { showDemoInModal: false },
   }) + "\n";
   const sha256 = sha256Hex(body);
   const snapshotPath = `runtime/production/catalog/v1/releases/revision-${revision}-${sha256}.json`;
@@ -309,6 +451,143 @@ test("valid Cloud runtime manifest and snapshot replaces static without Render c
   assert.deepEqual(plain(resolved.items.map((item) => item.slug)), ["web00-smoke-create"]);
   assert.equal(fetchCalls.some((url) => url.includes("web00-backend-production.onrender.com/api/sites")), false);
   assert.deepEqual(saved.items.map((item) => item.slug), ["web00-smoke-create"]);
+});
+
+test("Cloud runtime settings propagate to resolved catalog while non-Cloud sources default demo modal off", async () => {
+  const enabledRuntime = cloudSnapshot(
+    [apiSite("cloud-demo-enabled", "Cloud Demo Enabled")],
+    7,
+    { settings: { showDemoInModal: true } },
+  );
+  const disabledRuntime = cloudSnapshot(
+    [apiSite("cloud-demo-disabled", "Cloud Demo Disabled")],
+    8,
+    { settings: { showDemoInModal: false } },
+  );
+  const enabledFetch = createFakeFetch(async (url) => {
+    if (String(url).startsWith(cloudConfig().catalogManifestUrl)) return jsonResponse(enabledRuntime.manifest);
+    if (String(url) === enabledRuntime.snapshotUrl) {
+      return new Response(new TextEncoder().encode(enabledRuntime.body), {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        status: 200,
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const disabledFetch = createFakeFetch(async (url) => {
+    if (String(url).startsWith(cloudConfig().catalogManifestUrl)) return jsonResponse(disabledRuntime.manifest);
+    if (String(url) === disabledRuntime.snapshotUrl) {
+      return new Response(new TextEncoder().encode(disabledRuntime.body), {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        status: 200,
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const apiFetch = createFakeFetch((url) => {
+    if (String(url).endsWith("/api/sites?sort=sortOrder&page=1&limit=20")) {
+      return apiResponse([apiSite("api-demo-default", "API Demo Default")]);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const lkgStorage = createStorage({
+    [LKG_KEY]: JSON.stringify({
+      schemaVersion: 1,
+      savedAt: "2026-08-03T00:00:00.000Z",
+      items: [{ slug: "lkg-demo-default", title: "LKG Demo Default", category: "Goods", categorySlug: "goods" }],
+    }),
+  });
+
+  const enabled = await loadCatalog({ config: cloudConfig(), data: freshSmokeStaticData(), fetch: enabledFetch });
+  const enabledResult = await enabled.catalog.resolveCatalogForPage({
+    currentState: enabled.catalog.getInitialCatalog(),
+    kind: "solutions",
+  });
+  const disabled = await loadCatalog({ config: cloudConfig(), data: freshSmokeStaticData(), fetch: disabledFetch });
+  const disabledResult = await disabled.catalog.resolveCatalogForPage({
+    currentState: disabled.catalog.getInitialCatalog(),
+    kind: "solutions",
+  });
+  const api = await loadCatalog({ fetch: apiFetch });
+  const apiResult = await api.catalog.resolveCatalogForPage({
+    currentState: api.catalog.getInitialCatalog(),
+    kind: "solutions",
+  });
+  const lkg = await loadCatalog({ data: { SOLUTIONS: [] }, fetch: createFakeFetch(() => Promise.reject(new Error("offline"))), storage: lkgStorage });
+  const degraded = await loadCatalog({
+    config: cloudConfig({ requestTimeoutMs: 1 }),
+    data: freshSmokeStaticData(),
+    fetch: createFakeFetch((_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+    })),
+  });
+  const degradedResult = await degraded.catalog.resolveCatalogForPage({
+    currentState: degraded.catalog.getInitialCatalog(),
+    kind: "solutions",
+  });
+
+  assert.equal(enabledResult.settings.showDemoInModal, true);
+  assert.equal(disabledResult.settings.showDemoInModal, false);
+  assert.equal(apiResult.settings.showDemoInModal, false);
+  assert.equal(lkg.catalog.getInitialCatalog().settings.showDemoInModal, false);
+  assert.equal(degradedResult.settings.showDemoInModal, false);
+});
+
+test("external demos render inside the WEB00 modal only when Cloud settings explicitly allow it", async () => {
+  const card = {
+    active: true,
+    category: "Goods",
+    categorySlug: "goods",
+    demoMode: "external-iframe",
+    demoUrl: "https://prudexxx.github.io/NarkoKlinika/",
+    externalDemoUrl: "https://prudexxx.github.io/NarkoKlinika/",
+    features: ["Fast"],
+    id: "web00-atomic-create-pass",
+    key: "web00-atomic-create-pass",
+    priceLabel: "",
+    shortDescription: "Atomic demo",
+    slug: "web00-atomic-create-pass",
+    title: "WEB00 Atomic Create Pass",
+  };
+  const allowedHtml = await renderDemoModalForCatalogState({
+    items: [card],
+    lifecycle: "ready",
+    settings: { showDemoInModal: true },
+    source: "cloud",
+  });
+  const disabledHtml = await renderDemoModalForCatalogState({
+    items: [card],
+    lifecycle: "ready",
+    settings: { showDemoInModal: false },
+    source: "cloud",
+  });
+  const unavailableHtml = await renderDemoModalForCatalogState({
+    items: [card],
+    lifecycle: "ready",
+    source: "cloud",
+  });
+  const untrustedHtml = await renderDemoModalForCatalogState({
+    items: [{
+      ...card,
+      demoUrl: "https://evil.example/NarkoKlinika/",
+      externalDemoUrl: "https://evil.example/NarkoKlinika/",
+    }],
+    lifecycle: "ready",
+    settings: { showDemoInModal: true },
+    source: "cloud",
+  });
+
+  assert.match(allowedHtml, /data-demo-iframe/);
+  assert.match(allowedHtml, /src="https:\/\/prudexxx\.github\.io\/NarkoKlinika\/"/);
+  assert.doesNotMatch(allowedHtml, /data-demo-external-fallback/);
+  assert.match(allowedHtml, /Открыть отдельно/);
+  assert.doesNotMatch(disabledHtml, /data-demo-iframe/);
+  assert.match(disabledHtml, /data-demo-external-fallback/);
+  assert.match(disabledHtml, /Полный просмотр открывается отдельно/);
+  assert.doesNotMatch(unavailableHtml, /data-demo-iframe/);
+  assert.match(unavailableHtml, /data-demo-external-fallback/);
+  assert.doesNotMatch(untrustedHtml, /data-demo-iframe/);
+  assert.match(untrustedHtml, /data-demo-external-fallback/);
 });
 
 test("invalid Cloud snapshot SHA keeps current static catalog", async () => {
