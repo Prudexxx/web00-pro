@@ -222,8 +222,8 @@ export function createSiteEditorScreen(options) {
   let activePublicationOperationId = null;
   let publicationAttempt = null;
   let publicationRetrySite = null;
-  let demoModalConfirmed = true;
-  let demoModalDesired = true;
+  let demoModalConfirmed = false;
+  let demoModalDesired = false;
   let demoModalBusy = false;
   let demoModalQueuedValue = null;
   let demoModalStatusAvailable = false;
@@ -2243,18 +2243,12 @@ export function createSiteEditorScreen(options) {
   }
 
   function toggleDemoModalSetting(switchControl, status) {
-    if (!canPublish || destroyed) {
+    if (!canPublish || destroyed || !demoModalStatusAvailable || demoModalBusy || busy) {
       return;
     }
 
     demoModalDesired = !demoModalDesired;
     updateDemoSwitchControl(switchControl, status);
-
-    if (demoModalBusy || busy) {
-      demoModalQueuedValue = demoModalDesired;
-      updateDemoSwitchControl(switchControl, status);
-      return;
-    }
 
     void persistDemoModalSetting(demoModalDesired, switchControl, status);
   }
@@ -2330,9 +2324,17 @@ export function createSiteEditorScreen(options) {
   }
 
   function updateDemoSwitchControl(switchControl, status) {
+    const disabled = !demoModalStatusAvailable || demoModalBusy || busy;
+
     switchControl.setAttribute("aria-checked", String(demoModalDesired));
     switchControl.setAttribute("aria-busy", String(demoModalBusy || (busy && demoModalQueuedValue !== null)));
+    switchControl.setAttribute("aria-disabled", String(disabled));
     switchControl.setAttribute("data-state", demoModalDesired ? "on" : "off");
+    if (disabled) {
+      switchControl.setAttribute("disabled", "");
+    } else {
+      switchControl.removeAttribute("disabled");
+    }
 
     if (demoModalBusy || (busy && demoModalQueuedValue !== null)) {
       setDemoSwitchStatus(status, "Публикуется...");
@@ -2472,7 +2474,7 @@ export function createSiteEditorScreen(options) {
       return publicCatalogShowDemoInModal;
     }
 
-    return currentSite?.showDemoInModal === false ? false : true;
+    return currentSite?.showDemoInModal === true;
   }
 
   function demoSyncError() {
