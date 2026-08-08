@@ -915,6 +915,29 @@
     return Boolean(state && Array.isArray(state.items) && state.items.length > 0);
   }
 
+  function demoModalSettingFromCatalogState(state) {
+    if (!state || state.lifecycle !== "ready" || typeof state.settings?.showDemoInModal !== "boolean") return null;
+    return state.settings.showDemoInModal === true;
+  }
+
+  function catalogShowDemoInModal() {
+    const primarySetting = demoModalSettingFromCatalogState(catalogState);
+    if (primarySetting !== null) return primarySetting;
+    return demoModalSettingFromCatalogState(popularCatalogState) === true;
+  }
+
+  function isTrustedInternalDemoUrl(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "https:" &&
+        parsed.origin === window.location.origin &&
+        parsed.username === "" &&
+        parsed.password === "";
+    } catch (_) {
+      return false;
+    }
+  }
+
   function applyCatalogState(nextCatalogState) {
     if (!nextCatalogState) return false;
     if (hasCatalogItems(catalogState) && (!hasCatalogItems(nextCatalogState) || nextCatalogState.lifecycle !== "ready")) {
@@ -1480,7 +1503,12 @@
       return;
     }
     activeSolution = solution;
-    const isExternalFrame = solution?.demoMode === "external-iframe";
+    const isExternalDemo = solution?.demoMode === "external-iframe";
+    const showExternalDemoInside = isExternalDemo &&
+      catalogShowDemoInModal() &&
+      Boolean(demoUrl) &&
+      isTrustedInternalDemoUrl(demoUrl);
+    const externalFallbackOnly = isExternalDemo && !showExternalDemoInside;
     setDemoDialogMode(solution);
     const target = $("[data-demo-modal-content]");
     if (!target) return;
@@ -1490,11 +1518,11 @@
     const originalDemoUrl = solutionOriginalDemoUrl(solution);
     const identifier = solutionIdentifier(solution);
     target.innerHTML = `
-      <div class="demo-modal ${isExternalFrame ? "demo-modal--external" : ""}">
+      <div class="demo-modal ${isExternalDemo ? "demo-modal--external" : ""}">
         <div class="demo-modal__head">
-          <div><h2 id="demo-title">${esc(isExternalFrame ? solution.title : `Демо: ${solution.title}`)}</h2><p>${isExternalFrame ? "Полный просмотр открывается отдельно." : "Локальная демо-страница открывается внутри WEB00 Pro."}</p></div>
-          ${isExternalFrame ? "" : `<div class="segmented"><button class="is-active" type="button" data-demo-device="desktop">Desktop</button><button type="button" data-demo-device="mobile">Mobile</button></div>`}
-          ${externalLink(originalDemoUrl, isExternalFrame ? "Открыть отдельно" : "Открыть оригинал")}
+          <div><h2 id="demo-title">${esc(isExternalDemo ? solution.title : `Демо: ${solution.title}`)}</h2><p>${externalFallbackOnly ? "Полный просмотр открывается отдельно." : isExternalDemo ? "Демо открывается внутри WEB00 Pro." : "Локальная демо-страница открывается внутри WEB00 Pro."}</p></div>
+          ${isExternalDemo ? "" : `<div class="segmented"><button class="is-active" type="button" data-demo-device="desktop">Desktop</button><button type="button" data-demo-device="mobile">Mobile</button></div>`}
+          ${externalLink(originalDemoUrl, isExternalDemo ? "Открыть отдельно" : "Открыть оригинал")}
           <a class="btn btn--primary btn--small" href="${attr(briefUrl({ solution: identifier }))}">Хочу такой сайт</a>
         </div>
         <div class="demo-layout">
@@ -1505,7 +1533,7 @@
             <div class="mini-meta"><span>${esc(price)}</span><span>${esc(time)}</span></div>
           </aside>
           <div class="demo-frame ${demoUrl ? "demo-frame--live" : ""}" data-demo-frame>
-            ${isExternalFrame ? `
+            ${externalFallbackOnly ? `
               <div class="demo-frame__external-fallback" data-demo-external-fallback>
                 <span>▤</span>
                 <h3>Полный просмотр открывается отдельно</h3>
@@ -1552,7 +1580,7 @@
         externalFallback.hidden = false;
       });
     }
-    if (isExternalFrame) fitDemoDesktopCanvas(target);
+    if (isExternalDemo) fitDemoDesktopCanvas(target);
     setModal("demo", true);
   }
 
