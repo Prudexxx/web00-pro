@@ -18,6 +18,7 @@ import type { PublicCatalogService } from "../src/modules/public-catalog/public-
 import {
   PUBLIC_RUNTIME_SHADOW_SYNC_CONFIRMATION,
   createPublicRuntimeShadowDependencies,
+  createPublicRuntimeShadowStatusService,
   type PublicRuntimeShadowDependencies
 } from "../src/modules/public-catalog/public-runtime-shadow.js";
 import type { PublicRuntimeStorage } from "../src/modules/public-catalog/public-runtime-storage.js";
@@ -50,7 +51,10 @@ describe("public runtime shadow config and dependency factory", () => {
       prisma: {} as never
     });
 
-    expect(config).toEqual({ enabled: false });
+    expect(config).toEqual({
+      primary: { enabled: false },
+      shadow: { enabled: false }
+    });
     expect(dependencies).toBeNull();
     expect(createStorage).not.toHaveBeenCalled();
   });
@@ -67,10 +71,10 @@ describe("public runtime shadow config and dependency factory", () => {
   it("accepts only the canonical canary/shadow prefix while preserving credentials internally", () => {
     const config = parseCloudRuRuntimeEnv(enabledEnv);
 
-    expect(config.enabled).toBe(true);
-    if (!config.enabled) throw new Error("Expected enabled shadow config.");
-    expect(config.storage.prefix).toBe("canary/shadow");
-    expect(config.storage.accessKeyId).toBe("tenant_id:key_id");
+    expect(config.shadow.enabled).toBe(true);
+    if (!config.shadow.enabled) throw new Error("Expected enabled shadow config.");
+    expect(config.shadow.storage.prefix).toBe("canary/shadow");
+    expect(config.shadow.storage.accessKeyId).toBe("tenant_id:key_id");
   });
 
   it("returns a sanitized config error when required enabled env is missing", () => {
@@ -119,6 +123,50 @@ describe("public runtime shadow config and dependency factory", () => {
     expect(syncResponse.body.error.code).toBe("CONFIGURATION_ERROR");
     expect(storage.putImmutableObject).not.toHaveBeenCalled();
     expect(storage.putMutableManifest).not.toHaveBeenCalled();
+  });
+
+  it("does not report shadow ready when the durable ready row belongs to the primary target", async () => {
+    const config = parseCloudRuRuntimeEnv({
+      ...enabledEnv,
+      CLOUDRU_RUNTIME_PRIMARY_PREFIX: "runtime/production",
+      WEB00_PUBLIC_RUNTIME_PRIMARY_ENABLED: "true"
+    });
+    if (!config.primary.enabled || !config.shadow.enabled) {
+      throw new Error("Expected both runtime targets enabled.");
+    }
+    const statusService = createPublicRuntimeShadowStatusService({
+      now: () => new Date("2026-08-07T12:00:00.000Z"),
+      reader: {
+        readState: vi.fn().mockResolvedValue({
+          kind: "state",
+          state: {
+            currentItemsCount: 16,
+            currentSnapshotChecksum: "a".repeat(64),
+            currentSnapshotGeneratedAt: new Date("2026-08-07T12:00:00.000Z"),
+            currentSnapshotPath: "runtime/production/catalog/v1/releases/revision-12-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+            desiredRevision: 12,
+            id: "public-catalog",
+            lastSyncErrorCode: null,
+            lastSyncRequestId: "req_primary",
+            publishedRevision: 12,
+            publishedRuntimeTargetKey: config.primary.targetKey,
+            showDemoInModal: false,
+            syncLeaseExpiresAt: null,
+            syncLeaseId: null,
+            syncStatus: "ready"
+          }
+        })
+      },
+      targetKey: config.shadow.targetKey
+    });
+
+    const status = await statusService.getStatus();
+
+    expect(status).toMatchObject({
+      desiredRevision: 12,
+      publishedRevision: 12,
+      status: "pending"
+    });
   });
 });
 
@@ -532,6 +580,7 @@ function createShadowDependencies(
         status: "ready"
       })
     },
+    targetKey: "test-shadow-target-key",
     ...overrides
   };
 }

@@ -12,6 +12,7 @@ import type {
   PublicCatalogSyncLease,
   PublicCatalogSyncRepository
 } from "./public-catalog-sync.service.js";
+import { isSamePublicRuntimeTarget } from "./public-runtime-target.js";
 
 export const PUBLIC_CATALOG_CONTROL_ID = "public-catalog";
 export const PUBLIC_CATALOG_SYNC_STATUSES = ["pending", "syncing", "ready", "failed"] as const;
@@ -28,6 +29,7 @@ export interface PublicCatalogControlState {
   lastSyncErrorCode: string | null;
   lastSyncRequestId: string | null;
   publishedRevision: number;
+  publishedRuntimeTargetKey: string | null;
   showDemoInModal: boolean;
   syncLeaseExpiresAt: Date | null;
   syncLeaseId: string | null;
@@ -37,6 +39,7 @@ export interface PublicCatalogControlState {
 export interface AcquirePublicCatalogLeaseOptions {
   leaseId: string;
   now: Date;
+  targetKey: string;
   ttlMs: number;
 }
 
@@ -51,6 +54,7 @@ export interface FinalizePublicCatalogLeaseOptions {
   itemsCount: number;
   leaseId: string;
   publishedRevision: number;
+  publishedRuntimeTargetKey: string;
   requestId: string;
   snapshotPath: string;
 }
@@ -113,6 +117,12 @@ export function validatePublicCatalogControlState(
   if (state.syncStatus === "ready" && state.desiredRevision !== state.publishedRevision) {
     throw new Error("Invalid ready public catalog revision invariant.");
   }
+  if (
+    state.publishedRuntimeTargetKey !== null &&
+    typeof state.publishedRuntimeTargetKey !== "string"
+  ) {
+    throw new Error("Invalid public catalog runtime target key.");
+  }
   return state;
 }
 
@@ -146,6 +156,40 @@ export function recoverStalePublicCatalogLeaseState(
     syncLeaseId: null,
     syncStatus: state.desiredRevision === state.publishedRevision ? "ready" : "pending"
   });
+}
+
+export function isPublicCatalogReadyForTarget(
+  state: PublicCatalogControlState,
+  targetKey: string,
+  now: Date
+): boolean {
+  const recovered = recoverStalePublicCatalogLeaseState(state, now);
+  return (
+    recovered.syncStatus === "ready" &&
+    recovered.desiredRevision === recovered.publishedRevision &&
+    isSamePublicRuntimeTarget(recovered.publishedRuntimeTargetKey, targetKey)
+  );
+}
+
+function prepareControlStateForTargetLease(
+  state: PublicCatalogControlState,
+  targetKey: string
+): PublicCatalogControlState {
+  validatePublicCatalogControlState(state);
+  if (
+    state.syncStatus === "ready" &&
+    state.desiredRevision === state.publishedRevision &&
+    !isSamePublicRuntimeTarget(state.publishedRuntimeTargetKey, targetKey)
+  ) {
+    return validatePublicCatalogControlState({
+      ...state,
+      desiredRevision: assertPositiveRevision(state.publishedRevision + 1),
+      lastSyncErrorCode: null,
+      lastSyncRequestId: null,
+      syncStatus: "pending"
+    });
+  }
+  return state;
 }
 
 export function acquirePublicCatalogLeaseState(
@@ -189,6 +233,9 @@ export function finalizePublicCatalogLeaseState(
   if (!/^[a-f0-9]{64}$/.test(options.checksum)) {
     throw new Error("Invalid public catalog checksum.");
   }
+  if (typeof options.publishedRuntimeTargetKey !== "string" || options.publishedRuntimeTargetKey === "") {
+    throw new Error("Invalid public catalog runtime target key.");
+  }
   if (!Number.isSafeInteger(options.itemsCount) || options.itemsCount < 0) {
     throw new Error("Invalid public catalog items count.");
   }
@@ -204,6 +251,7 @@ export function finalizePublicCatalogLeaseState(
     lastSyncErrorCode: null,
     lastSyncRequestId: options.requestId,
     publishedRevision: options.publishedRevision,
+    publishedRuntimeTargetKey: options.publishedRuntimeTargetKey,
     syncLeaseExpiresAt: null,
     syncLeaseId: null,
     syncStatus
@@ -392,17 +440,22 @@ export function createPrismaPublicCatalogSyncRepository(
         if (isMissingPublicCatalogControlTable(error)) return null;
         throw error;
       }
-      if (state.syncStatus === "ready" && state.desiredRevision === state.publishedRevision) {
-        return null;
-      }
       const recovered = recoverStalePublicCatalogLeaseState(state, input.now);
       if (hasUnexpiredPublicCatalogLease(recovered, input.now)) {
         return null;
       }
 
-      const acquired = acquirePublicCatalogLeaseState(state, input);
+      if (isPublicCatalogReadyForTarget(recovered, input.targetKey, input.now)) {
+        return null;
+      }
+
+      const acquirable = prepareControlStateForTargetLease(recovered, input.targetKey);
+      const acquired = acquirePublicCatalogLeaseState(acquirable, input);
       const updated = await prisma.publicCatalogControl.updateMany({
         data: {
+          desiredRevision: acquired.state.desiredRevision,
+          lastSyncErrorCode: acquired.state.lastSyncErrorCode,
+          lastSyncRequestId: acquired.state.lastSyncRequestId,
           syncLeaseExpiresAt: acquired.state.syncLeaseExpiresAt,
           syncLeaseId: acquired.state.syncLeaseId,
           syncStatus: acquired.state.syncStatus
@@ -462,6 +515,7 @@ export function createPrismaPublicCatalogSyncRepository(
           lastSyncErrorCode: next.lastSyncErrorCode,
           lastSyncRequestId: next.lastSyncRequestId,
           publishedRevision: next.publishedRevision,
+          publishedRuntimeTargetKey: next.publishedRuntimeTargetKey,
           syncLeaseExpiresAt: null,
           syncLeaseId: null,
           syncStatus: next.syncStatus
@@ -618,6 +672,7 @@ function rowToState(row: PublicCatalogControlRow): PublicCatalogControlState {
     lastSyncErrorCode: row.lastSyncErrorCode,
     lastSyncRequestId: row.lastSyncRequestId,
     publishedRevision: row.publishedRevision,
+    publishedRuntimeTargetKey: row.publishedRuntimeTargetKey ?? null,
     showDemoInModal: row.showDemoInModal === true,
     syncLeaseExpiresAt: row.syncLeaseExpiresAt,
     syncLeaseId: row.syncLeaseId,
@@ -647,6 +702,7 @@ function defaultControlState(): PublicCatalogControlState {
     lastSyncErrorCode: null,
     lastSyncRequestId: null,
     publishedRevision: 0,
+    publishedRuntimeTargetKey: null,
     showDemoInModal: false,
     syncLeaseExpiresAt: null,
     syncLeaseId: null,

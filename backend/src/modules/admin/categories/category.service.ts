@@ -1,5 +1,6 @@
 import { AppError } from "../../../lib/errors.js";
 import type { AuthenticatedPrincipal } from "../../auth/auth.types.js";
+import type { PublicCatalogReconciler } from "../../public-catalog/public-catalog-reconciler.js";
 import type { AdminMutationContext } from "../admin.types.js";
 import { createPermissionPolicy } from "../rbac.policy.js";
 import { categoryNotFound } from "../sites/site.service.js";
@@ -32,7 +33,10 @@ export interface AdminCategoryService {
 }
 
 export function createAdminCategoryService(
-  options: { repository: AdminCategoryRepository }
+  options: {
+    publicCatalogReconciler?: Pick<PublicCatalogReconciler, "requestReconcile">;
+    repository: AdminCategoryRepository;
+  }
 ): AdminCategoryService {
   const policy = createPermissionPolicy();
 
@@ -82,10 +86,12 @@ export function createAdminCategoryService(
       };
     },
     async updateCategory(id, input, context) {
-      return mapAdminCategoryDetail(
-        await options.repository.updateCategory(id, input, context),
-        context.actor.role
-      );
+      const record = await options.repository.updateCategory(id, input, context);
+      options.publicCatalogReconciler?.requestReconcile({
+        reason: "category.update",
+        requestId: context.requestId
+      });
+      return mapAdminCategoryDetail(record, context.actor.role);
     }
   };
 }

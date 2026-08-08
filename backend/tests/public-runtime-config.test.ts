@@ -18,7 +18,8 @@ describe("Cloud.ru public runtime env", () => {
     const config = parseCloudRuRuntimeEnv({});
 
     expect(config).toEqual({
-      enabled: false
+      primary: { enabled: false },
+      shadow: { enabled: false }
     });
   });
 
@@ -63,9 +64,64 @@ describe("Cloud.ru public runtime env", () => {
   it("preserves the complete Cloud.ru access key id without reconstruction", () => {
     const config = parseCloudRuRuntimeEnv(enabledBaseEnv);
 
-    expect(config.enabled).toBe(true);
-    if (!config.enabled) throw new Error("Expected enabled config.");
-    expect(config.storage.accessKeyId).toBe("tenant_id:key_id");
-    expect(config.storage.prefix).toBe("canary/shadow");
+    expect(config.shadow.enabled).toBe(true);
+    if (!config.shadow.enabled) throw new Error("Expected enabled shadow config.");
+    expect(config.shadow.storage.accessKeyId).toBe("tenant_id:key_id");
+    expect(config.shadow.storage.prefix).toBe("canary/shadow");
+  });
+
+  it("accepts primary runtime/production while preserving shadow canary/shadow", () => {
+    const config = parseCloudRuRuntimeEnv({
+      ...enabledBaseEnv,
+      CLOUDRU_RUNTIME_PRIMARY_PREFIX: "runtime/production",
+      CLOUDRU_RUNTIME_SHADOW_PREFIX: "canary/shadow",
+      WEB00_PUBLIC_RUNTIME_PRIMARY_ENABLED: "true",
+      WEB00_PUBLIC_RUNTIME_SHADOW_ENABLED: "true"
+    });
+
+    expect(config.shadow.enabled).toBe(true);
+    expect(config.primary.enabled).toBe(true);
+    if (!config.shadow.enabled || !config.primary.enabled) {
+      throw new Error("Expected both runtime targets enabled.");
+    }
+    expect(config.shadow.target.role).toBe("shadow");
+    expect(config.shadow.storage.prefix).toBe("canary/shadow");
+    expect(config.primary.target.role).toBe("primary");
+    expect(config.primary.storage.prefix).toBe("runtime/production");
+  });
+
+  it("safely defaults enabled primary runtime to runtime/production without enabling shadow", () => {
+    const config = parseCloudRuRuntimeEnv({
+      ...enabledBaseEnv,
+      CLOUDRU_RUNTIME_PREFIX: undefined,
+      WEB00_PUBLIC_RUNTIME_PRIMARY_ENABLED: "true",
+      WEB00_PUBLIC_RUNTIME_SHADOW_ENABLED: "false"
+    });
+
+    expect(config.shadow.enabled).toBe(false);
+    expect(config.primary.enabled).toBe(true);
+    if (!config.primary.enabled) {
+      throw new Error("Expected primary runtime enabled.");
+    }
+    expect(config.primary.storage.prefix).toBe("runtime/production");
+    expect(config.primary.target.role).toBe("primary");
+  });
+
+  it("does not include credentials in the runtime target key", () => {
+    const left = parseCloudRuRuntimeEnv({
+      ...enabledBaseEnv,
+      CLOUDRU_S3_SECRET_ACCESS_KEY: "first-redacted-runtime-placeholder"
+    });
+    const right = parseCloudRuRuntimeEnv({
+      ...enabledBaseEnv,
+      CLOUDRU_S3_SECRET_ACCESS_KEY: "second-redacted-runtime-placeholder"
+    });
+
+    expect(left.shadow.enabled && right.shadow.enabled).toBe(true);
+    if (!left.shadow.enabled || !right.shadow.enabled) {
+      throw new Error("Expected enabled shadow configs.");
+    }
+    expect(left.shadow.targetKey).toBe(right.shadow.targetKey);
+    expect(left.shadow.targetKey).not.toMatch(/secret|redacted|access/i);
   });
 });

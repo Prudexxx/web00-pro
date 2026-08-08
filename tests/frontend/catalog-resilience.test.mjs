@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash, webcrypto } from "node:crypto";
+import { TextDecoder, TextEncoder } from "node:util";
 
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
 import { createFakeFetch, jsonResponse } from "./helpers/fake-fetch.mjs";
@@ -82,6 +84,9 @@ async function loadCatalog({ fetch, storage = createStorage(), data = staticData
   const browser = createFakeBrowser();
   browser.window.WEB00_TEST_MODE = true;
   browser.window.WEB00_DATA = data;
+  browser.window.TextDecoder = TextDecoder;
+  browser.window.TextEncoder = TextEncoder;
+  browser.window.crypto = webcrypto;
   browser.window.localStorage = storage;
   browser.window.fetch = fetch;
   await loadClassicScript("assets/js/runtime-config.js", browser);
@@ -90,6 +95,9 @@ async function loadCatalog({ fetch, storage = createStorage(), data = staticData
     requestTimeoutMs: 1000,
     staticFallbackEnabled: true,
   });
+  if (config?.catalogRuntimeMode === "cloud-primary") {
+    await loadClassicScript("assets/js/catalog-runtime.js", browser);
+  }
   await loadClassicScript("assets/js/catalog-api.js", browser);
   return { catalog: browser.window.WEB00_CATALOG, storage, tests: browser.window.WEB00_CATALOG_TESTS };
 }
@@ -157,11 +165,59 @@ async function bootSolutionsPage(fetch, options = {}) {
     requestTimeoutMs: 1000,
     staticFallbackEnabled: true,
   });
+  browser.window.TextDecoder = TextDecoder;
+  browser.window.TextEncoder = TextEncoder;
+  browser.window.crypto = webcrypto;
+  if (options.config?.catalogRuntimeMode === "cloud-primary") {
+    await loadClassicScript("assets/js/catalog-runtime.js", browser);
+  }
   await loadClassicScript("assets/js/catalog-api.js", browser);
   await loadClassicScript("assets/js/main.js", browser);
   const [onReady] = browser.listeners.get("DOMContentLoaded");
   await onReady();
   return page;
+}
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function cloudConfig(overrides = {}) {
+  return {
+    apiBaseUrl: "https://web00-backend-production.onrender.com",
+    catalogManifestUrl: "https://web00-public-runtime.s3-website.cloud.ru/runtime/production/catalog/v1/manifest.json",
+    catalogRuntimeMode: "cloud-primary",
+    requestTimeoutMs: 1000,
+    staticFallbackEnabled: true,
+    ...overrides,
+  };
+}
+
+function cloudSnapshot(items, revision = 6) {
+  const body = JSON.stringify({
+    generatedAt: "2026-08-07T12:00:00.000Z",
+    items,
+    itemsCount: items.length,
+    revision,
+    schemaVersion: 1,
+    settings: { showDemoInModal: false },
+  }) + "\n";
+  const sha256 = sha256Hex(body);
+  const snapshotPath = `runtime/production/catalog/v1/releases/revision-${revision}-${sha256}.json`;
+  const snapshotUrl = `https://web00-public-runtime.s3-website.cloud.ru/${snapshotPath}`;
+  return {
+    body,
+    manifest: {
+      generatedAt: "2026-08-07T12:00:00.000Z",
+      itemsCount: items.length,
+      revision,
+      schemaVersion: 1,
+      sha256,
+      snapshotPath,
+      snapshotUrl,
+    },
+    snapshotUrl,
+  };
 }
 
 test("API timeout keeps the populated static catalog available", async () => {
@@ -220,6 +276,85 @@ test("fresh static catalog takes precedence over stale last-known-good while bac
   assert.equal(result.items.some((item) => item.title === "Дом для Буси"), false);
   assert.equal(result.staticFallbackActive, true);
   assert.equal(result.lifecycle, "ready");
+});
+
+test("valid Cloud runtime manifest and snapshot replaces static without Render catalog GET", async () => {
+  const runtime = cloudSnapshot([apiSite("web00-smoke-create", "WEB00 Smoke Updated")]);
+  const fetchCalls = [];
+  const fetch = createFakeFetch(async (url) => {
+    fetchCalls.push(String(url));
+    if (String(url).startsWith(cloudConfig().catalogManifestUrl)) {
+      return jsonResponse(runtime.manifest);
+    }
+    if (String(url) === runtime.snapshotUrl) {
+      return new Response(new TextEncoder().encode(runtime.body), {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        status: 200,
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const { catalog, storage } = await loadCatalog({
+    config: cloudConfig(),
+    data: freshSmokeStaticData(),
+    fetch,
+  });
+  const initial = catalog.getInitialCatalog();
+  const resolved = await catalog.resolveCatalogForPage({ currentState: initial, kind: "solutions" });
+  const saved = JSON.parse(storage.snapshot()[LKG_KEY]);
+
+  assert.equal(initial.source, "static");
+  assert.equal(resolved.source, "cloud");
+  assert.deepEqual(plain(resolved.items.map((item) => item.slug)), ["web00-smoke-create"]);
+  assert.equal(fetchCalls.some((url) => url.includes("web00-backend-production.onrender.com/api/sites")), false);
+  assert.deepEqual(saved.items.map((item) => item.slug), ["web00-smoke-create"]);
+});
+
+test("invalid Cloud snapshot SHA keeps current static catalog", async () => {
+  const runtime = cloudSnapshot([apiSite("web00-smoke-create", "WEB00 Smoke Updated")]);
+  const fetch = createFakeFetch(async (url) => {
+    if (String(url).startsWith(cloudConfig().catalogManifestUrl)) {
+      return jsonResponse({ ...runtime.manifest, sha256: "b".repeat(64) });
+    }
+    if (String(url) === runtime.snapshotUrl) {
+      return new Response(new TextEncoder().encode(runtime.body), {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        status: 200,
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+
+  const { catalog } = await loadCatalog({
+    config: cloudConfig(),
+    data: freshSmokeStaticData(),
+    fetch,
+  });
+  const initial = catalog.getInitialCatalog();
+  const resolved = await catalog.resolveCatalogForPage({ currentState: initial, kind: "solutions" });
+
+  assert.equal(resolved.source, "static");
+  assert.deepEqual(plain(resolved.items.map((item) => item.slug)), ["web00-smoke-create"]);
+  assert.equal(resolved.staticFallbackActive, true);
+  assert.equal(resolved.lifecycle, "ready");
+});
+
+test("Cloud timeout keeps static catalog and resolves loading state", async () => {
+  const fetch = createFakeFetch((_url, init) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+  }));
+  const { catalog } = await loadCatalog({
+    config: cloudConfig({ requestTimeoutMs: 1 }),
+    data: freshSmokeStaticData(),
+    fetch,
+  });
+  const initial = catalog.getInitialCatalog();
+  const resolved = await catalog.resolveCatalogForPage({ currentState: initial, kind: "solutions" });
+
+  assert.equal(resolved.lifecycle, "ready");
+  assert.equal(resolved.staticFallbackActive, true);
+  assert.deepEqual(plain(resolved.items.map((item) => item.slug)), ["web00-smoke-create"]);
 });
 
 test("solutions render never paints stale last-known-good when fresh static catalog exists", async () => {

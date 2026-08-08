@@ -3,10 +3,13 @@
 
   const CONFIG_DEFAULTS = Object.freeze({
     apiBaseUrl: "",
+    catalogManifestUrl: "",
+    catalogRuntimeMode: "static",
     requestTimeoutMs: 8000,
     staticFallbackEnabled: false,
   });
 
+  const CLOUD_PRIMARY_MANIFEST_URL = "https://web00-public-runtime.s3-website.cloud.ru/runtime/production/catalog/v1/manifest.json";
   const LKG_KEY = "web00.catalog.api.lkg.v1";
   const LKG_SCHEMA_VERSION = 1;
   const MAX_CATALOG_ITEMS = 1000;
@@ -115,18 +118,28 @@
   function validateConfig(input = window.WEB00_CONFIG) {
     const raw = input && typeof input === "object" ? input : {};
     const timeout = Number(raw.requestTimeoutMs);
-    const requestTimeoutMs = Number.isFinite(timeout) && timeout >= 1000 && timeout <= 30000
+    const requestTimeoutMs = Number.isFinite(timeout) && timeout >= 1 && timeout <= 30000
       ? Math.round(timeout)
       : CONFIG_DEFAULTS.requestTimeoutMs;
     const staticFallbackEnabled = typeof raw.staticFallbackEnabled === "boolean"
       ? raw.staticFallbackEnabled
       : CONFIG_DEFAULTS.staticFallbackEnabled;
+    const catalogRuntimeMode =
+      raw.catalogRuntimeMode === "cloud-primary" &&
+      raw.catalogManifestUrl === CLOUD_PRIMARY_MANIFEST_URL
+        ? "cloud-primary"
+        : CONFIG_DEFAULTS.catalogRuntimeMode;
+    const catalogManifestUrl = catalogRuntimeMode === "cloud-primary"
+      ? CLOUD_PRIMARY_MANIFEST_URL
+      : CONFIG_DEFAULTS.catalogManifestUrl;
     const rawBase = text(raw.apiBaseUrl);
 
     if (!rawBase) {
       return Object.freeze({
         apiBaseUrl: "",
         apiEnabled: false,
+        catalogManifestUrl,
+        catalogRuntimeMode,
         requestTimeoutMs,
         staticFallbackEnabled,
         valid: true,
@@ -137,6 +150,8 @@
     return Object.freeze({
       apiBaseUrl,
       apiEnabled: Boolean(apiBaseUrl),
+      catalogManifestUrl,
+      catalogRuntimeMode,
       requestTimeoutMs,
       staticFallbackEnabled,
       valid: Boolean(apiBaseUrl),
@@ -458,11 +473,11 @@
     return `<picture><source type="image/avif" srcset="${escapeAttribute(model.avifSrcset)}"><source type="image/webp" srcset="${escapeAttribute(model.webpSrcset)}">${image}</picture>`;
   }
 
-  function normalizeApiItems(data) {
+  function normalizeApiItems(data, options = {}) {
     const seen = new Set();
     const normalized = [];
     (Array.isArray(data) ? data : []).forEach((entry) => {
-      const item = normalizeApiSite(entry);
+      const item = normalizeApiSite(entry, { source: options.source || "api" });
       if (!item) return;
       if (seen.has(item.slug)) {
         throw createCatalogError("WEB00_API_DUPLICATE_SLUG");
@@ -516,6 +531,19 @@
       sort: "sortOrder",
     });
     return catalogResultFromItems(items, "api");
+  }
+
+  async function loadCloudRuntimeCatalog(options = {}) {
+    const config = options.config || getConfig();
+    if (config.catalogRuntimeMode !== "cloud-primary") {
+      throw createCatalogError("WEB00_CLOUD_NOT_CONFIGURED");
+    }
+    const runtime = window.WEB00_CATALOG_RUNTIME;
+    if (!runtime || typeof runtime.loadCatalogFromRuntime !== "function") {
+      throw createCatalogError("WEB00_CLOUD_RUNTIME_UNAVAILABLE");
+    }
+    const result = await runtime.loadCatalogFromRuntime(config, { signal: options.signal });
+    return catalogResultFromItems(normalizeApiItems(result.snapshot.items, { source: "cloud" }), "cloud");
   }
 
   async function loadPopularSites(options = { limit: 3 }) {
@@ -619,7 +647,7 @@
     const kind = options.kind || "solutions";
     const config = getConfig();
     const currentState = options.currentState;
-    if (!config.apiEnabled) {
+    if (!config.apiEnabled && config.catalogRuntimeMode !== "cloud-primary") {
       return withStateFlags(getInitialCatalog({ limit: kind === "popular" ? options.limit : undefined }), {
         apiAvailable: false,
         staticFallbackActive: false,
@@ -630,17 +658,31 @@
     const request = channel.start(config.requestTimeoutMs);
 
     try {
-      const result = kind === "popular"
-        ? await loadPopularSites({ limit: options.limit || 3, signal: request.signal, config })
-        : await loadAllSites({ signal: request.signal, config });
+      let result;
+      if (config.catalogRuntimeMode === "cloud-primary" && (kind === "solutions" || kind === "popular")) {
+        result = await loadCloudRuntimeCatalog({ signal: request.signal, config });
+        if (kind === "popular") {
+          const items = result.items.slice(0, Number(options.limit || 3));
+          result = { ...result, lifecycle: items.length ? "ready" : "empty", items };
+        }
+      } else {
+        result = kind === "popular"
+          ? await loadPopularSites({ limit: options.limit || 3, signal: request.signal, config })
+          : await loadAllSites({ signal: request.signal, config });
+      }
       if (channel.isStale(request.sequence)) {
         return null;
       }
       if (!hasCatalogItems(result)) {
         return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
       }
-      if (kind === "solutions") saveLastKnownGoodCatalog(result.items);
-      return withStateFlags(result, { apiAvailable: true, staticFallbackActive: false });
+      if (kind === "solutions" && (result.source === "cloud" || result.source === "api")) {
+        saveLastKnownGoodCatalog(result.items);
+      }
+      return withStateFlags(result, {
+        apiAvailable: result.source === "api",
+        staticFallbackActive: false,
+      });
     } catch (error) {
       const errorCode = error && error.code ? error.code : (request.signal.aborted ? "WEB00_API_ABORTED" : "WEB00_API_ERROR");
       if (channel.isStale(request.sequence)) {
@@ -771,6 +813,7 @@
     getStaticCatalog,
     getInitialCatalog,
     loadAllSites,
+    loadCloudRuntimeCatalog,
     loadPopularSites,
     loadSiteDetail,
     loadCategoryDetail,

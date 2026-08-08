@@ -11,6 +11,7 @@ const SHELL_ASSETS = [
   "assets/css/shell.css",
   "assets/css/components.css",
   "assets/js/data.js",
+  "assets/js/catalog-runtime.js",
   "assets/js/catalog-api.js",
   "assets/js/main.js",
   "assets/icons/web00-icon-192.png",

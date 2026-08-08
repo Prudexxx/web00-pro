@@ -56,6 +56,8 @@ import { createPrismaStorageCleanupRepository } from "./modules/storage-cleanup/
 import { createStorageCleanupWorker } from "./modules/storage-cleanup/storage-cleanup.worker.js";
 import { createPrismaPublicCatalogRepository } from "./modules/public-catalog/public-catalog.repository.js";
 import { createPublicCatalogService } from "./modules/public-catalog/public-catalog.service.js";
+import { createPublicCatalogReconciler } from "./modules/public-catalog/public-catalog-reconciler.js";
+import { createPublicRuntimePrimaryDependencies } from "./modules/public-catalog/public-runtime-primary.js";
 import { createPublicRuntimeShadowDependencies } from "./modules/public-catalog/public-runtime-shadow.js";
 import {
   createPrismaReadinessProbe,
@@ -125,10 +127,35 @@ export function startServer(options: StartServerOptions): StartedServer {
     repository
   });
   const publicRuntimeShadow = createPublicRuntimeShadowDependencies({
-    env: options.publicRuntimeShadowEnv ?? { enabled: false },
+    env: options.publicRuntimeShadowEnv ?? {
+      primary: { enabled: false },
+      shadow: { enabled: false }
+    },
     now: options.now ?? (() => new Date()),
     prisma
   });
+  const publicRuntimePrimary = createPublicRuntimePrimaryDependencies({
+    env: (options.publicRuntimeShadowEnv ?? {
+      primary: { enabled: false },
+      shadow: { enabled: false }
+    }).primary,
+    now: options.now ?? (() => new Date()),
+    prisma
+  });
+  const publicCatalogReconciler = publicRuntimePrimary === null
+    ? null
+    : createPublicCatalogReconciler({
+        onError: () => {
+          logger.log({
+            environment: options.env.NODE_ENV,
+            event: "public-catalog.reconcile.failed",
+            level: "error",
+            service: options.env.SERVICE_NAME,
+            time: (options.now ?? (() => new Date()))().toISOString()
+          });
+        },
+        syncService: publicRuntimePrimary.syncService
+      });
   const authRepository = createAuthRepository({ prisma });
   const authService = createAuthService({
     accessTokenTtlSeconds: options.authEnv.ACCESS_TOKEN_TTL_SECONDS,
@@ -161,6 +188,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     service: authService
   });
   const adminSiteService = createAdminSiteService({
+    ...(publicCatalogReconciler === null ? {} : { publicCatalogReconciler }),
     repository: createPrismaAdminSiteRepository({
       diagnostics: {
         environment: options.env.NODE_ENV,
@@ -225,6 +253,7 @@ export function startServer(options: StartServerOptions): StartedServer {
     }),
     authService,
     categoryService: createAdminCategoryService({
+      ...(publicCatalogReconciler === null ? {} : { publicCatalogReconciler }),
       repository: createPrismaAdminCategoryRepository({ prisma })
     }),
     siteService: adminSiteService,
@@ -240,6 +269,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       },
       imageUrlPolicy,
       processor: createSharpImageProcessor(),
+      ...(publicCatalogReconciler === null ? {} : { publicCatalogReconciler }),
       repository: createPrismaSiteImageRepository({ prisma }),
       storage: imageStorage
     }),
@@ -280,6 +310,7 @@ export function startServer(options: StartServerOptions): StartedServer {
   if (options.storageConfig.workerEnabled) {
     storageCleanupWorker.start();
   }
+  publicCatalogReconciler?.start();
   pagesPublicationReconciliationWorker.start();
 
   server.listen(options.env.PORT, "0.0.0.0", () => {
@@ -297,6 +328,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       createShutdownHandler(server, {
         disconnect: async () => {
           await Promise.all([
+            publicCatalogReconciler?.stop() ?? Promise.resolve(),
             pagesPublicationReconciliationWorker.stop(),
             storageCleanupWorker.stop()
           ]);
@@ -313,6 +345,7 @@ export function startServer(options: StartServerOptions): StartedServer {
       createShutdownHandler(server, {
         disconnect: async () => {
           await Promise.all([
+            publicCatalogReconciler?.stop() ?? Promise.resolve(),
             pagesPublicationReconciliationWorker.stop(),
             storageCleanupWorker.stop()
           ]);

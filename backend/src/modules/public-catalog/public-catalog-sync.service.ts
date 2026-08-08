@@ -14,7 +14,12 @@ import type {
   PublicCatalogControlState,
   PublicCatalogSyncStatus
 } from "./public-catalog-control.repository.js";
+import { isPublicCatalogReadyForTarget } from "./public-catalog-control.repository.js";
 import type { PublicSiteRecord } from "./public-catalog.types.js";
+import {
+  createPublicRuntimeTargetKey,
+  type PublicRuntimeTargetConfig
+} from "./public-runtime-target.js";
 import {
   createPublicRuntimePathBuilder,
   type PublicRuntimePathBuilder,
@@ -34,6 +39,7 @@ export interface PublicCatalogSyncRepository {
   acquireLease(input: {
     leaseId: string;
     now: Date;
+    targetKey: string;
     ttlMs: number;
   }): Promise<PublicCatalogSyncLease | null>;
   failLease(input: {
@@ -47,6 +53,7 @@ export interface PublicCatalogSyncRepository {
     itemsCount: number;
     leaseId: string;
     publishedRevision: number;
+    publishedRuntimeTargetKey: string;
     requestId: string;
     snapshotPath: string;
   }): Promise<PublicCatalogControlState>;
@@ -96,6 +103,7 @@ export function createPublicCatalogSyncService(options: {
   pathPrefix?: string;
   repository: PublicCatalogSyncRepository;
   storage: PublicRuntimeStorage;
+  target: PublicRuntimeTargetConfig;
 }): PublicCatalogSyncService {
   const now = options.now ?? (() => new Date());
   const createLeaseId = options.createLeaseId ?? (() => crypto.randomUUID());
@@ -105,6 +113,7 @@ export function createPublicCatalogSyncService(options: {
     prefix: options.pathPrefix ?? "",
     publicBaseUrl: "https://public-runtime.invalid"
   });
+  const targetKey = createPublicRuntimeTargetKey(options.target);
 
   return {
     async syncOnce(input) {
@@ -114,6 +123,7 @@ export function createPublicCatalogSyncService(options: {
         const lease = await options.repository.acquireLease({
           leaseId: createLeaseId(),
           now: leaseNow,
+          targetKey,
           ttlMs: leaseTtlMs
         });
 
@@ -121,7 +131,8 @@ export function createPublicCatalogSyncService(options: {
           return noLeaseResult(
             await options.repository.readCurrentState(),
             input.requestId,
-            leaseNow
+            leaseNow,
+            targetKey
           ) ?? lastPending ?? zeroPending(input.requestId);
         }
 
@@ -131,7 +142,8 @@ export function createPublicCatalogSyncService(options: {
             pathBuilder,
             repository: options.repository,
             requestId: input.requestId,
-            storage: options.storage
+            storage: options.storage,
+            targetKey
           });
           if (recovered !== null) {
             if (recovered.status === "pending") {
@@ -209,6 +221,7 @@ export function createPublicCatalogSyncService(options: {
             itemsCount: built.snapshot.itemsCount,
             leaseId: lease.leaseId,
             publishedRevision: lease.revision,
+            publishedRuntimeTargetKey: targetKey,
             requestId: input.requestId,
             snapshotPath
           });
@@ -246,6 +259,7 @@ async function recoverManifestIfAlreadyPublished(input: {
   repository: PublicCatalogSyncRepository;
   requestId: string;
   storage: PublicRuntimeStorage;
+  targetKey: string;
 }): Promise<PublicCatalogSyncResult | null> {
   let manifest: PublicCatalogManifest;
   try {
@@ -280,6 +294,7 @@ async function recoverManifestIfAlreadyPublished(input: {
     itemsCount: manifest.itemsCount,
     leaseId: input.lease.leaseId,
     publishedRevision: manifest.revision,
+    publishedRuntimeTargetKey: input.targetKey,
     requestId: input.requestId,
     snapshotPath: manifest.snapshotPath
   });
@@ -343,12 +358,13 @@ function stateToResult(
 function noLeaseResult(
   state: PublicCatalogControlState | null,
   requestId: string,
-  now: Date
+  now: Date,
+  targetKey: string
 ): PublicCatalogSyncResult {
   if (state === null) {
     throw setupRequired();
   }
-  if (isCleanReadyState(state, now)) {
+  if (isPublicCatalogReadyForTarget(state, targetKey, now)) {
     return stateToResult(state, requestId);
   }
   return {
@@ -357,16 +373,6 @@ function noLeaseResult(
     requestId,
     status: "pending"
   };
-}
-
-function isCleanReadyState(state: PublicCatalogControlState, now: Date): boolean {
-  return (
-    state.syncStatus === "ready" &&
-    state.desiredRevision === state.publishedRevision &&
-    (state.syncLeaseId === null ||
-      state.syncLeaseExpiresAt === null ||
-      state.syncLeaseExpiresAt.getTime() <= now.getTime())
-  );
 }
 
 function zeroPending(requestId: string): PublicCatalogSyncResult {

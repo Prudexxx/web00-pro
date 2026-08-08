@@ -1,5 +1,12 @@
 import { AppError } from "../lib/errors.js";
-import { normalizeRuntimePrefix } from "../modules/public-catalog/public-runtime-storage.js";
+import {
+  assertConfiguredRuntimePrefix
+} from "../modules/public-catalog/public-runtime-storage.js";
+import {
+  createPublicRuntimeTargetKey,
+  type PublicRuntimeTargetConfig,
+  type PublicRuntimeRole
+} from "../modules/public-catalog/public-runtime-target.js";
 
 export interface CloudRuRuntimeStorageConfig {
   accessKeyId: string;
@@ -11,19 +18,58 @@ export interface CloudRuRuntimeStorageConfig {
   secretAccessKey: string;
 }
 
-export type CloudRuRuntimeEnvConfig =
+export type CloudRuRuntimeTargetEnvConfig =
   | { enabled: false }
   | {
       enabled: true;
       storage: CloudRuRuntimeStorageConfig;
+      target: PublicRuntimeTargetConfig;
+      targetKey: string;
     };
 
+export interface CloudRuRuntimeEnvConfig {
+  primary: CloudRuRuntimeTargetEnvConfig;
+  shadow: CloudRuRuntimeTargetEnvConfig;
+}
+
 export function parseCloudRuRuntimeEnv(input: NodeJS.ProcessEnv): CloudRuRuntimeEnvConfig {
-  const enabled = parseBoolean(input.WEB00_PUBLIC_RUNTIME_SHADOW_ENABLED);
-  if (!enabled) {
-    return { enabled: false };
+  const shadowEnabled = parseBoolean(input.WEB00_PUBLIC_RUNTIME_SHADOW_ENABLED);
+  const primaryEnabled = parseBoolean(input.WEB00_PUBLIC_RUNTIME_PRIMARY_ENABLED);
+  if (!shadowEnabled && !primaryEnabled) {
+    return {
+      primary: { enabled: false },
+      shadow: { enabled: false }
+    };
   }
 
+  const shared = readSharedRuntimeStorage(input);
+
+  return {
+    primary: parseRuntimeTarget({
+      enabled: primaryEnabled,
+      prefix: input.CLOUDRU_RUNTIME_PRIMARY_PREFIX ?? "runtime/production",
+      role: "primary",
+      shared
+    }),
+    shadow: parseRuntimeTarget({
+      enabled: shadowEnabled,
+      prefix: input.CLOUDRU_RUNTIME_SHADOW_PREFIX ?? input.CLOUDRU_RUNTIME_PREFIX ?? "",
+      role: "shadow",
+      shared
+    })
+  };
+}
+
+interface SharedRuntimeStorage {
+  accessKeyId: string;
+  bucket: string;
+  endpoint: string;
+  publicBaseUrl: string;
+  region: string;
+  secretAccessKey: string;
+}
+
+function readSharedRuntimeStorage(input: NodeJS.ProcessEnv): SharedRuntimeStorage {
   const endpoint = readRequired(input.CLOUDRU_S3_ENDPOINT);
   const region = readRequired(input.CLOUDRU_S3_REGION);
   const bucket = readRequired(input.CLOUDRU_S3_BUCKET);
@@ -48,27 +94,57 @@ export function parseCloudRuRuntimeEnv(input: NodeJS.ProcessEnv): CloudRuRuntime
     throw configurationInvalid();
   }
 
+  return {
+    accessKeyId,
+    bucket,
+    endpoint: safeEndpoint,
+    publicBaseUrl: safePublicBaseUrl,
+    region,
+    secretAccessKey
+  };
+}
+
+function parseRuntimeTarget(input: {
+  enabled: boolean;
+  prefix: string;
+  role: PublicRuntimeRole;
+  shared: SharedRuntimeStorage;
+}): CloudRuRuntimeTargetEnvConfig {
+  if (!input.enabled) {
+    return { enabled: false };
+  }
+
   let prefix: string;
   try {
-    prefix = normalizeRuntimePrefix(input.CLOUDRU_RUNTIME_PREFIX ?? "");
+    prefix = assertConfiguredRuntimePrefix(input.prefix, input.role);
   } catch {
     throw configurationInvalid();
   }
-  if (prefix !== "canary/shadow") {
-    throw configurationInvalid();
-  }
+
+  const storage: CloudRuRuntimeStorageConfig = {
+    accessKeyId: input.shared.accessKeyId,
+    bucket: input.shared.bucket,
+    endpoint: input.shared.endpoint,
+    prefix,
+    publicBaseUrl: input.shared.publicBaseUrl,
+    region: input.shared.region,
+    secretAccessKey: input.shared.secretAccessKey
+  };
+  const target: PublicRuntimeTargetConfig = {
+    bucket: storage.bucket,
+    catalogVersion: "v1",
+    manifestPath: `${prefix}/catalog/v1/manifest.json`,
+    prefix,
+    provider: "cloudru",
+    publicBaseUrl: storage.publicBaseUrl,
+    role: input.role
+  };
 
   return {
     enabled: true,
-    storage: {
-      accessKeyId,
-      bucket,
-      endpoint: safeEndpoint,
-      prefix,
-      publicBaseUrl: safePublicBaseUrl,
-      region,
-      secretAccessKey
-    }
+    storage,
+    target,
+    targetKey: createPublicRuntimeTargetKey(target)
   };
 }
 

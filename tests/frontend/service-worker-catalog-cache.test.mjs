@@ -64,6 +64,23 @@ test("service worker keeps generic cache-first behavior for non-catalog shell as
   assert.equal(worker.operations[0].type, "cache.match");
 });
 
+test("service worker does not intercept cross-origin Cloud runtime manifest", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => new Response(JSON.stringify({ marker: "fresh-cloud-manifest" }), {
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      status: 200,
+    }),
+  });
+
+  const manifestUrl = "https://web00-public-runtime.s3-website.cloud.ru/runtime/production/catalog/v1/manifest.json?v=fresh";
+  const response = await worker.fetch(manifestUrl);
+  const body = await response.json();
+
+  assert.equal(body.marker, "fresh-cloud-manifest");
+  assert.equal(worker.fetchCalls.length, 1);
+  assert.equal(worker.operations.some((entry) => entry.type === "cache.match"), false);
+});
+
 test("main.js registers service worker updates without HTTP cache and reloads once after controller migration", async () => {
   const registerCalls = [];
   const serviceWorkerListeners = [];
@@ -375,8 +392,7 @@ async function loadServiceWorker({ fetchHandler }) {
           responsePromise = Promise.resolve(promise);
         },
       });
-      assert.ok(responsePromise, `fetch handler should respond to ${url}`);
-      return responsePromise;
+      return responsePromise || context.fetch(url, init);
     },
     fetchCalls,
     clearOperations: () => {

@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPrismaAdminCategoryRepository } from "../src/modules/admin/categories/category.repository.js";
 import type { AdminCategoryRecord } from "../src/modules/admin/categories/category.types.js";
+import { createAdminCategoryService } from "../src/modules/admin/categories/category.service.js";
 import { createPrismaSiteImageRepository } from "../src/modules/admin/images/site-image.repository.js";
+import { createSiteImageService, type SiteImageRepository } from "../src/modules/admin/images/site-image.service.js";
 import { createPrismaAdminSiteRepository } from "../src/modules/admin/sites/site.repository.js";
 import type { AdminMutationContext } from "../src/modules/admin/admin.types.js";
+import { createAdminSiteService } from "../src/modules/admin/sites/site.service.js";
+import type { AdminSiteRepository } from "../src/modules/admin/sites/site.repository.js";
 import type { AdminSiteRecord } from "../src/modules/admin/sites/site.types.js";
 
 function adminContext(requestId = "req-dirty"): AdminMutationContext {
@@ -122,6 +126,124 @@ function controlMocks() {
 }
 
 describe("public runtime transactional dirty marking", () => {
+  it("schedules reconcile after a published site update commits", async () => {
+    const requestReconcile = vi.fn();
+    const repository = {
+      getSite: vi.fn(async () => siteRecord()),
+      updateSite: vi.fn(async () => siteRecord({ title: "Site One Updated" }))
+    } as unknown as AdminSiteRepository;
+    const service = createAdminSiteService({
+      publicCatalogReconciler: { requestReconcile },
+      repository
+    });
+
+    await service.updateSite(
+      "33333333-3333-4333-8333-333333333333",
+      { title: "Site One Updated" },
+      adminContext("req-service-site-update")
+    );
+
+    expect(requestReconcile).toHaveBeenCalledWith({
+      reason: "site.update",
+      requestId: "req-service-site-update"
+    });
+  });
+
+  it("does not schedule reconcile when a site repository mutation fails", async () => {
+    const requestReconcile = vi.fn();
+    const repository = {
+      getSite: vi.fn(async () => siteRecord()),
+      updateSite: vi.fn(async () => {
+        throw new Error("repository failed");
+      })
+    } as unknown as AdminSiteRepository;
+    const service = createAdminSiteService({
+      publicCatalogReconciler: { requestReconcile },
+      repository
+    });
+
+    await expect(service.updateSite(
+      "33333333-3333-4333-8333-333333333333",
+      { title: "Site One Updated" },
+      adminContext("req-service-site-fail")
+    )).rejects.toThrow("repository failed");
+
+    expect(requestReconcile).not.toHaveBeenCalled();
+  });
+
+  it("schedules reconcile after category public projection update commits", async () => {
+    const requestReconcile = vi.fn();
+    const service = createAdminCategoryService({
+      publicCatalogReconciler: { requestReconcile },
+      repository: {
+        updateCategory: vi.fn(async () => categoryRecord({ title: "Goods Updated" }))
+      } as never
+    });
+
+    await service.updateCategory(
+      "22222222-2222-4222-8222-222222222222",
+      { title: "Goods Updated" },
+      adminContext("req-service-category-update")
+    );
+
+    expect(requestReconcile).toHaveBeenCalledWith({
+      reason: "category.update",
+      requestId: "req-service-category-update"
+    });
+  });
+
+  it("schedules reconcile once after a gallery reorder commits", async () => {
+    const imageA = galleryImage("88888888-8888-4888-8888-888888888888", 0);
+    const imageB = galleryImage("99999999-9999-4999-8999-999999999999", 1);
+    const requestReconcile = vi.fn();
+    const repository = {
+      getSiteForImageMutation: vi.fn(async () => siteRecord({ galleryImages: [imageA, imageB] })),
+      reorderGallery: vi.fn(async () => siteRecord({
+        galleryImages: [{ ...imageB, sortOrder: 0 }, { ...imageA, sortOrder: 1 }]
+      }))
+    } as unknown as SiteImageRepository;
+    const service = createSiteImageService({
+      cleanup: {} as never,
+      coordinator: {} as never,
+      imageUrlPolicy: {
+        buildVariants: vi.fn(() => []),
+        parseManagedGallery: vi.fn((siteId: string, url: string) => {
+          const record = [imageA, imageB].find((image) => image.url === url);
+          return record === undefined
+            ? null
+            : {
+                assetId: record.assetId,
+                siteId,
+                slot: "gallery" as const,
+                storagePath: record.storagePath,
+                url,
+                widths: [320]
+              };
+        }),
+        parseManagedPreview: vi.fn(() => null)
+      },
+      processor: {} as never,
+      publicCatalogReconciler: { requestReconcile },
+      repository,
+      storage: {} as never
+    });
+
+    await service.gallery.reorder({
+      context: adminContext("req-service-gallery-reorder"),
+      items: [
+        { alt: imageB.alt, assetId: imageB.assetId, sortOrder: 0 },
+        { alt: imageA.alt, assetId: imageA.assetId, sortOrder: 1 }
+      ],
+      siteId: "33333333-3333-4333-8333-333333333333"
+    });
+
+    expect(requestReconcile).toHaveBeenCalledTimes(1);
+    expect(requestReconcile).toHaveBeenCalledWith({
+      reason: "site.image.gallery_update",
+      requestId: "req-service-gallery-reorder"
+    });
+  });
+
   it("increments desired revision for a published public site field update in the same transaction", async () => {
     const before = siteRecord();
     const after = siteRecord({ title: "Site One Updated" });
