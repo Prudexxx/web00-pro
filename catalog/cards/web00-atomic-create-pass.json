@@ -1,0 +1,35 @@
+{
+  "id": "web00-atomic-create-pass",
+  "slug": "web00-atomic-create-pass",
+  "sortOrder": 0,
+  "legacyTitle": "WEB00 Atomic Create PASS",
+  "title": "WEB00 Atomic Create PASS",
+  "editableTitle": true,
+  "category": "Индивидуально",
+  "description": "ATOMIC CLOUD CREATE PASS — проверка автоматического создания и публикации карточки WEB00 без GitHub Actions.",
+  "priceFrom": "Тестовая цена",
+  "deliveryTime": "1 день",
+  "features": [
+    "Atomic Cloud CREATE",
+    "Демо внутри WEB00"
+  ],
+  "tags": [
+    "atomic",
+    "demo"
+  ],
+  "previewImage": "https://qcizrrqkvdgpcgvnnfpb.supabase.co/storage/v1/object/public/web00-catalog-images/sites/b33350aa-d90a-48cb-a24b-a7ec8d520078/preview/f8c70218-b6c2-4502-b7ae-281d03bb0b0c/1448.webp",
+  "filter": "individual",
+  "demoMode": "external-iframe",
+  "demoLocalUrl": null,
+  "externalDemoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+  "originalDemoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+  "demoUrl": "https://prudexxx.github.io/NarkoKlinika/",
+  "siteUrl": "",
+  "galleryImages": [
+    "https://qcizrrqkvdgpcgvnnfpb.supabase.co/storage/v1/object/public/web00-catalog-images/sites/b33350aa-d90a-48cb-a24b-a7ec8d520078/preview/f8c70218-b6c2-4502-b7ae-281d03bb0b0c/1448.webp"
+  ],
+  "aliases": [
+    "web00-atomic-create-pass"
+  ],
+  "active": true
+}
