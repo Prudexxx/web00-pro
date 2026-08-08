@@ -6,7 +6,7 @@
   "title": "WEB00 Smoke Updated",
   "editableTitle": true,
   "category": "Индивидуально",
-  "description": "UPDATE PASS — временная карточка для проверки автоматического редактирования через GitHub Pages.",
+  "description": "ATOMIC CLOUD EDIT PASS — проверка автоматической публикации WEB00 без GitHub Actions.",
   "priceFrom": "Тестовая цена",
   "deliveryTime": "1 день",
   "features": [
