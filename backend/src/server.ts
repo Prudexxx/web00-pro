@@ -10,6 +10,12 @@ import { parseRuntimeDatabaseEnv } from "./config/database-env.js";
 import type { AppEnv } from "./config/env.js";
 import { parseEnv } from "./config/env.js";
 import {
+  defaultImageProcessingConfig,
+  parseImageProcessingEnv,
+  toImageProcessingConfig,
+  type ImageProcessingConfig
+} from "./config/image-processing-env.js";
+import {
   parseCloudRuRuntimeEnv,
   type CloudRuRuntimeEnvConfig
 } from "./config/cloudru-runtime-env.js";
@@ -80,6 +86,7 @@ export interface StartServerOptions {
   createPrisma?: typeof createPrismaClient;
   databaseEnv: RuntimeDatabaseEnv;
   env: AppEnv;
+  imageProcessingConfig?: ImageProcessingConfig;
   logger?: AppLogger;
   now?: () => Date;
   publicCorsConfig: PublicCorsConfig;
@@ -114,6 +121,8 @@ export function startServer(options: StartServerOptions): StartedServer {
     bucket: options.storageConfig.bucket,
     publicBaseUrl: options.storageConfig.publicBaseUrl
   });
+  const imageProcessingConfig =
+    options.imageProcessingConfig ?? defaultImageProcessingConfig;
   const imageStorage = createSupabaseImageStorage(options.storageConfig);
   const storageCleanupRepository = createPrismaStorageCleanupRepository({ prisma });
   const storageCleanupWorker = createStorageCleanupWorker({
@@ -268,7 +277,13 @@ export function startServer(options: StartServerOptions): StartedServer {
         service: options.env.SERVICE_NAME
       },
       imageUrlPolicy,
-      processor: createSharpImageProcessor(),
+      processor: createSharpImageProcessor({
+        maxConcurrency: imageProcessingConfig.maxConcurrency,
+        maxPixels: imageProcessingConfig.maxPixels,
+        maxQueued: imageProcessingConfig.maxQueued,
+        queueWaitTimeoutMs: imageProcessingConfig.queueWaitTimeoutMs,
+        timeoutMs: imageProcessingConfig.timeoutMs
+      }),
       ...(publicCatalogReconciler === null ? {} : { publicCatalogReconciler }),
       repository: createPrismaSiteImageRepository({ prisma }),
       storage: imageStorage
@@ -450,11 +465,15 @@ export function main(): StartedServer {
   );
   const publicRuntimeShadowEnv = parseCloudRuRuntimeEnv(process.env);
   const storageConfig = toStorageConfig(parseStorageEnv(process.env));
+  const imageProcessingConfig = toImageProcessingConfig(
+    parseImageProcessingEnv(process.env)
+  );
 
   return startServer({
     authEnv,
     databaseEnv,
     env,
+    imageProcessingConfig,
     publicCorsConfig,
     publicRuntimeShadowEnv,
     storageConfig

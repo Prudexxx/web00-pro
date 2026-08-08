@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../src/lib/errors.js";
 import { createSharpImageProcessor } from "../src/modules/images/image-processor.js";
 import { createImagePipelineSemaphore } from "../src/modules/images/image-semaphore.js";
@@ -39,6 +39,13 @@ async function fixture(
 }
 
 describe("createSharpImageProcessor", () => {
+  it("uses the weak CPU image processing timeout and bounded Sharp cache by default", () => {
+    const processor = createSharpImageProcessor();
+
+    expect(processor.timeoutMs).toBe(90_000);
+    expect(sharp.cache().memory.max).toBe(16);
+  });
+
   it.each([
     ["jpeg", "image/jpeg"],
     ["png", "image/png"],
@@ -80,7 +87,7 @@ describe("createSharpImageProcessor", () => {
       expect(metadata.icc).toBeUndefined();
       expect(variant.body.includes(Buffer.from("SOURCE_SECRET"))).toBe(false);
     }
-  });
+  }, 15_000);
 
   it("preserves alpha while avoiding enlargement", async () => {
     const processor = createSharpImageProcessor();
@@ -175,10 +182,95 @@ describe("createSharpImageProcessor", () => {
     ).rejects.toMatchObject({ code: "IMAGE_PIXEL_LIMIT_EXCEEDED" });
   });
 
-  it("times out a source pipeline with a safe error", async () => {
+  it("starts the processing timeout after the processor semaphore is acquired", async () => {
+    const source = await fixture("png");
+    vi.useFakeTimers();
+
+    try {
+      let releaseQueue!: () => void;
+      const queued = new Promise<void>((resolve) => {
+        releaseQueue = resolve;
+      });
+      const semaphore = {
+        async run<T>(operation: () => Promise<T>): Promise<T> {
+          await queued;
+
+          return operation();
+        }
+      };
+      const processor = createSharpImageProcessor({ semaphore, timeoutMs: 1 });
+      let settled = false;
+      const result = processor
+        .process({
+          assetId,
+          declaredMimeType: "image/png",
+          siteId,
+          slot: "preview",
+          source
+        })
+        .then(
+          (value) => {
+            settled = true;
+            return { status: "fulfilled" as const, value };
+          },
+          (error: unknown) => {
+            settled = true;
+            return { error, status: "rejected" as const };
+          }
+        );
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).toBe(false);
+
+      releaseQueue();
+      const outcome = await result;
+
+      expect(outcome.status).toBe("fulfilled");
+      if (outcome.status === "fulfilled") {
+        expect(outcome.value.variants).toHaveLength(2);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out a genuinely hung source pipeline with a safe error after native destroy settles", async () => {
+    let rejectNative!: (error: Error) => void;
+    const hungPipeline = {
+      destroy: vi.fn((error?: Error) => {
+        rejectNative(error ?? new Error("destroyed"));
+      }),
+      metadata: () =>
+        new Promise((_resolve, reject) => {
+          rejectNative = reject;
+        }),
+      timeout: vi.fn(() => hungPipeline)
+    };
+    const semaphore = {
+      async run<T>(operation: () => Promise<T>): Promise<T> {
+        return operation();
+      }
+    };
+    const processor = createSharpImageProcessor({
+      semaphore,
+      sharpFactory: (() => hungPipeline) as never,
+      timeoutMs: 1
+    } as never);
+
+    await expect(
+      processor.process({
+        assetId,
+        declaredMimeType: "image/png",
+        siteId,
+        slot: "preview",
+        source: Buffer.from("fake-png")
+      })
+    ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
+  });
+
+  it("keeps semaphore compatibility for rejected operations", async () => {
     const semaphore = {
       async run<T>(_operation: () => Promise<T>): Promise<T> {
-        await new Promise(() => undefined);
         throw new AppError({
           code: "INTERNAL_ERROR",
           message: "unreachable",
@@ -196,7 +288,7 @@ describe("createSharpImageProcessor", () => {
         slot: "preview",
         source: await fixture("png")
       })
-    ).rejects.toMatchObject({ code: "IMAGE_PROCESSING_TIMEOUT" });
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 });
 
@@ -232,5 +324,44 @@ describe("createImagePipelineSemaphore", () => {
     await expect(second).rejects.toThrow("second failed");
     await expect(third).resolves.toBe("third");
     expect(events).toEqual(["first:start", "first:end", "second:start", "third:start"]);
+  });
+
+  it("rejects admission when the bounded queue is full without starting work", async () => {
+    const semaphore = createImagePipelineSemaphore({
+      maxActive: 1,
+      maxQueued: 1,
+      queueWaitTimeoutMs: 5_000
+    });
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstWait = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = semaphore.run(async () => {
+      events.push("first:start");
+      await firstWait;
+      return "first";
+    });
+    const second = semaphore.run(async () => {
+      events.push("second:start");
+      return "second";
+    });
+
+    await expect(
+      semaphore.run(async () => {
+        events.push("third:start");
+        return "third";
+      })
+    ).rejects.toMatchObject({
+      code: "IMAGE_PROCESSOR_BUSY",
+      statusCode: 503
+    });
+
+    expect(events).toEqual(["first:start"]);
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+    expect(events).toEqual(["first:start", "second:start"]);
   });
 });
