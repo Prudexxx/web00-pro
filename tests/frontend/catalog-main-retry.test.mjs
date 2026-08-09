@@ -567,12 +567,14 @@ function createSolutionsPage(fetch, options = {}) {
 async function startSolutionsPage(fetch, options = {}) {
   const page = createSolutionsPage(fetch, options);
   const { browser } = page;
-  await loadClassicScript("assets/js/runtime-config.js", browser);
-  browser.window.WEB00_CONFIG = Object.freeze(options.config || {
-    apiBaseUrl: "https://api.example.test",
-    requestTimeoutMs: 1000,
-    staticFallbackEnabled: true,
-  });
+  if (!options.omitRuntimeConfig) {
+    await loadClassicScript("assets/js/runtime-config.js", browser);
+    browser.window.WEB00_CONFIG = Object.freeze(options.config || {
+      apiBaseUrl: "https://api.example.test",
+      requestTimeoutMs: 1000,
+      staticFallbackEnabled: true,
+    });
+  }
   if (options.scriptSet === "catalog-v2") {
     await loadClassicScript("assets/js/catalog-v2/catalog-runtime.js", browser);
     await loadClassicScript("assets/js/data.js", browser);
@@ -827,6 +829,24 @@ test("catalog-v2 solutions keeps literal skeleton and never paints static data w
 
   assert.match(page.grid.innerHTML, /Cloud Current/);
   assert.doesNotMatch(page.history.join("\n"), /Old Static Card/);
+});
+
+test("catalog-v2 missing runtime config fails closed without painting bundled static data as current", async () => {
+  const pending = createDeferred();
+  const page = await bootSolutionsPage(createFakeFetch(() => pending.promise), {
+    captureTimers: true,
+    data: { SOLUTIONS: [catalogItem("old-static-config-miss", "Old Static Config Miss")], SERVICES: [], PRICING: [] },
+    initialGridHtml: skeletonHtml(),
+    omitRuntimeConfig: true,
+    scriptSet: "catalog-v2",
+  });
+
+  await flush();
+
+  assert.match(page.history[0], /data-catalog-skeleton/);
+  assert.doesNotMatch(page.history.join("\n"), /Old Static Config Miss/);
+  assert.doesNotMatch(page.grid.innerHTML, /Old Static Config Miss/);
+  assert.equal(page.statusNodes["[data-catalog-loading]"].hidden, false);
 });
 
 test("catalog-v2 warm same revision renders verified cache once without snapshot network", async () => {

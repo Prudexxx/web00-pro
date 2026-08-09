@@ -19,6 +19,7 @@
   const ENCODED_CONTROL_RE = /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i;
   const LOCAL_HTTP_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
   const CHANNELS = new Map();
+  const hasOwn = Object.prototype.hasOwnProperty;
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -117,18 +118,27 @@
 
   function validateConfig(input = window.WEB00_CONFIG) {
     const raw = input && typeof input === "object" ? input : {};
+    const hasRoutingDirective = input && typeof input === "object" && (
+      hasOwn.call(input, "apiBaseUrl") ||
+      hasOwn.call(input, "catalogManifestUrl") ||
+      hasOwn.call(input, "catalogRuntimeMode")
+    );
     const timeout = Number(raw.requestTimeoutMs);
     const requestTimeoutMs = Number.isFinite(timeout) && timeout >= 1 && timeout <= 30000
       ? Math.round(timeout)
       : CONFIG_DEFAULTS.requestTimeoutMs;
-    const staticFallbackEnabled = typeof raw.staticFallbackEnabled === "boolean"
-      ? raw.staticFallbackEnabled
-      : CONFIG_DEFAULTS.staticFallbackEnabled;
     const catalogRuntimeMode =
       raw.catalogRuntimeMode === "cloud-primary" &&
       raw.catalogManifestUrl === CLOUD_PRIMARY_MANIFEST_URL
         ? "cloud-primary"
-        : CONFIG_DEFAULTS.catalogRuntimeMode;
+        : !hasRoutingDirective
+          ? "cloud-primary"
+          : CONFIG_DEFAULTS.catalogRuntimeMode;
+    const staticFallbackEnabled = typeof raw.staticFallbackEnabled === "boolean"
+      ? raw.staticFallbackEnabled
+      : catalogRuntimeMode === "cloud-primary"
+        ? true
+        : CONFIG_DEFAULTS.staticFallbackEnabled;
     const catalogManifestUrl = catalogRuntimeMode === "cloud-primary"
       ? CLOUD_PRIMARY_MANIFEST_URL
       : CONFIG_DEFAULTS.catalogManifestUrl;
