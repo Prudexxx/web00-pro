@@ -829,6 +829,54 @@ test("catalog-v2 solutions keeps literal skeleton and never paints static data w
   assert.doesNotMatch(page.history.join("\n"), /Old Static Card/);
 });
 
+test("catalog-v2 warm same revision renders verified cache once without snapshot network", async () => {
+  const warmRuntime = runtimeFixture({
+    revision: 64,
+    items: [catalogItem("warm-verified-current", "Warm Verified Current")],
+  });
+  const cacheStorage = createVerifiedCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, warmRuntime.manifest.snapshotUrl, warmRuntime.snapshotText);
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(warmRuntime)),
+  });
+  const fetch = createFakeFetch((url) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return runtimeJsonResponse(warmRuntime.manifest);
+    if (url === warmRuntime.manifest.snapshotUrl) {
+      throw new Error("warm same revision must not fetch snapshot network");
+    }
+    if (url.includes("web00-backend-production.onrender.com")) {
+      throw new Error("warm same revision must not call Render API");
+    }
+    throw new Error(`unexpected request ${url}`);
+  });
+
+  const page = await bootSolutionsPage(fetch, {
+    cacheStorage,
+    config: cloudConfig(),
+    data: { SOLUTIONS: [catalogItem("old-static-warm", "Old Static Warm Card")], SERVICES: [], PRICING: [] },
+    initialGridHtml: skeletonHtml(),
+    scriptSet: "catalog-v2",
+    storage,
+  });
+  await waitForGridMatch(page, /Warm Verified Current/);
+
+  const history = page.history.join("\n");
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  assert.equal(countFetches(fetch, /releases\/revision-/), 0);
+  assert.equal(fetch.calls.some((call) => call.url.includes("web00-backend-production.onrender.com")), false);
+  assert.equal(
+    cacheStorage.operations.some((operation) => operation.type === "match" && operation.url === warmRuntime.manifest.snapshotUrl),
+    true,
+  );
+  assert.match(page.history[0], /data-catalog-skeleton/);
+  assert.doesNotMatch(history, /Old Static Warm Card/);
+  assert.equal(page.history.filter((html) => html.includes("Warm Verified Current")).length, 1);
+  assert.match(page.grid.innerHTML, /Warm Verified Current/);
+  assert.doesNotMatch(page.grid.innerHTML, /data-catalog-skeleton/);
+  assert.doesNotMatch(page.grid.innerHTML, /Old Static Warm Card/);
+});
+
 test("catalog-v2 real Cloud revision replaces old verified cache without a stale render", async () => {
   const oldRuntime = runtimeFixture({
     items: [catalogItem("old-verified-cache", "Old Verified Cache")],
