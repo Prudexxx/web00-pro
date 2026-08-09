@@ -130,6 +130,66 @@ Cache entry НЕ становится trusted только потому, что 
 Corrupted cache:
 delete/reject entry and use network path.
 
+### Verified cache commit protocol
+
+Metadata/pointer НЕ является security trust source.
+Это только lookup/index.
+
+New verified revision commit order:
+
+1. fetch immutable snapshot bytes;
+2. verify SHA-256 against CURRENT valid manifest;
+3. parse and validate schema/revision/itemsCount;
+4. write immutable snapshot bytes to Cache Storage
+   under exact snapshotUrl;
+5. only after successful cache write,
+   commit metadata pointer to that exact:
+   schemaVersion
+   revision
+   sha256
+   snapshotUrl
+   savedAt;
+6. only then may new revision become latest verified fallback.
+
+До шага 5 предыдущий verified pointer остаётся intact.
+
+Если cache write succeeds, но pointer write fails:
+
+- old pointer remains authoritative fallback pointer;
+- new cache entry is harmless orphan;
+- orphan may be cleaned later;
+- never render unverified content.
+
+Если pointer points to missing/corrupt cache:
+
+- reject pointer;
+- do not trust metadata alone;
+- delete/ignore bad pointer;
+- use current network path or older usable verified fallback if available.
+
+При любом read из verified cache:
+
+- obtain bytes;
+- recompute SHA-256;
+- compare with stored verified identity;
+- validate snapshot structure;
+- only then render.
+
+При manifest unavailable degraded fallback:
+
+- persisted verified identity must include enough data
+  to validate its own immutable bytes;
+- re-hash bytes before degraded render;
+- it remains degraded-verified, never ready-current.
+
+Cache Storage unavailable / quota failure:
+
+- current network Cloud path must still work;
+- caching failure must not invalidate a valid current network snapshot;
+- valid network snapshot may render ready-current;
+- browser simply loses warm verified-cache optimization;
+- fallback behavior remains safe.
+
 ## Existing LKG
 
 Текущий localStorage LKG не является primary instant runtime cache.
@@ -232,6 +292,30 @@ catalog-runtime.js может prime manifest request при собственно
 
 Не делать duplicate manifest requests.
 
+### Manifest request lifecycle
+
+Early manifest priming дедуплицирует только concurrent in-flight request.
+
+НЕЛЬЗЯ хранить settled/rejected manifest Promise как постоянный
+источник manifest на всю жизнь страницы.
+
+Required behavior:
+
+- primeManifest() может создать один in-flight request;
+- loadCatalogFromRuntime() reuse этого request разрешён,
+  пока он ещё in-flight;
+- concurrent callers не создают duplicate manifest fetch;
+- после resolve/reject/abort active in-flight reference очищается;
+- rejected/aborted request никогда не poison-ит последующие retries;
+- background retry после timeout/failure делает свежий manifest request;
+- manual retry делает свежий manifest request;
+- promotion check на long-lived page имеет право получить свежий manifest;
+- нельзя бесконечно reuse successful manifest старой revision.
+
+"No duplicate manifest requests" означает:
+NO duplicate CONCURRENT request,
+а не запрет последующих freshness requests.
+
 ## Security Invariants
 
 Сохранить существующие:
@@ -254,6 +338,38 @@ Verified cache НЕ ослабляет security boundary.
 
 Текущий SW cache-first для runtime JS + ignoreSearch является риском.
 
+Текущий production SW является legacy SW,
+который cache-first обслуживает runtime JS
+и использует ignoreSearch.
+
+Поэтому первый Zero-Stale deployment НЕ МОЖЕТ полагаться
+только на новый query string типа:
+
+main.js?v=new
+
+Потому что OLD SW может проигнорировать query
+и вернуть old cached main.js.
+
+Required one-time escape strategy:
+
+- Zero-Stale deployment должен изменить PHYSICAL URL/PATH
+  mutable catalog runtime assets так,
+  чтобы legacy SW не смог сопоставить их со старыми SHELL_ASSETS.
+
+Например архитектурно допустимо:
+
+assets/js/catalog-v2/catalog-runtime.js
+assets/js/catalog-v2/catalog-api.js
+assets/js/catalog-v2/main.js
+
+или эквивалентные новые physical filenames/paths.
+
+Точные имена определить implementation plan,
+но invariant обязателен:
+
+OLD legacy SW must not be able to satisfy new runtime request
+from its old ignoreSearch cache entry.
+
 P0 обязан сделать controlled migration:
 
 - новая HTML не должна работать со старым
@@ -263,6 +379,25 @@ P0 обязан сделать controlled migration:
 - runtime code versioning должно быть deterministic;
 - query-string version нельзя считать защитой,
   если SW ignoreSearch.
+
+После controlled migration новый SW:
+
+- получает новый cache namespace;
+- retires old web00-shell-* namespace;
+- runtime-config.js не должен зависать в stale SW cache;
+- mutable manifest никогда не shell-cache;
+- runtime JS requests больше НЕ используют ignoreSearch;
+- exact request URL является cache identity;
+- navigation remains network-first;
+- runtime code должен быть либо network-first exact URL
+  с exact cached fallback, либо другим design-equivalent способом,
+  который сохраняет version coherence;
+- deployment versioning deterministic.
+
+Очень важно:
+
+new HTML + old legacy SW first-load scenario
+является отдельным acceptance case.
 
 Не кэшировать mutable manifest как shell asset.
 
@@ -499,6 +634,87 @@ For both:
 - no card-by-card delayed appearance;
 - no ghost deleted card;
 - same authoritative revision eventually shown.
+
+### 12. Manifest retry recovery
+
+First manifest request fails/timeouts.
+Verified/degraded fallback activates.
+Network/VPN recovers.
+Background retry performs NEW manifest request.
+New revision is discovered.
+New snapshot validates.
+Complete grid promotes atomically.
+
+Expected:
+
+- failed Promise not reused;
+- manifest fetch count increments;
+- recovery succeeds without page restart;
+- no card-by-card promotion.
+
+### 13. Verified cache torn-write recovery
+
+Snapshot cache write succeeds.
+Metadata pointer write fails.
+
+Expected:
+
+- old verified pointer remains usable;
+- new cache entry is harmless orphan;
+- no trusted render is derived from the orphan alone;
+- later cleanup may remove the orphan without changing current state.
+
+### 14. Verified metadata points to missing cache
+
+Metadata pointer exists for revision X / SHA A.
+Cache Storage has no bytes for pointer snapshotUrl,
+or bytes are corrupt.
+
+Expected:
+
+- pointer is rejected;
+- metadata alone is never trusted;
+- bad pointer is deleted or ignored;
+- current network path or older usable verified fallback is used.
+
+### 15. Cache Storage unavailable during current Cloud success
+
+Manifest and network snapshot are valid.
+SHA-256 and schema validation pass.
+Cache Storage put throws quota/error.
+
+Expected:
+
+- current valid Cloud snapshot may render ready-current;
+- caching failure does not corrupt verified state;
+- no false verified-cache state is recorded;
+- warm-cache optimization is lost until a later successful cache write.
+
+### 16. Legacy SW escape
+
+Initial browser state:
+
+- currently deployed legacy SW active;
+- legacy shell cache populated with old:
+  main.js
+  catalog-api.js
+  catalog-runtime.js.
+
+Then simulate Zero-Stale deployment:
+
+- new HTML requests NEW physical runtime paths.
+
+Expected:
+
+- old SW cannot satisfy those requests from old runtime entries;
+- new runtime bytes come from correct new URLs;
+- new SW installs/activates;
+- old shell cache retired;
+- reload remains on new runtime;
+- no HTML/runtime version mismatch loop.
+
+Query-string-only migration MUST FAIL this regression test
+or be explicitly proven unsafe in a RED fixture.
 
 ## Instrumentation / Evidence
 
