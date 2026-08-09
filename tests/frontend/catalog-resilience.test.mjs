@@ -614,6 +614,53 @@ test("v2 catalog load joins in-flight prime and consumes it before a later fresh
   assert.equal(manifestFetchCount(fetch, config), 2);
 });
 
+test("v2 aborted catalog caller joining in-flight prime leaves primed manifest consumable", async () => {
+  const config = cloudConfig();
+  const currentRuntime = cloudSnapshot([apiSite("prime-survives-caller-abort", "Prime Survives Caller Abort")], 17);
+  const manifestGate = deferred();
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, currentRuntime.snapshotUrl, snapshotBytes(currentRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(currentRuntime)),
+  });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      await manifestGate.promise;
+      return jsonResponse(currentRuntime.manifest);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+  const caller = new AbortController();
+
+  const prime = runtime.primeManifest(config);
+  const joinedLoad = runtime.loadCatalogFromRuntime(config, { signal: caller.signal });
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  caller.abort(Object.assign(new Error("superseded"), { code: "WEB00_API_SUPERSEDED" }));
+  const joinedResult = await Promise.race([
+    joinedLoad.then(
+      () => ({ type: "resolved" }),
+      (error) => ({ error, type: "rejected" }),
+    ),
+    delay(30).then(() => ({ type: "hung" })),
+  ]);
+
+  assert.equal(joinedResult.type, "rejected");
+  assert.equal(joinedResult.error?.code, "WEB00_API_SUPERSEDED");
+
+  manifestGate.resolve();
+  const primedManifest = await prime;
+  const finalLoad = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(primedManifest.revision, currentRuntime.manifest.revision);
+  assert.equal(finalLoad.freshness, "ready-current");
+  assert.equal(finalLoad.transport, "verified-cache");
+  assert.equal(finalLoad.manifest.revision, currentRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  assert.equal(allSnapshotFetchCount(fetch), 0);
+});
+
 test("v2 concurrent fresh catalog loads share one in-flight manifest request", async () => {
   const config = cloudConfig();
   const currentRuntime = cloudSnapshot([apiSite("direct-single-flight", "Direct Single Flight")], 13);
@@ -802,6 +849,120 @@ test("externally aborted v2 manifest prime clears shared request and permits fre
   assert.equal(recovered.freshness, "ready-current");
   assert.equal(recovered.manifest.revision, recoveredRuntime.manifest.revision);
   assert.equal(manifestFetchCount(fetch, config), 2);
+});
+
+test("v2 shared fresh manifest transport survives superseded first catalog caller abort", async () => {
+  const config = cloudConfig();
+  const currentRuntime = cloudSnapshot([apiSite("abort-owner-current", "Abort Owner Current")], 15);
+  const manifestGate = deferred();
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, currentRuntime.snapshotUrl, snapshotBytes(currentRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(currentRuntime)),
+  });
+  const fetch = createFakeFetch(async (url, init) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      return new Promise((resolve, reject) => {
+        if (init.signal?.aborted) {
+          reject(init.signal.reason);
+          return;
+        }
+        init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        manifestGate.promise.then(() => resolve(jsonResponse(currentRuntime.manifest)), reject);
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+  const firstCaller = new AbortController();
+  const secondCaller = new AbortController();
+
+  const firstLoad = runtime.loadCatalogFromRuntime(config, { signal: firstCaller.signal });
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  firstCaller.abort(Object.assign(new Error("superseded"), { code: "WEB00_API_SUPERSEDED" }));
+  const firstResult = await Promise.race([
+    firstLoad.then(
+      () => ({ type: "resolved" }),
+      (error) => ({ error, type: "rejected" }),
+    ),
+    delay(30).then(() => ({ type: "hung" })),
+  ]);
+
+  assert.equal(firstResult.type, "rejected");
+  assert.equal(firstResult.error?.code, "WEB00_API_SUPERSEDED");
+
+  const secondLoad = runtime.loadCatalogFromRuntime(config, { signal: secondCaller.signal });
+  const joinedManifestFetchCount = manifestFetchCount(fetch, config);
+  manifestGate.resolve();
+  const secondResult = await secondLoad;
+
+  assert.equal(joinedManifestFetchCount, 1);
+  assert.equal(secondResult.freshness, "ready-current");
+  assert.equal(secondResult.transport, "verified-cache");
+  assert.equal(secondResult.manifest.revision, currentRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  assert.equal(allSnapshotFetchCount(fetch), 0);
+});
+
+test("v2 superseded catalog caller stops waiting without cancelling shared manifest transport", async () => {
+  const config = cloudConfig();
+  const currentRuntime = cloudSnapshot([apiSite("caller-local-current", "Caller Local Current")], 16);
+  const manifestGate = deferred();
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, currentRuntime.snapshotUrl, snapshotBytes(currentRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(currentRuntime)),
+  });
+  let manifestSettled = false;
+  const fetch = createFakeFetch(async (url, init) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      return new Promise((resolve, reject) => {
+        if (init.signal?.aborted) {
+          reject(init.signal.reason);
+          return;
+        }
+        init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        manifestGate.promise.then(() => {
+          manifestSettled = true;
+          resolve(jsonResponse(currentRuntime.manifest));
+        }, reject);
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+  const firstCaller = new AbortController();
+  const secondCaller = new AbortController();
+
+  const firstLoad = runtime.loadCatalogFromRuntime(config, { signal: firstCaller.signal });
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  firstCaller.abort(Object.assign(new Error("superseded"), { code: "WEB00_API_SUPERSEDED" }));
+  const firstResult = await Promise.race([
+    firstLoad.then(
+      () => ({ type: "resolved" }),
+      (error) => ({ error, type: "rejected" }),
+    ),
+    delay(30).then(() => ({ type: "hung" })),
+  ]);
+
+  assert.equal(firstResult.type, "rejected");
+  assert.equal(firstResult.error?.code, "WEB00_API_SUPERSEDED");
+  assert.equal(manifestSettled, false);
+  assert.equal(manifestFetchCount(fetch, config), 1);
+
+  const secondLoad = runtime.loadCatalogFromRuntime(config, { signal: secondCaller.signal });
+  const joinedManifestFetchCount = manifestFetchCount(fetch, config);
+  manifestGate.resolve();
+  const secondResult = await secondLoad;
+
+  assert.equal(joinedManifestFetchCount, 1);
+  assert.equal(manifestSettled, true);
+  assert.equal(secondResult.freshness, "ready-current");
+  assert.equal(secondResult.transport, "verified-cache");
+  assert.equal(secondResult.manifest.revision, currentRuntime.manifest.revision);
+  assert.equal(allSnapshotFetchCount(fetch), 0);
 });
 
 test("v2 warm same revision uses verified cache only after current manifest validates", async () => {

@@ -193,6 +193,12 @@
       : runtimeError("WEB00_CLOUD_MANIFEST_ABORTED");
   }
 
+  function callerAbortReason(signal) {
+    return signal && "reason" in signal && signal.reason !== undefined
+      ? signal.reason
+      : runtimeError("WEB00_CLOUD_CALLER_ABORTED");
+  }
+
   async function fetchManifestBounded(config, options = {}) {
     const controller = new AbortController();
     const timeoutMs = normalizedManifestTimeoutMs(config);
@@ -232,6 +238,7 @@
   function createManifestRequest(config, options = {}, requestOptions = {}) {
     const request = {
       consumedByCatalogLoad: requestOptions.consumedByCatalogLoad === true,
+      owner: requestOptions.owner || "prime",
       promise: null,
     };
     request.promise = fetchManifestBounded(config, options);
@@ -266,32 +273,76 @@
     if (activeManifestRequest) return activeManifestRequest.promise;
 
     primedManifestResult = null;
-    const request = startActiveManifestRequest(config, options, { consumedByCatalogLoad: false });
+    const request = startActiveManifestRequest(config, options, {
+      consumedByCatalogLoad: false,
+      owner: "prime",
+    });
     return request.promise;
+  }
+
+  function waitForManifestRequest(request, signal) {
+    if (!signal) return request.promise;
+    if (signal.aborted) return Promise.reject(callerAbortReason(signal));
+    if (typeof signal.addEventListener !== "function") return request.promise;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const settle = (complete, value) => {
+        if (settled) return;
+        settled = true;
+        if (typeof signal.removeEventListener === "function") {
+          signal.removeEventListener("abort", abortFromCaller);
+        }
+        complete(value);
+      };
+      const abortFromCaller = () => {
+        settle(reject, callerAbortReason(signal));
+      };
+      signal.addEventListener("abort", abortFromCaller, { once: true });
+      request.promise.then(
+        (manifest) => settle(resolve, manifest),
+        (error) => settle(reject, error),
+      );
+    });
   }
 
   async function readManifestForLoad(config, options = {}) {
     if (activeManifestRequest) {
       const request = activeManifestRequest;
-      request.consumedByCatalogLoad = true;
+      const joinedPrimeRequest = request.owner === "prime";
+      if (!joinedPrimeRequest) request.consumedByCatalogLoad = true;
+      let catalogConsumedManifest = false;
       try {
-        return await request.promise;
+        const manifest = await waitForManifestRequest(request, options.signal);
+        catalogConsumedManifest = true;
+        request.consumedByCatalogLoad = true;
+        return manifest;
       } finally {
-        if (primedManifestResult && primedManifestResult.request === request) {
+        if (catalogConsumedManifest && primedManifestResult && primedManifestResult.request === request) {
           primedManifestResult = null;
         }
       }
     }
 
     if (primedManifestResult) {
+      if (options.signal && options.signal.aborted) {
+        throw callerAbortReason(options.signal);
+      }
       const result = primedManifestResult.manifest;
       primedManifestResult = null;
       return result;
     }
 
-    const request = startActiveManifestRequest(config, options, { consumedByCatalogLoad: true });
+    if (options.signal && options.signal.aborted) {
+      throw callerAbortReason(options.signal);
+    }
+
+    const request = startActiveManifestRequest(config, {}, {
+      consumedByCatalogLoad: true,
+      owner: "catalog",
+    });
     try {
-      return await request.promise;
+      return await waitForManifestRequest(request, options.signal);
     } finally {
       if (primedManifestResult && primedManifestResult.request === request) {
         primedManifestResult = null;
