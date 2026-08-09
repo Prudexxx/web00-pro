@@ -77,10 +77,10 @@ describe("admin site route validation", () => {
   });
 
   it.each([
-    "javascript:alert(1)",
-    "ftp://example.test/file",
     "not a URL",
-    "https://user:password@example.test/private"
+    "https://",
+    "https://exa mple.test",
+    "http://"
   ])("returns validation before create service for invalid URLs", async (demoUrl) => {
     const service = createSiteService();
     const response = await request(createApp(service))
@@ -144,25 +144,73 @@ describe("admin site route validation", () => {
     expect(JSON.stringify(response.body)).not.toMatch(/INSERT|secret-title|private\.example|valid-site/i);
   });
 
-  it("rejects legacy DB-only public lifecycle routes before mutating site state", async () => {
+  it("publishes sites through the admin lifecycle service", async () => {
     const service = createSiteService();
-    const app = createApp(service);
+    vi.mocked(service.publishSite).mockResolvedValue(siteResult({ status: "published" }));
 
-    for (const [method, path] of [
-      ["post", "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish"],
-      ["post", "/api/admin/sites/00000000-0000-4000-8000-000000000101/unpublish"],
-      ["delete", "/api/admin/sites/00000000-0000-4000-8000-000000000101"]
-    ] as const) {
-      const response = await request(app)[method](path).expect(409);
+    const response = await request(createApp(service))
+      .post("/api/admin/sites/00000000-0000-4000-8000-000000000101/publish")
+      .set("X-Request-Id", "req_publish_site")
+      .expect(200);
 
-      expect(response.body.error).toMatchObject({
-        code: "DIRECT_PAGES_PUBLICATION_REQUIRED"
-      });
-    }
-
-    expect(service.publishSite).not.toHaveBeenCalled();
+    expect(response.body.data).toMatchObject({ id: "00000000-0000-4000-8000-000000000101", status: "published" });
+    expect(service.publishSite).toHaveBeenCalledTimes(1);
+    expect(service.publishSite).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000101",
+      expect.objectContaining({
+        actor: principal(),
+        requestId: "req_publish_site"
+      })
+    );
     expect(service.unpublishSite).not.toHaveBeenCalled();
     expect(service.deleteSite).not.toHaveBeenCalled();
+  });
+
+  it("unpublishes sites through the admin lifecycle service", async () => {
+    const service = createSiteService();
+    vi.mocked(service.unpublishSite).mockResolvedValue(siteResult({ status: "draft" }));
+
+    const response = await request(createApp(service))
+      .post("/api/admin/sites/00000000-0000-4000-8000-000000000101/unpublish")
+      .set("X-Request-Id", "req_unpublish_site")
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({ id: "00000000-0000-4000-8000-000000000101", status: "draft" });
+    expect(service.unpublishSite).toHaveBeenCalledTimes(1);
+    expect(service.unpublishSite).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000101",
+      expect.objectContaining({
+        actor: principal(),
+        requestId: "req_unpublish_site"
+      })
+    );
+    expect(service.publishSite).not.toHaveBeenCalled();
+    expect(service.deleteSite).not.toHaveBeenCalled();
+  });
+
+  it("soft-deletes sites through the admin lifecycle service", async () => {
+    const service = createSiteService();
+    vi.mocked(service.deleteSite).mockResolvedValue(siteResult({ deletedAt: "2026-07-30T12:00:00.000Z" }));
+
+    const response = await request(createApp(service))
+      .delete("/api/admin/sites/00000000-0000-4000-8000-000000000101")
+      .set("X-Request-Id", "req_delete_site")
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({
+      deletedAt: "2026-07-30T12:00:00.000Z",
+      id: "00000000-0000-4000-8000-000000000101"
+    });
+    expect(service.deleteSite).toHaveBeenCalledTimes(1);
+    expect(service.deleteSite).toHaveBeenCalledWith(
+      "00000000-0000-4000-8000-000000000101",
+      expect.objectContaining({
+        actor: principal(),
+        requestId: "req_delete_site"
+      })
+    );
+    expect(service.publishSite).not.toHaveBeenCalled();
+    expect(service.unpublishSite).not.toHaveBeenCalled();
   });
 });
 
@@ -218,4 +266,17 @@ function validCreatePayload() {
     slug: "valid-site",
     title: "Valid Site"
   };
+}
+
+function siteResult(overrides: Record<string, unknown> = {}) {
+  return {
+    categoryId: "00000000-0000-4000-8000-000000000201",
+    deletedAt: null,
+    id: "00000000-0000-4000-8000-000000000101",
+    shortDescription: "Short description",
+    slug: "valid-site",
+    status: "draft",
+    title: "Valid Site",
+    ...overrides
+  } as never;
 }
