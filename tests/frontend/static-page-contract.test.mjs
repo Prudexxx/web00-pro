@@ -20,6 +20,20 @@ const ROOT_MAIN_PAGES = [
   "status.html",
 ];
 
+const ROOT_LEGACY_MAIN_PAGES = ROOT_MAIN_PAGES.filter((page) => page !== "solutions.html");
+
+const SOLUTIONS_V2_SCRIPTS = [
+  "assets/js/runtime-config.js?v=zero-stale-catalog-v1",
+  "assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1",
+  "assets/js/data.js?v=zero-stale-catalog-v1",
+  "assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1",
+  "assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1",
+];
+
+function deferredScriptSources(html) {
+  return [...html.matchAll(/<script\s+defer\s+src="([^"]+)"><\/script>/g)].map((match) => match[1]);
+}
+
 test("main.js consumes WEB00_CATALOG through narrow catalog seams", async () => {
   const source = await readFile("assets/js/main.js", "utf8");
 
@@ -31,6 +45,24 @@ test("main.js consumes WEB00_CATALOG through narrow catalog seams", async () => 
   assert.match(source, /const found = CATALOG\.findCatalogItem\(\[\.\.\.popularItems, \.\.\.catalogItems\(\)\], value\);/);
   assert.match(source, /if \(found\) return found;/);
   assert.match(source, /CATALOG\.resolveCatalogForPage\(\{ kind: "solutions", currentState: catalogState \}\)/);
+});
+
+test("catalog-v2 main entrypoint exists for the solutions atomic cutover", async () => {
+  await access("assets/js/catalog-v2/main.js");
+});
+
+test("catalog-v2 main uses explicit atomic catalog render identity without a production debug seam", async () => {
+  const source = await readFile("assets/js/catalog-v2/main.js", "utf8");
+
+  assert.match(source, /function isCloudPrimaryCatalog\(\)/);
+  assert.match(source, /let lastRenderedCatalogKey = null;/);
+  assert.match(source, /function canRenderCatalogState\(/);
+  assert.match(source, /function catalogRenderKey\(/);
+  assert.match(source, /function renderCatalogSkeleton\(/);
+  assert.match(source, /function clearSolutionsGrid\(/);
+  assert.match(source, /function shouldRetryCatalogState\(/);
+  assert.match(source, /if \(nextKey && nextKey === lastRenderedCatalogKey\)/);
+  assert.doesNotMatch(source, /WEB00_CATALOG_MAIN_TESTS|WEB00_CATALOG_V2_MAIN_TESTS|__WEB00/);
 });
 
 test("solutions.html provides stable B9 catalog state nodes", async () => {
@@ -79,7 +111,7 @@ test("brief and modal integration use normalized catalog lookup and gallery inde
   assert.doesNotMatch(source, /data-gallery-image="\$\{attr\(image\)\}"/);
 });
 
-test("root pages use canonical B9 deferred script order", async () => {
+test("root pages except solutions keep canonical B9 deferred script order", async () => {
   const expected = [
     "assets/js/data.js?v=b9-catalog-lkg-1",
     "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
@@ -88,9 +120,9 @@ test("root pages use canonical B9 deferred script order", async () => {
     "assets/js/main.js?v=b9-catalog-lkg-1",
   ];
 
-  for (const page of ROOT_MAIN_PAGES) {
+  for (const page of ROOT_LEGACY_MAIN_PAGES) {
     const html = await readFile(page, "utf8");
-    const scripts = [...html.matchAll(/<script\s+defer\s+src="([^"]+)"><\/script>/g)].map((match) => match[1]);
+    const scripts = deferredScriptSources(html);
     const b8Start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
     assert.notEqual(b8Start, -1, `${page} should load data.js`);
     assert.deepEqual(scripts.slice(b8Start, b8Start + 5), expected, `${page} script order`);
@@ -98,6 +130,41 @@ test("root pages use canonical B9 deferred script order", async () => {
     assert.doesNotMatch(html, /<script\s+async/i, `${page} should not async public scripts`);
     assert.doesNotMatch(html, /<base\s/i, `${page} should not use base href`);
   }
+});
+
+test("solutions.html uses the catalog-v2 zero-stale deferred script order only", async () => {
+  const html = await readFile("solutions.html", "utf8");
+  const scripts = deferredScriptSources(html);
+  const start = scripts.indexOf(SOLUTIONS_V2_SCRIPTS[0]);
+
+  assert.notEqual(start, -1, "solutions.html should load runtime-config first for the v2 cutover");
+  assert.deepEqual(scripts.slice(start, start + SOLUTIONS_V2_SCRIPTS.length), SOLUTIONS_V2_SCRIPTS);
+  assert.equal(scripts.filter((src) => SOLUTIONS_V2_SCRIPTS.includes(src)).length, SOLUTIONS_V2_SCRIPTS.length);
+  assert.doesNotMatch(html, /assets\/js\/catalog-runtime\.js\?v=b9-catalog-lkg-1/);
+  assert.doesNotMatch(html, /assets\/js\/catalog-api\.js\?v=b9-catalog-lkg-1/);
+  assert.doesNotMatch(html, /assets\/js\/main\.js\?v=b9-catalog-lkg-1/);
+  assert.doesNotMatch(html, /<script\s+async/i);
+  assert.doesNotMatch(html, /<base\s/i);
+});
+
+test("solutions.html first paint contains six non-interactive catalog skeleton cards", async () => {
+  const html = await readFile("solutions.html", "utf8");
+  const skeletons = html.match(/<article\b[^>]*data-catalog-skeleton\b[\s\S]*?<\/article>/g) || [];
+
+  assert.equal(skeletons.length, 6);
+  skeletons.forEach((block, index) => {
+    assert.match(block, /class="solution-card solution-card--skeleton catalog-skeleton"/);
+    assert.match(block, /aria-hidden="true"/);
+    assert.match(block, new RegExp(`data-skeleton-index="${index}"`));
+    assert.match(block, /class="solution-preview solution-preview--skeleton"/);
+    assert.match(block, /class="solution-card__body"/);
+    assert.match(block, /catalog-skeleton__line--tags/);
+    assert.match(block, /catalog-skeleton__line--title/);
+    assert.match(block, /catalog-skeleton__line--text/);
+    assert.match(block, /catalog-skeleton__line--meta/);
+    assert.match(block, /catalog-skeleton__actions/);
+    assert.doesNotMatch(block, /<button\b|<a\b|tabindex=|data-open-demo-id|data-card-action/i);
+  });
 });
 
 test("frontend B9 uses one canonical live API config and avoids production secrets", async () => {
@@ -164,5 +231,9 @@ test("B9 CSS supports catalog status and homepage API empty state without new gl
 
   assert.match(catalogCss, /body\[data-page="solutions"\] \.catalog-state/);
   assert.match(catalogCss, /\.catalog-state\[hidden\]/);
+  assert.match(catalogCss, /body\[data-page="solutions"\] \.solution-card--skeleton/);
+  assert.match(catalogCss, /pointer-events:\s*none/);
+  assert.match(catalogCss, /prefers-reduced-motion:\s*no-preference/);
+  assert.match(catalogCss, /catalog-skeleton-pulse/);
   assert.match(homeCss, /\.mock-template-card--empty/);
 });

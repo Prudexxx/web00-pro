@@ -14,13 +14,13 @@
     <link rel="stylesheet" href="assets/css/styles.css">
     <link rel="stylesheet" href="assets/css/shell.css">
     <link rel="stylesheet" href="assets/css/components.css">
-    <link rel="stylesheet" href="assets/css/catalog-premium.css?v=catalog-system-2">
+    <link rel="stylesheet" href="assets/css/catalog-premium.css?v=zero-stale-catalog-v1">
     <link rel="stylesheet" href="assets/css/web00-tabs-standard.css">
-    <script defer src="assets/js/data.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/runtime-config.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/catalog-runtime.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/catalog-api.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/main.js?v=b9-catalog-lkg-1"></script>
+    <script defer src="assets/js/runtime-config.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/data.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1"></script>
   </head>
   <body data-page="solutions">
     <header class="site-header" data-header>
@@ -90,7 +90,104 @@
               <div class="catalog-state catalog-state--fallback" data-catalog-fallback hidden><span>Показаны сохранённые данные. Обновление временно недоступно.</span><button type="button" data-catalog-retry>Повторить загрузку</button></div>
               <div class="catalog-state catalog-state--empty" data-catalog-empty hidden>Подходящих решений пока нет.</div>
               <div class="catalog-state catalog-state--fatal" data-catalog-fatal hidden><span>Каталог временно недоступен.</span><button type="button" data-catalog-retry>Повторить загрузку</button></div>
-              <div class="solutions-grid" data-solutions-grid></div>
+              <div class="solutions-grid" data-solutions-grid>
+                <article
+                  class="solution-card solution-card--skeleton catalog-skeleton"
+                  aria-hidden="true"
+                  data-catalog-skeleton
+                  data-skeleton-index="0"
+                >
+                  <div class="solution-preview solution-preview--skeleton"></div>
+
+                  <div class="solution-card__body">
+                    <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+                    <div class="catalog-skeleton__actions"></div>
+                  </div>
+                </article>
+                <article
+                  class="solution-card solution-card--skeleton catalog-skeleton"
+                  aria-hidden="true"
+                  data-catalog-skeleton
+                  data-skeleton-index="1"
+                >
+                  <div class="solution-preview solution-preview--skeleton"></div>
+
+                  <div class="solution-card__body">
+                    <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+                    <div class="catalog-skeleton__actions"></div>
+                  </div>
+                </article>
+                <article
+                  class="solution-card solution-card--skeleton catalog-skeleton"
+                  aria-hidden="true"
+                  data-catalog-skeleton
+                  data-skeleton-index="2"
+                >
+                  <div class="solution-preview solution-preview--skeleton"></div>
+
+                  <div class="solution-card__body">
+                    <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+                    <div class="catalog-skeleton__actions"></div>
+                  </div>
+                </article>
+                <article
+                  class="solution-card solution-card--skeleton catalog-skeleton"
+                  aria-hidden="true"
+                  data-catalog-skeleton
+                  data-skeleton-index="3"
+                >
+                  <div class="solution-preview solution-preview--skeleton"></div>
+
+                  <div class="solution-card__body">
+                    <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+                    <div class="catalog-skeleton__actions"></div>
+                  </div>
+                </article>
+                <article
+                  class="solution-card solution-card--skeleton catalog-skeleton"
+                  aria-hidden="true"
+                  data-catalog-skeleton
+                  data-skeleton-index="4"
+                >
+                  <div class="solution-preview solution-preview--skeleton"></div>
+
+                  <div class="solution-card__body">
+                    <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+                    <div class="catalog-skeleton__actions"></div>
+                  </div>
+                </article>
+                <article
+                  class="solution-card solution-card--skeleton catalog-skeleton"
+                  aria-hidden="true"
+                  data-catalog-skeleton
+                  data-skeleton-index="5"
+                >
+                  <div class="solution-preview solution-preview--skeleton"></div>
+
+                  <div class="solution-card__body">
+                    <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+                    <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+                    <div class="catalog-skeleton__actions"></div>
+                  </div>
+                </article>
+              </div>
             </div>
           </div>
           <section class="catalog-help" aria-labelledby="catalog-help-title">

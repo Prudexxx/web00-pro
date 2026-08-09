@@ -853,8 +853,11 @@ test("v2 cloud-primary catalog API exposes zero-stale state transitions", async 
       runtime: createRuntimeStub(),
       storage,
     });
+    const initial = catalog.getInitialCatalog();
 
-    assert.deepEqual(plain(catalog.getInitialCatalog()), {
+    assert.equal(catalog.getConfig().catalogRuntimeMode, "cloud-primary");
+    assert.equal(initial.items.length, 0);
+    assert.deepEqual(plain(initial), {
       apiAvailable: false,
       degraded: false,
       errorCode: "",
