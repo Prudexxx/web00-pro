@@ -152,6 +152,24 @@ test("service worker fetches catalog-v2 runtime from the network first and cache
   assert.equal(await cached.text(), `network:${runtimeUrl}`);
 });
 
+test("service worker falls back to the exact cached catalog-v2 runtime URL after network failure", async () => {
+  const runtimeUrl = V2_RUNTIME_URLS[2];
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => {
+      throw new TypeError("network down");
+    },
+  });
+  await worker.put(CURRENT_CACHE, runtimeUrl, "cached exact runtime");
+  worker.clearOperations();
+
+  const response = await worker.fetch(runtimeUrl);
+
+  assert.equal(await response.text(), "cached exact runtime");
+  assert.equal(worker.fetchCalls.length, 1);
+  assert.equal(worker.fetchCalls[0].cache, "no-store");
+  assert.equal(worker.operations.some((entry) => entry.type === "cache.match" && entry.ignoreSearch), false);
+});
+
 test("service worker uses only exact catalog-v2 runtime query matches after network failure", async () => {
   const runtimeUrl = V2_RUNTIME_URLS[2];
   const previousUrl = "https://web00.pro/assets/js/catalog-v2/main.js?v=previous";
