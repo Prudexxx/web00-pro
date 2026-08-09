@@ -33,6 +33,7 @@
 - First SW migration MUST NOT rely on query strings.
 - New SW MUST NOT use ignoreSearch for new runtime code.
 - v7 SW exact precache identity must match HTML runtime request URLs including `?v=zero-stale-catalog-v1`.
+- Migrated deferred script order must be `runtime-config.js`, `catalog-v2/catalog-runtime.js`, `data.js`, `catalog-v2/catalog-api.js`, `catalog-v2/main.js`.
 - No production actions during implementation.
 - Do not mix image upload limit work into this branch.
 
@@ -61,6 +62,8 @@
   - Add Cloud preconnect, switch catalog runtime scripts to v2 for the home page, and replace first-paint hardcoded popular catalog cards with stable non-interactive skeleton cards.
 - Modify: `brief.html`
   - Add Cloud preconnect, switch catalog runtime scripts to v2 for brief, and wait for current-or-degraded catalog state before selected-solution lookup.
+- Modify: `assets/css/home.css`
+  - Add home-only popular skeleton styles because `index.html` does not load `assets/css/catalog-premium.css`.
 - Modify: all root pages currently loading the old runtime script set:
   - `app.html`
   - `brief.html`
@@ -464,7 +467,7 @@ In `tests/frontend/catalog-resilience.test.mjs`, add tests that load `assets/js/
 ```js
 test("v2 runtime consumes one successful startup prime once and does not retain it as a permanent manifest cache", async () => {
   const firstRuntime = cloudSnapshot([apiSite("first-current", "First Current")]);
-  const secondRuntime = cloudSnapshot([apiSite("second-current", "Second Current")], { revision: 2 });
+  const secondRuntime = cloudSnapshot([apiSite("second-current", "Second Current")], 2);
   const fetch = createFakeFetch(async (url) => {
     if (url.includes("/manifest.json")) {
       return jsonResponse(fetch.calls.filter((call) => call.url.includes("/manifest.json")).length === 1
@@ -498,6 +501,46 @@ test("v2 runtime consumes one successful startup prime once and does not retain 
 });
 ```
 
+Add a joined in-flight prime consumption test:
+
+```js
+test("v2 catalog load joins in-flight prime and consumes it before a later freshness load", async () => {
+  const firstRuntime = cloudSnapshot([apiSite("joined-current", "Joined Current")]);
+  const secondRuntime = cloudSnapshot([apiSite("later-current", "Later Current")], 2);
+  const manifestGate = deferred();
+  const fetch = createFakeFetch(async (url) => {
+    const manifestFetchCount = fetch.calls.filter((call) => call.url.includes("/manifest.json")).length;
+    if (url.includes("/manifest.json") && manifestFetchCount === 1) {
+      await manifestGate.promise;
+      return jsonResponse(firstRuntime.manifest);
+    }
+    if (url.includes("/manifest.json")) {
+      return jsonResponse(secondRuntime.manifest);
+    }
+    if (url === firstRuntime.snapshotUrl) return jsonBytesResponse(firstRuntime.body);
+    if (url === secondRuntime.snapshotUrl) return jsonBytesResponse(secondRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const runtime = await loadV2RuntimeWithFetch(fetch);
+
+  const prime = runtime.primeManifest(cloudConfig());
+  const joinedLoad = runtime.loadCatalogFromRuntime(cloudConfig());
+
+  manifestGate.resolve();
+  await prime;
+
+  const firstLoad = await joinedLoad;
+  assert.equal(firstLoad.manifest.revision, firstRuntime.manifest.revision);
+  assert.equal(runtime.testState().manifestFetchCount, 1);
+
+  const secondLoad = await runtime.loadCatalogFromRuntime(cloudConfig());
+  assert.equal(secondLoad.manifest.revision, secondRuntime.manifest.revision);
+  assert.equal(runtime.testState().manifestFetchCount, 2);
+});
+```
+
+This test must fail if a successful `primedManifestResult` survives after the first catalog load joined the still in-flight prime.
+
 Add a failed-prime recovery test:
 
 ```js
@@ -525,6 +568,41 @@ test("v2 runtime failed manifest prime does not poison retry", async () => {
   assert.equal(runtime.testState().snapshotNetworkFetchCount, 1);
 });
 ```
+
+Add a bounded hanging-prime test:
+
+```js
+test("v2 hanging early prime times out, clears active request, and permits degraded fallback plus fresh recovery", async () => {
+  const recoveredRuntime = cloudSnapshot([apiSite("timeout-recovered", "Timeout Recovered")], 3);
+  const fetch = createFakeFetch(async (url) => {
+    const manifestFetchCount = fetch.calls.filter((call) => call.url.includes("/manifest.json")).length;
+    if (url.includes("/manifest.json") && manifestFetchCount === 1) {
+      return new Promise(() => undefined);
+    }
+    if (url.includes("/manifest.json")) {
+      return jsonResponse(recoveredRuntime.manifest);
+    }
+    if (url === recoveredRuntime.snapshotUrl) {
+      return jsonBytesResponse(recoveredRuntime.body);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const runtime = await loadV2RuntimeWithFetch(fetch, {
+    verifiedFallback: cloudSnapshot([apiSite("fallback", "Fallback")], 1),
+  });
+  const config = { ...cloudConfig(), requestTimeoutMs: 5 };
+
+  await assert.rejects(() => runtime.primeManifest(config), /WEB00_CLOUD_MANIFEST_TIMEOUT/);
+  const degraded = await runtime.loadVerifiedFallback();
+  assert.ok(["degraded-verified", "degraded-static"].includes(degraded.freshness));
+
+  const recovered = await runtime.loadCatalogFromRuntime(config);
+  assert.equal(recovered.freshness, "ready-current");
+  assert.equal(runtime.testState().manifestFetchCount, 2);
+});
+```
+
+The exact fallback helper can use verified or static fallback fixtures, but the invariant is fixed: no permanent pending Promise and the recovery request is a fresh manifest request.
 
 Do not use `skipSnapshotForTest` for these lifecycle tests. The tests must exercise real manifest validation, snapshot byte download, SHA-256 validation, snapshot parse, and schema/revision/itemsCount validation.
 
@@ -643,41 +721,94 @@ let primedManifestResult = null;
 Implement:
 
 ```js
-function clearActiveManifestRequest(request) {
-  if (activeManifestRequest === request) activeManifestRequest = null;
+function normalizedManifestTimeoutMs(config) {
+  const value = Number(config?.requestTimeoutMs);
+  return Number.isFinite(value) && value >= 1 && value <= 30000
+    ? Math.round(value)
+    : 8000;
+}
+
+function createManifestRequest(config, options = {}) {
+  const controller = new AbortController();
+  const timeoutMs = normalizedManifestTimeoutMs(config);
+  const timer = window.setTimeout(() => {
+    controller.abort(runtimeError("WEB00_CLOUD_MANIFEST_TIMEOUT"));
+  }, timeoutMs);
+  const externalSignal = options.signal;
+  const request = {
+    consumedByCatalogLoad: false,
+    controller,
+    promise: null,
+  };
+  const abortFromExternal = () => controller.abort(externalSignal.reason || runtimeError("WEB00_CLOUD_MANIFEST_ABORTED"));
+  if (externalSignal) {
+    if (externalSignal.aborted) abortFromExternal();
+    else externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+  }
+  request.promise = fetchManifest(config.catalogManifestUrl, controller.signal)
+    .then((manifest) => ({ manifest, source: "network", transport: "manifest-prime" }))
+    .finally(() => {
+      window.clearTimeout(timer);
+      if (externalSignal) externalSignal.removeEventListener("abort", abortFromExternal);
+    });
+  return request;
 }
 
 function primeManifest(config, options = {}) {
-  if (activeManifestRequest) return activeManifestRequest.promise;
-  const request = {};
-  request.promise = fetchManifest(config.catalogManifestUrl, options.signal)
-    .then((manifest) => {
-      primedManifestResult = { manifest, source: "network", transport: "manifest-prime" };
-      return primedManifestResult;
-    })
-    .finally(() => clearActiveManifestRequest(request));
+  if (activeManifestRequest) {
+    return activeManifestRequest.promise;
+  }
+
+  const request = createManifestRequest(config, options);
   activeManifestRequest = request;
+
+  request.promise = request.promise
+    .then((result) => {
+      if (!request.consumedByCatalogLoad) {
+        primedManifestResult = { request, result };
+      }
+      return result;
+    })
+    .finally(() => {
+      if (activeManifestRequest === request) activeManifestRequest = null;
+    });
+
   return request.promise;
 }
 
 async function readManifestForLoad(config, options = {}) {
-  if (activeManifestRequest) return (await activeManifestRequest.promise).manifest;
-  if (primedManifestResult) {
-    const manifest = primedManifestResult.manifest;
-    primedManifestResult = null;
-    return manifest;
+  if (activeManifestRequest) {
+    const request = activeManifestRequest;
+    request.consumedByCatalogLoad = true;
+    const result = await request.promise;
+    if (primedManifestResult?.request === request) {
+      primedManifestResult = null;
+    }
+    return result.manifest;
   }
-  return fetchManifest(config.catalogManifestUrl, options.signal);
+
+  if (primedManifestResult) {
+    const result = primedManifestResult.result;
+    primedManifestResult = null;
+    return result.manifest;
+  }
+
+  return fetchManifestFresh(config, options);
 }
 ```
 
-One-shot rule:
+`fetchManifestFresh(config, options)` performs a new manifest request with the same timeout normalization and timer cleanup as `createManifestRequest`, but it does not write `primedManifestResult`.
+
+One-shot and joined-load rules:
 
 ```js
 primedManifestResult = null;
 ```
 
-must happen only when the first catalog resolution consumes the successful prime. A later retry must call `fetchManifest` again.
+must happen when the first catalog resolution consumes a successful settled prime. If the first catalog resolution joins an in-flight prime, it must set `request.consumedByCatalogLoad = true` before awaiting; after success, no `primedManifestResult` may survive for the next freshness load. A later retry or independent freshness load must call `fetchManifestFresh()` again.
+
+Every new prime request owns an `AbortController` and timeout timer. The default timeout is `8000` ms if `config.requestTimeoutMs` is absent or invalid. Always clear timeout timers on settle, including success, rejection, external abort, and timeout.
+If `options.signal` is supplied, it may abort the same request through the request-owned controller, but an aborted shared request must clear `activeManifestRequest` and must not leave a rejected Promise or stale `primedManifestResult` for later catalog loads.
 
 - [ ] **Step 6: Implement verified metadata format**
 
@@ -943,7 +1074,7 @@ Add authoritative empty Cloud test:
 
 ```js
 test("v2 valid zero-item current Cloud revision terminates bootstrap as authoritative empty state", async () => {
-  const emptyRuntime = cloudSnapshot([], { revision: 9 });
+  const emptyRuntime = cloudSnapshot([], 9);
   const { catalog } = await loadCatalog({
     apiPath: "assets/js/catalog-v2/catalog-api.js",
     runtimePath: "assets/js/catalog-v2/catalog-runtime.js",
@@ -1026,7 +1157,7 @@ function stateFromRuntimeResult(result, items) {
 Add terminal-state helpers:
 
 ```js
-function isAcceptedTerminalCatalogState(state) {
+function isAcceptedCatalogResolutionState(state) {
   return Boolean(
     state &&
     ["ready-current", "degraded-verified", "degraded-static"].includes(state.freshness) &&
@@ -1039,6 +1170,8 @@ function isAuthoritativeCurrentState(state) {
   return Boolean(state && state.source === "cloud" && state.freshness === "ready-current");
 }
 ```
+
+This helper is internal to `assets/js/catalog-v2/catalog-api.js`. It is not exported on `window.WEB00_CATALOG`; `assets/js/catalog-v2/main.js` owns its own UI-local `canRenderCatalogState(state)` helper.
 
 `hasCatalogItems(state)` remains useful for choosing between non-empty fallbacks, but it must not be the only criterion for successful Cloud resolution.
 
@@ -1159,16 +1292,17 @@ test("solutions.html uses a complete v2 runtime generation and first-paint skele
   const html = await readFile("solutions.html", "utf8");
   const scripts = [...html.matchAll(/<script\s+defer\s+src="([^"]+)"><\/script>/g)].map((match) => match[1]);
   const expected = [
-    "assets/js/data.js?v=zero-stale-catalog-v1",
     "assets/js/runtime-config.js?v=zero-stale-catalog-v1",
     "assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1",
+    "assets/js/data.js?v=zero-stale-catalog-v1",
     "assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1",
     "assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1",
   ];
 
-  const start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
+  const start = scripts.findIndex((src) => src.startsWith("assets/js/runtime-config.js"));
   assert.deepEqual(scripts.slice(start, start + 5), expected);
   assert.match(html, /data-solutions-grid[^>]*>[\s\S]*data-catalog-skeleton/);
+  assert.equal((html.match(/data-catalog-skeleton/g) || []).length, 6);
   assert.match(html, /aria-hidden="true"/);
   assert.match(html, /data-catalog-loading/);
   assert.doesNotMatch(html, /assets\/js\/catalog-runtime\.js\?/);
@@ -1199,7 +1333,7 @@ Add behavior test for a valid empty current catalog:
 
 ```js
 test("v2 solutions accepts zero-item current Cloud revision as empty without static fallback or retry", async () => {
-  const emptyRuntime = cloudSnapshot([], { revision: 11 });
+  const emptyRuntime = cloudSnapshot([], 11);
   const { grid, statusNodes, history, retryState } = await bootSolutionsPage(fetchForCloudRuntime(emptyRuntime), {
     scriptSet: "catalog-v2",
     data: { SOLUTIONS: [{ id: "static-card", slug: "static-card", title: "Static Card", active: true }] },
@@ -1265,11 +1399,61 @@ solutions.html still loads old runtime or grid contains old static card before C
 
 - [ ] **Step 5: Add first-paint solutions skeleton and idempotent JS skeleton render**
 
-In `solutions.html`, switch only the solutions page to the v2 runtime generation and place non-interactive skeleton markup inside `data-solutions-grid`:
+In `solutions.html`, switch only the solutions page to the v2 runtime generation and place six non-interactive skeleton cards inside `data-solutions-grid`:
 
 ```html
 <div class="solutions-grid" data-solutions-grid>
-  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton>
+  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton data-skeleton-index="0">
+    <div class="solution-preview solution-preview--skeleton"></div>
+    <div class="solution-card__body">
+      <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+      <div class="catalog-skeleton__actions"></div>
+    </div>
+  </article>
+  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton data-skeleton-index="1">
+    <div class="solution-preview solution-preview--skeleton"></div>
+    <div class="solution-card__body">
+      <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+      <div class="catalog-skeleton__actions"></div>
+    </div>
+  </article>
+  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton data-skeleton-index="2">
+    <div class="solution-preview solution-preview--skeleton"></div>
+    <div class="solution-card__body">
+      <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+      <div class="catalog-skeleton__actions"></div>
+    </div>
+  </article>
+  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton data-skeleton-index="3">
+    <div class="solution-preview solution-preview--skeleton"></div>
+    <div class="solution-card__body">
+      <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+      <div class="catalog-skeleton__actions"></div>
+    </div>
+  </article>
+  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton data-skeleton-index="4">
+    <div class="solution-preview solution-preview--skeleton"></div>
+    <div class="solution-card__body">
+      <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--title"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--text"></div>
+      <div class="catalog-skeleton__line catalog-skeleton__line--meta"></div>
+      <div class="catalog-skeleton__actions"></div>
+    </div>
+  </article>
+  <article class="solution-card solution-card--skeleton catalog-skeleton" aria-hidden="true" data-catalog-skeleton data-skeleton-index="5">
     <div class="solution-preview solution-preview--skeleton"></div>
     <div class="solution-card__body">
       <div class="catalog-skeleton__line catalog-skeleton__line--tags"></div>
@@ -1282,7 +1466,7 @@ In `solutions.html`, switch only the solutions page to the v2 runtime generation
 </div>
 ```
 
-The loading status remains accessible through the existing `data-catalog-loading` node. The skeleton cards themselves are `aria-hidden` and non-interactive.
+The loading status remains accessible through the existing `data-catalog-loading` node. All six skeleton cards are `aria-hidden`, non-interactive, and use the same card/preview geometry as real cards.
 
 In `assets/js/catalog-v2/main.js`, add:
 
@@ -1447,6 +1631,7 @@ git commit -m "feat: render catalog revisions atomically"
 - Modify: `index.html`
 - Modify: `solutions.html`
 - Modify: `brief.html`
+- Modify: `assets/css/home.css`
 - Modify: `tests/frontend/catalog-main-retry.test.mjs`
 - Modify: `tests/frontend/static-page-contract.test.mjs`
 
@@ -1499,7 +1684,7 @@ Add:
 
 ```js
 test("v2 retry after failure makes a fresh manifest request", async () => {
-  const recoveredRuntime = cloudSnapshot([apiSite("recovered", "Recovered Current")], { revision: 3 });
+  const recoveredRuntime = cloudSnapshot([apiSite("recovered", "Recovered Current")], 3);
   const fetch = createFakeFetch(async (url) => {
     const manifestFetchCount = fetch.calls.filter((call) => call.url.includes("/manifest.json")).length;
     if (url.includes("/manifest.json") && manifestFetchCount === 1) {
@@ -1531,6 +1716,49 @@ test("v2 retry after failure makes a fresh manifest request", async () => {
 });
 ```
 
+Add bounded hanging-prime catalog resolution test:
+
+```js
+test("v2 hanging early prime times out, reaches degraded fallback, and later recovers with fresh manifest", async () => {
+  const recoveredRuntime = cloudSnapshot([apiSite("prime-timeout-recovered", "Prime Timeout Recovered")], 4);
+  const fetch = createFakeFetch(async (url) => {
+    const manifestFetchCount = fetch.calls.filter((call) => call.url.includes("/manifest.json")).length;
+    if (url.includes("/manifest.json") && manifestFetchCount === 1) {
+      return new Promise(() => undefined);
+    }
+    if (url.includes("/manifest.json")) {
+      return jsonResponse(recoveredRuntime.manifest);
+    }
+    if (url === recoveredRuntime.snapshotUrl) {
+      return jsonBytesResponse(recoveredRuntime.body);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { catalog } = await loadCatalog({
+    apiPath: "assets/js/catalog-v2/catalog-api.js",
+    runtimePath: "assets/js/catalog-v2/catalog-runtime.js",
+    config: { ...cloudConfig(), requestTimeoutMs: 5 },
+    data: freshSmokeStaticData(),
+    fetch,
+  });
+
+  const degraded = await catalog.resolveCatalogForPage({
+    kind: "solutions",
+    currentState: catalog.getInitialCatalog(),
+  });
+  const recovered = await catalog.resolveCatalogForPage({
+    kind: "solutions",
+    currentState: degraded,
+  });
+
+  assert.ok(["degraded-verified", "degraded-static"].includes(degraded.freshness));
+  assert.equal(recovered.freshness, "ready-current");
+  assert.equal(recovered.revision, recoveredRuntime.manifest.revision);
+  assert.equal(fetch.calls.filter((call) => call.url.includes("/manifest.json")).length, 2);
+  assert.equal(fetch.calls.filter((call) => call.url === recoveredRuntime.snapshotUrl).length, 1);
+});
+```
+
 - [ ] **Step 4: Write RED for home and brief**
 
 In `tests/frontend/static-page-contract.test.mjs`, change the home contract:
@@ -1539,12 +1767,18 @@ In `tests/frontend/static-page-contract.test.mjs`, change the home contract:
 test("v2 home popular cards use skeleton until current or degraded catalog state resolves", async () => {
   const html = await readFile("index.html", "utf8");
   const source = await readFile("assets/js/catalog-v2/main.js", "utf8");
+  const homeCss = await readFile("assets/css/home.css", "utf8");
 
   assert.match(source, /async function initPopularCatalogState\(\)/);
   assert.match(source, /function renderPopularSkeleton\(\)/);
   assert.match(html, /id="popular-templates"[\s\S]*data-popular-skeleton/);
   assert.doesNotMatch(html, /id="popular-templates"[\s\S]*data-open-demo-id="mebel"/);
   assert.doesNotMatch(source, /popularCatalogState = CATALOG\.getInitialCatalog\(\{ limit: 3 \}\);\s*renderPopularSolutions\(\)/);
+  assert.match(html, /assets\/css\/home\.css/);
+  assert.match(homeCss, /body\[data-page="home"\] \.mock-template-card--skeleton/);
+  assert.match(homeCss, /pointer-events:\s*none/);
+  assert.match(homeCss, /min-height:\s*(?:var\([^)]+\)|[0-9.]+(?:px|rem|em))/);
+  assert.match(homeCss, /prefers-reduced-motion:\s*no-preference/);
 });
 ```
 
@@ -1565,9 +1799,9 @@ Add index/brief-only physical path contract. Do not change the `ROOT_MAIN_PAGES`
 ```js
 test("index and brief load complete v2 runtime generation", async () => {
   const expected = [
-    "assets/js/data.js?v=zero-stale-catalog-v1",
     "assets/js/runtime-config.js?v=zero-stale-catalog-v1",
     "assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1",
+    "assets/js/data.js?v=zero-stale-catalog-v1",
     "assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1",
     "assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1",
   ];
@@ -1575,7 +1809,7 @@ test("index and brief load complete v2 runtime generation", async () => {
   for (const page of ["index.html", "brief.html"]) {
     const html = await readFile(page, "utf8");
     const scripts = [...html.matchAll(/<script\s+defer\s+src="([^"]+)"><\/script>/g)].map((match) => match[1]);
-    const start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
+    const start = scripts.findIndex((src) => src.startsWith("assets/js/runtime-config.js"));
     assert.deepEqual(scripts.slice(start, start + 5), expected, `${page} script order`);
     assert.doesNotMatch(html, /assets\/js\/catalog-runtime\.js\?/);
     assert.doesNotMatch(html, /assets\/js\/catalog-api\.js\?/);
@@ -1632,6 +1866,8 @@ try {
 
 Do not add inline HTML script.
 
+This call is bounded by Task 2 `normalizedManifestTimeoutMs(config)`. It must not create an unbounded fetch during script evaluation, and timeout/abort must clear `activeManifestRequest` so degraded fallback and later recovery can proceed.
+
 - [ ] **Step 7: Add preconnect to the three primary pages**
 
 In `index.html`, `solutions.html`, and `brief.html`, add exactly:
@@ -1687,6 +1923,37 @@ function renderPopularSkeleton() {
 
 Call it from `initPopularCatalogState()` before `resolveCatalogForPage`.
 
+In `assets/css/home.css`, add home-specific skeleton styles. Do not add `assets/css/catalog-premium.css` to `index.html` just to borrow solutions-page skeleton styles.
+
+Required selectors:
+
+```css
+body[data-page="home"] .mock-template-card--skeleton {
+  pointer-events: none;
+  min-height: 300px;
+}
+
+body[data-page="home"] .mock-template-card--skeleton .catalog-skeleton__line {
+  display: block;
+  border-radius: var(--radius-sm, 6px);
+  background: linear-gradient(
+    90deg,
+    rgba(218, 212, 204, 0.4),
+    rgba(244, 241, 236, 0.9),
+    rgba(218, 212, 204, 0.4)
+  );
+  background-size: 220% 100%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  body[data-page="home"] .mock-template-card--skeleton .catalog-skeleton__line {
+    animation: catalog-home-skeleton-pulse 1.2s ease-in-out infinite;
+  }
+}
+```
+
+Choose the final `min-height` from the current normal popular-card geometry in `assets/css/home.css`; keep it close enough to avoid first-paint layout jump. Do not invent a value without checking existing `.mock-template-card` sizing.
+
 - [ ] **Step 9: Implement brief ready wait**
 
 In `assets/js/catalog-v2/main.js`, add:
@@ -1696,7 +1963,7 @@ async function resolveBriefCatalogReady() {
   if (!CATALOG || page !== "brief") return null;
   const initial = CATALOG.getInitialCatalog();
   const resolved = await CATALOG.resolveCatalogForPage({ kind: "solutions", currentState: initial });
-  if (isAcceptedTerminalCatalogState(resolved)) catalogState = resolved;
+  if (canRenderCatalogState(resolved)) catalogState = resolved;
   return catalogState;
 }
 ```
@@ -1720,7 +1987,7 @@ PASS
 - [ ] **Step 11: Commit**
 
 ```bash
-git add assets/js/catalog-v2/catalog-runtime.js assets/js/catalog-v2/main.js index.html solutions.html brief.html tests/frontend/catalog-main-retry.test.mjs tests/frontend/static-page-contract.test.mjs
+git add assets/js/catalog-v2/catalog-runtime.js assets/js/catalog-v2/main.js index.html solutions.html brief.html assets/css/home.css tests/frontend/catalog-main-retry.test.mjs tests/frontend/static-page-contract.test.mjs
 git commit -m "feat: prime catalog manifest before page init"
 ```
 
@@ -1829,9 +2096,9 @@ In `tests/frontend/static-page-contract.test.mjs`, assert every root page script
 
 ```js
 [
-  "assets/js/data.js?v=zero-stale-catalog-v1",
   "assets/js/runtime-config.js?v=zero-stale-catalog-v1",
   "assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1",
+  "assets/js/data.js?v=zero-stale-catalog-v1",
   "assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1",
   "assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1",
 ]
@@ -1865,9 +2132,9 @@ expected web00-shell-v7-zero-stale, current sw.js still web00-shell-v6-catalog-n
 For every root page listed in File Structure, replace the five-script catalog block with:
 
 ```html
-<script defer src="assets/js/data.js?v=zero-stale-catalog-v1"></script>
 <script defer src="assets/js/runtime-config.js?v=zero-stale-catalog-v1"></script>
 <script defer src="assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1"></script>
+<script defer src="assets/js/data.js?v=zero-stale-catalog-v1"></script>
 <script defer src="assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1"></script>
 <script defer src="assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1"></script>
 ```
@@ -1916,6 +2183,24 @@ HTML must request the same exact versioned catalog-v2 URLs:
 ```
 
 Do not precache unversioned catalog-v2 runtime URLs for the offline migration path.
+
+Early runtime execution order and SW caching policy are independent:
+
+```text
+runtime-config.js:
+network-only, never shell cached
+
+catalog-v2 runtime files:
+network-first exact cache, exact versioned offline fallback
+
+data.js:
+existing network-first disaster data path
+
+Cloud manifest:
+cross-origin mutable freshness authority, never SW shell cached
+```
+
+Changing HTML execution order must not add `runtime-config.js` to `SHELL_ASSETS`, must not shell-cache the Cloud manifest, and must not remove the existing special data.js network-first disaster path.
 
 - [ ] **Step 7: Implement v2 runtime request handling**
 
@@ -2072,13 +2357,44 @@ Assert:
 
 ```js
 assert.equal(solutionsHtmlHasInitialSkeleton, true);
+assert.equal(solutionsInitialSkeletonCount, 6);
 assert.equal(homeHtmlHasInitialPopularSkeleton, true);
 assert.equal(homeHtmlHasClickableOldPopularCard, false);
 assert.equal(skeletonPointerEventsNone, true);
+assert.equal(homeSkeletonStylesComeFromHomeCss, true);
+assert.equal(homeCssHasStableMinHeight, true);
 assert.equal(reducedMotionSupported, true);
 ```
 
-- [ ] **Step 5: Add slow network acceptance**
+- [ ] **Step 5: Add early script order acceptance**
+
+Assert canonical deferred order on every migrated page:
+
+```js
+assert.deepEqual(scriptOrder, [
+  "assets/js/runtime-config.js?v=zero-stale-catalog-v1",
+  "assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1",
+  "assets/js/data.js?v=zero-stale-catalog-v1",
+  "assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1",
+  "assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1",
+]);
+```
+
+This proves `catalog-runtime.js` can start manifest prime before `data.js` executes, while `data.js` remains available before `catalog-api.js` and `main.js`.
+
+- [ ] **Step 6: Add prime timeout acceptance**
+
+Assert:
+
+```js
+assert.equal(hangingPrimeTimedOut, true);
+assert.equal(activeManifestRequestCleared, true);
+assert.equal(degradedFallbackReached, true);
+assert.equal(recoveryManifestFetchIsFresh, true);
+assert.equal(finalRecoveryFreshness, "ready-current");
+```
+
+- [ ] **Step 7: Add slow network acceptance**
 
 In `tests/frontend/catalog-main-retry.test.mjs`, delay manifest and snapshot 3-7 simulated seconds with controlled timers. Assert:
 
@@ -2089,7 +2405,7 @@ assert.equal(renderCountBeforeResolve, 0);
 assert.equal(renderCountAfterResolve, 1);
 ```
 
-- [ ] **Step 6: Add manifest failure to recovery acceptance**
+- [ ] **Step 8: Add manifest failure to recovery acceptance**
 
 Assert:
 
@@ -2100,7 +2416,7 @@ assert.equal(secondResult.freshness, "ready-current");
 assert.equal(cardByCardAppendCount, 0);
 ```
 
-- [ ] **Step 7: Add corruption rejection acceptance**
+- [ ] **Step 9: Add corruption rejection acceptance**
 
 Cover these exact cases:
 
@@ -2120,7 +2436,7 @@ Each invalid content case must assert:
 assert.equal(invalidContentRendered, false);
 ```
 
-- [ ] **Step 8: Add SW migration acceptance**
+- [ ] **Step 10: Add SW migration acceptance**
 
 In `tests/frontend/service-worker-catalog-cache.test.mjs`, simulate:
 
@@ -2148,7 +2464,7 @@ Expected JSON-shaped evidence:
 }
 ```
 
-- [ ] **Step 9: Run focused acceptance**
+- [ ] **Step 11: Run focused acceptance**
 
 Run:
 
@@ -2167,7 +2483,7 @@ Expected:
 PASS
 ```
 
-- [ ] **Step 10: Run full frontend and generator**
+- [ ] **Step 12: Run full frontend and generator**
 
 Run:
 
@@ -2185,7 +2501,7 @@ PASS
 
 Do not regenerate `assets/js/data.js` merely to make Zero-Stale work.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
 git add tests/frontend/catalog-resilience.test.mjs tests/frontend/catalog-main-retry.test.mjs tests/frontend/service-worker-catalog-cache.test.mjs tests/frontend/static-page-contract.test.mjs tests/frontend/catalog-normalization.test.mjs tests/frontend/service-worker-contract.test.mjs tests/frontend/pages-catalog-generator.test.mjs
@@ -2363,6 +2679,7 @@ assets/js/catalog-v2/*
 sw.js
 root HTML pages that load public scripts
 assets/css/catalog-premium.css
+assets/css/home.css
 tests/frontend/*
 tests/frontend/fixtures/*
 docs/superpowers/specs/2026-08-08-catalog-zero-stale-runtime-design.md
@@ -2401,7 +2718,7 @@ no diff
 If Step 1-7 required review fixes, commit only the regression test and narrow fix:
 
 ```bash
-git add assets/js/catalog-v2/catalog-runtime.js assets/js/catalog-v2/catalog-api.js assets/js/catalog-v2/main.js sw.js assets/css/catalog-premium.css app.html brief.html cabinet.html cases.html consent-personal-data.html contacts.html faq.html how-it-works.html index.html install.html pricing.html privacy-policy.html services.html solutions.html status.html tests/frontend/catalog-resilience.test.mjs tests/frontend/catalog-main-retry.test.mjs tests/frontend/catalog-normalization.test.mjs tests/frontend/service-worker-catalog-cache.test.mjs tests/frontend/service-worker-contract.test.mjs tests/frontend/static-page-contract.test.mjs tests/frontend/pages-catalog-generator.test.mjs tests/frontend/fixtures/legacy-sw-v6.js
+git add assets/js/catalog-v2/catalog-runtime.js assets/js/catalog-v2/catalog-api.js assets/js/catalog-v2/main.js sw.js assets/css/catalog-premium.css assets/css/home.css app.html brief.html cabinet.html cases.html consent-personal-data.html contacts.html faq.html how-it-works.html index.html install.html pricing.html privacy-policy.html services.html solutions.html status.html tests/frontend/catalog-resilience.test.mjs tests/frontend/catalog-main-retry.test.mjs tests/frontend/catalog-normalization.test.mjs tests/frontend/service-worker-catalog-cache.test.mjs tests/frontend/service-worker-contract.test.mjs tests/frontend/static-page-contract.test.mjs tests/frontend/pages-catalog-generator.test.mjs tests/frontend/fixtures/legacy-sw-v6.js
 git commit -m "fix: harden zero-stale catalog runtime"
 ```
 
@@ -2490,7 +2807,9 @@ GITHUB_INDEPENDENCE = PASS
 - Warm same revision: Tasks 2 and 7 verify manifest-first plus cache-hit snapshot reuse.
 - New revision: Tasks 2, 4, and 7 verify old revision is not rendered as current and current revision renders once.
 - Successful startup prime: Task 2 requires first resolution to keep total manifest fetch count at 1, and a later freshness load to make a second manifest fetch.
+- Joined in-flight prime: Task 2 requires a catalog load that joins an active prime to mark it consumed before awaiting, so no stale `primedManifestResult` survives for the next freshness load.
 - Failed startup prime: Task 2 requires the active request to clear and a later load to perform real manifest + snapshot recovery.
+- Prime timeout: Task 2 requires every early prime to own an AbortController and timeout timer derived from normalized `requestTimeoutMs`, defaulting to 8000 ms, with timer cleanup on settle.
 - Valid empty current catalog: Tasks 3, 4, and 7 require `itemsCount = 0` to terminate bootstrap as authoritative `ready-current`/`empty` without static fallback or retry.
 - Verified cache: Task 2 defines cache namespace, metadata identity, rehash, commit order, torn-write handling, missing cache handling, and quota failure behavior.
 - Existing LKG: Task 3 keeps LKG out of Cloud-primary current state.
@@ -2499,11 +2818,11 @@ GITHUB_INDEPENDENCE = PASS
 - Cloud unavailable: Task 3 verifies degraded verified fallback before static fallback.
 - Atomic render contract: Task 4 implements one grid DOM write for accepted catalog state.
 - Images: Task 4 fixes skeleton and preview geometry while preserving lazy image loading.
-- First paint skeleton: Tasks 4 and 5 require solutions/home HTML skeleton before `DOMContentLoaded`, with idempotent JS skeleton rendering.
-- Early manifest start: Task 5 primes manifest before DOMContentLoaded and avoids duplicate startup fetch.
+- First paint skeleton: Tasks 4 and 5 require solutions/home HTML skeleton before `DOMContentLoaded`, with six solutions skeleton cards, home skeleton styles in `assets/css/home.css`, and idempotent JS skeleton rendering.
+- Early manifest start: Tasks 4, 5, and 6 use canonical deferred order `runtime-config.js`, `catalog-v2/catalog-runtime.js`, `data.js`, `catalog-v2/catalog-api.js`, `catalog-v2/main.js`.
 - Manifest lifecycle: Tasks 2 and 5 clear in-flight references and make fresh retry requests.
 - Security invariants: Tasks 2 and 3 preserve approved origin, no credentials, redirect error, schema/count/SHA validation, URL sanitizer, and demo URL security.
-- Service Worker migration: Tasks 1 and 6 prove query-string-only risk and require physical v2 paths plus v7 exact versioned precache identity that survives offline reload at the controllerchange boundary.
+- Service Worker migration: Tasks 1 and 6 prove query-string-only risk and require physical v2 paths plus v7 exact versioned precache identity that survives offline reload at the controllerchange boundary, while runtime-config remains network-only and data.js keeps its special network-first disaster path.
 - UI contract: Task 4 uses skeleton and optional degraded state while preventing stale cards.
 - Performance goals: Tasks 2 and 7 verify warm path avoids snapshot download and new revision uses one snapshot download.
 - Pages in scope: Tasks 5 and 6 include solutions, home, brief, and all root pages loading the public runtime.
@@ -2519,11 +2838,14 @@ GITHUB_INDEPENDENCE = PASS
 - `loadVerifiedFallback(options)` returns degraded verified state; Task 3 consumes it before static fallback.
 - `getInitialCatalog(options)` returns bootstrap state for Cloud-primary; Task 4 consumes it without static cards.
 - `resolveCatalogForPage(options)` returns explicit `freshness`; Task 4 render gating uses that field.
+- `canRenderCatalogState(state)` is UI-local to `assets/js/catalog-v2/main.js`; `main.js` does not reference catalog-api-local helpers.
+- Plan examples use the existing `cloudSnapshot(items, revision = 6, options = {})` helper signature.
 - Accepted terminal state means `freshness` in `ready-current`, `degraded-verified`, or `degraded-static` and `lifecycle` in `ready` or `empty`; Tasks 3, 4, 5, and 7 use that rule.
 - Physical v2 paths are consistent across Tasks 1, 4, 5, 6, 7, and 8.
 - Cache namespace is consistently `web00-catalog-verified-v1`.
 - SW namespace is consistently `web00-shell-v7-zero-stale`.
 - Runtime version is consistently `zero-stale-catalog-v1`, and v7 SW precaches exact URLs matching HTML script requests.
+- Runtime-config network-only, catalog-v2 exact runtime cache, data.js network-first disaster path, and Cloud manifest cross-origin mutable freshness remain separate policies.
 
 ### Final Plan Gate
 
