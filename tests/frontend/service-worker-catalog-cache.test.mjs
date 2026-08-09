@@ -64,6 +64,45 @@ test("service worker keeps generic cache-first behavior for non-catalog shell as
   assert.equal(worker.operations[0].type, "cache.match");
 });
 
+test("legacy v6 service worker can satisfy query-string-only runtime migration with old cached bytes", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => jsResponse("window.__NEW_RUNTIME__ = true;"),
+    sourcePath: "tests/frontend/fixtures/legacy-sw-v6.js",
+  });
+  await worker.put(
+    "web00-shell-v6-catalog-network-first",
+    "https://web00.pro/assets/js/main.js",
+    "window.__OLD_RUNTIME__ = true;"
+  );
+  worker.clearOperations();
+
+  const response = await worker.fetch("https://web00.pro/assets/js/main.js?v=zero-stale");
+
+  assert.equal(await response.text(), "window.__OLD_RUNTIME__ = true;");
+  assert.equal(worker.fetchCalls.length, 0);
+  assert.equal(worker.operations[0].type, "cache.match");
+});
+
+test("legacy v6 service worker cannot satisfy catalog-v2 physical runtime paths from old shell entries", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async (request) => jsResponse(`network:${new URL(requestUrl(request), "https://web00.pro/").pathname}`),
+    sourcePath: "tests/frontend/fixtures/legacy-sw-v6.js",
+  });
+  await worker.put("web00-shell-v6-catalog-network-first", "https://web00.pro/assets/js/main.js", "old main");
+  await worker.put("web00-shell-v6-catalog-network-first", "https://web00.pro/assets/js/catalog-api.js", "old api");
+  await worker.put("web00-shell-v6-catalog-network-first", "https://web00.pro/assets/js/catalog-runtime.js", "old runtime");
+  worker.clearOperations();
+
+  const main = await worker.fetch("https://web00.pro/assets/js/catalog-v2/main.js");
+  const api = await worker.fetch("https://web00.pro/assets/js/catalog-v2/catalog-api.js");
+  const runtime = await worker.fetch("https://web00.pro/assets/js/catalog-v2/catalog-runtime.js");
+
+  assert.equal(await main.text(), "network:/assets/js/catalog-v2/main.js");
+  assert.equal(await api.text(), "network:/assets/js/catalog-v2/catalog-api.js");
+  assert.equal(await runtime.text(), "network:/assets/js/catalog-v2/catalog-runtime.js");
+  assert.equal(worker.fetchCalls.length, 3);
+});
+
 test("service worker does not intercept cross-origin Cloud runtime manifest", async () => {
   const worker = await loadServiceWorker({
     fetchHandler: async () => new Response(JSON.stringify({ marker: "fresh-cloud-manifest" }), {
@@ -349,8 +388,9 @@ test("main.js does not reload on first service worker install without an existin
   assert.equal(storage.setCalls.length, 0);
 });
 
-async function loadServiceWorker({ fetchHandler }) {
-  const source = await readFile("sw.js", "utf8");
+async function loadServiceWorker(options = {}) {
+  const { fetchHandler } = options;
+  const source = await readFile(options.sourcePath || "sw.js", "utf8");
   const listeners = new Map();
   const operations = [];
   const fetchCalls = [];
@@ -379,7 +419,7 @@ async function loadServiceWorker({ fetchHandler }) {
     },
     self,
   });
-  vm.runInContext(source, context, { filename: "sw.js" });
+  vm.runInContext(source, context, { filename: options.sourcePath || "sw.js" });
 
   return {
     fetch: async (url, init = {}) => {
