@@ -7,6 +7,8 @@ import { createFakeFetch, jsonResponse } from "./helpers/fake-fetch.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
 
 const CLOUD_MANIFEST_URL = "https://web00-public-runtime.s3-website.cloud.ru/runtime/production/catalog/v1/manifest.json";
+const VERIFIED_CACHE_NAME = "web00-catalog-verified-v1";
+const VERIFIED_METADATA_KEY = "web00.catalog.verified.v1";
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -156,7 +158,7 @@ function runtimeFixture(overrides = {}) {
     snapshotPath,
     snapshotUrl: `https://web00-public-runtime.s3-website.cloud.ru/${snapshotPath}`,
   };
-  return { manifest, snapshot };
+  return { manifest, snapshot, snapshotText };
 }
 
 async function loadV2Runtime(fetch, config = cloudConfig()) {
@@ -174,6 +176,107 @@ async function loadV2Runtime(fetch, config = cloudConfig()) {
 
 function countFetches(fetch, matcher) {
   return fetch.calls.filter((call) => matcher.test(call.url)).length;
+}
+
+function requestUrl(request) {
+  return typeof request === "string" ? request : request.url;
+}
+
+function cloneArrayBuffer(buffer) {
+  return buffer.slice(0);
+}
+
+function bytesFromBody(body) {
+  const bytes = new TextEncoder().encode(typeof body === "string" ? body : JSON.stringify(body));
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function responseFromArrayBuffer(buffer) {
+  return new Response(cloneArrayBuffer(buffer), {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    status: 200,
+  });
+}
+
+function createStorage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem(key) {
+      return values.has(String(key)) ? values.get(String(key)) : null;
+    },
+    setItem(key, value) {
+      values.set(String(key), String(value));
+    },
+    snapshot() {
+      return Object.fromEntries(values);
+    },
+  };
+}
+
+function createVerifiedCacheStorage() {
+  const namespaces = new Map();
+  const operations = [];
+
+  function namespace(name) {
+    const key = String(name);
+    if (!namespaces.has(key)) namespaces.set(key, new Map());
+    return namespaces.get(key);
+  }
+
+  function cache(name) {
+    return {
+      async match(request) {
+        const url = requestUrl(request);
+        operations.push({ name, type: "match", url });
+        const stored = namespace(name).get(url);
+        return stored ? responseFromArrayBuffer(stored) : undefined;
+      },
+      async put(request, response) {
+        const url = requestUrl(request);
+        operations.push({ name, type: "put", url });
+        namespace(name).set(url, cloneArrayBuffer(await response.arrayBuffer()));
+      },
+      async delete(request) {
+        const url = requestUrl(request);
+        operations.push({ name, type: "delete", url });
+        return namespace(name).delete(url);
+      },
+    };
+  }
+
+  return {
+    operations,
+    async open(name) {
+      operations.push({ name, type: "open" });
+      return cache(String(name));
+    },
+    seed(name, url, body) {
+      const buffer = body instanceof ArrayBuffer ? body : bytesFromBody(body);
+      namespace(name).set(String(url), cloneArrayBuffer(buffer));
+    },
+  };
+}
+
+function verifiedIdentity(runtime, overrides = {}) {
+  return {
+    generatedAt: runtime.manifest.generatedAt,
+    itemsCount: runtime.manifest.itemsCount,
+    revision: runtime.manifest.revision,
+    savedAt: "2026-08-08T00:30:00.000Z",
+    schemaVersion: 1,
+    sha256: runtime.manifest.sha256,
+    snapshotPath: runtime.manifest.snapshotPath,
+    snapshotUrl: runtime.manifest.snapshotUrl,
+    ...overrides,
+  };
+}
+
+function verifiedMetadata(current, previous = null) {
+  return JSON.stringify({
+    current,
+    previous,
+    schemaVersion: 1,
+  });
 }
 
 function homeSkeletonHtml() {
@@ -359,6 +462,14 @@ async function flush() {
   await delay(0);
 }
 
+async function waitForGridMatch(page, pattern) {
+  for (let index = 0; index < 20; index += 1) {
+    await flush();
+    if (pattern.test(page.grid.innerHTML)) return;
+  }
+  assert.match(page.grid.innerHTML, pattern);
+}
+
 function createSolutionsPage(fetch, options = {}) {
   const browser = createFakeBrowser({ page: "solutions" });
   const timers = [];
@@ -406,6 +517,11 @@ function createSolutionsPage(fetch, options = {}) {
   browser.window.addEventListener = () => undefined;
   browser.window.navigator = {};
   browser.window.localStorage = options.storage || { getItem: () => null, setItem: () => undefined };
+  browser.window.TextDecoder = TextDecoder;
+  browser.window.TextEncoder = TextEncoder;
+  browser.window.crypto = webcrypto;
+  browser.window.Response = Response;
+  browser.window.caches = Object.hasOwn(options, "cacheStorage") ? options.cacheStorage : createVerifiedCacheStorage();
   if (options.captureTimers) {
     browser.window.setTimeout = (callback, delayMs) => {
       const id = timers.length + 1;
@@ -448,7 +564,7 @@ function createSolutionsPage(fetch, options = {}) {
   };
 }
 
-async function bootSolutionsPage(fetch, options = {}) {
+async function startSolutionsPage(fetch, options = {}) {
   const page = createSolutionsPage(fetch, options);
   const { browser } = page;
   await loadClassicScript("assets/js/runtime-config.js", browser);
@@ -473,7 +589,13 @@ async function bootSolutionsPage(fetch, options = {}) {
     await loadClassicScript("assets/js/main.js", browser);
   }
   const [onReady] = browser.listeners.get("DOMContentLoaded");
-  await onReady();
+  const bootPromise = onReady().then(() => page);
+  return { page, bootPromise };
+}
+
+async function bootSolutionsPage(fetch, options = {}) {
+  const { page, bootPromise } = await startSolutionsPage(fetch, options);
+  await bootPromise;
   return page;
 }
 
@@ -705,6 +827,105 @@ test("catalog-v2 solutions keeps literal skeleton and never paints static data w
 
   assert.match(page.grid.innerHTML, /Cloud Current/);
   assert.doesNotMatch(page.history.join("\n"), /Old Static Card/);
+});
+
+test("catalog-v2 real Cloud revision replaces old verified cache without a stale render", async () => {
+  const oldRuntime = runtimeFixture({
+    items: [catalogItem("old-verified-cache", "Old Verified Cache")],
+    revision: 61,
+  });
+  const currentRuntime = runtimeFixture({
+    items: [catalogItem("fresh-cloud-revision", "Fresh Cloud Revision")],
+    revision: 62,
+  });
+  const cacheStorage = createVerifiedCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, oldRuntime.manifest.snapshotUrl, oldRuntime.snapshotText);
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(oldRuntime)),
+  });
+  const fetch = createFakeFetch((url) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return runtimeJsonResponse(currentRuntime.manifest);
+    if (url === currentRuntime.manifest.snapshotUrl) return runtimeJsonResponse(currentRuntime.snapshot);
+    throw new Error(`unexpected request ${url}`);
+  });
+
+  const page = await bootSolutionsPage(fetch, {
+    cacheStorage,
+    config: cloudConfig(),
+    data: { SOLUTIONS: [catalogItem("old-static", "Old Static Card")], SERVICES: [], PRICING: [] },
+    initialGridHtml: skeletonHtml(),
+    scriptSet: "catalog-v2",
+    storage,
+  });
+  await waitForGridMatch(page, /Fresh Cloud Revision/);
+
+  const history = page.history.join("\n");
+  const metadata = JSON.parse(storage.snapshot()[VERIFIED_METADATA_KEY]);
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  assert.equal(countFetches(fetch, /releases\/revision-/), 1);
+  assert.doesNotMatch(history, /Old Verified Cache/);
+  assert.doesNotMatch(history, /Old Static Card/);
+  assert.equal(fetch.calls.some((call) => call.url.includes("web00-backend-production.onrender.com")), false);
+  assert.equal(
+    cacheStorage.operations.some((operation) => operation.type === "match" && operation.url === oldRuntime.manifest.snapshotUrl),
+    false,
+  );
+  assert.equal(
+    cacheStorage.operations.some((operation) => operation.type === "put" && operation.url === currentRuntime.manifest.snapshotUrl),
+    true,
+  );
+  assert.equal(metadata.current.revision, currentRuntime.manifest.revision);
+  assert.equal(metadata.previous.revision, oldRuntime.manifest.revision);
+});
+
+test("catalog-v2 real Cloud keeps skeleton across slow manifest and snapshot until one current render", async () => {
+  const manifestGate = createDeferred();
+  const snapshotGate = createDeferred();
+  const currentRuntime = runtimeFixture({
+    items: [catalogItem("slow-cloud-current", "Slow Cloud Current")],
+    revision: 63,
+  });
+  const fetch = createFakeFetch((url) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return manifestGate.promise;
+    if (url === currentRuntime.manifest.snapshotUrl) return snapshotGate.promise;
+    throw new Error(`unexpected request ${url}`);
+  });
+
+  const { page, bootPromise } = await startSolutionsPage(fetch, {
+    cacheStorage: createVerifiedCacheStorage(),
+    config: cloudConfig(),
+    data: { SOLUTIONS: [catalogItem("old-static", "Old Static Card")], SERVICES: [], PRICING: [] },
+    initialGridHtml: skeletonHtml(),
+    scriptSet: "catalog-v2",
+    storage: createStorage(),
+  });
+  await flush();
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  assert.match(fetch.calls[0].url, new RegExp(`^${CLOUD_MANIFEST_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?_=`));
+  assert.match(fetch.calls[0].init.cache, /no-store/);
+  assert.match(fetch.calls[0].init.credentials, /omit/);
+  assert.match(fetch.calls[0].init.redirect, /error/);
+
+  assert.match(page.history[0], /data-catalog-skeleton/);
+  assert.equal(page.statusNodes["[data-catalog-loading]"].hidden, false);
+  assert.doesNotMatch(page.history.join("\n"), /Old Static Card|Slow Cloud Current/);
+
+  manifestGate.resolve(runtimeJsonResponse(currentRuntime.manifest));
+  await flush();
+
+  assert.equal(countFetches(fetch, /releases\/revision-/), 1);
+  assert.equal(page.statusNodes["[data-catalog-loading]"].hidden, false);
+  assert.doesNotMatch(page.history.join("\n"), /Old Static Card|Slow Cloud Current/);
+
+  snapshotGate.resolve(runtimeJsonResponse(currentRuntime.snapshot));
+  await bootPromise;
+  await waitForGridMatch(page, /Slow Cloud Current/);
+
+  assert.doesNotMatch(page.history.join("\n"), /Old Static Card/);
+  assert.equal(page.statusNodes["[data-catalog-loading]"].hidden, true);
+  assert.equal(page.history.filter((html) => html.includes("Slow Cloud Current")).length, 1);
 });
 
 test("catalog-v2 current Cloud delete removes stale static ghost without rendering it first", async () => {
