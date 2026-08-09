@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, webcrypto } from "node:crypto";
+import { existsSync } from "node:fs";
 import { TextDecoder, TextEncoder } from "node:util";
 
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
@@ -8,6 +9,9 @@ import { createFakeFetch, jsonResponse } from "./helpers/fake-fetch.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
 
 const LKG_KEY = "web00.catalog.api.lkg.v1";
+const V2_RUNTIME_PATH = "assets/js/catalog-v2/catalog-runtime.js";
+const VERIFIED_CACHE_NAME = "web00-catalog-verified-v1";
+const VERIFIED_METADATA_KEY = "web00.catalog.verified.v1";
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
@@ -15,6 +19,16 @@ function plain(value) {
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
 }
 
 function classList() {
@@ -110,13 +124,15 @@ function fakeDomEvent(type) {
   };
 }
 
-function createStorage(initial = {}) {
+function createStorage(initial = {}, options = {}) {
   const values = new Map(Object.entries(initial));
   return {
     getItem(key) {
+      if (options.getThrows) throw new Error("localStorage get failed");
       return values.has(key) ? values.get(key) : null;
     },
     setItem(key, value) {
+      if (options.setThrows) throw new Error("localStorage set failed");
       values.set(key, String(value));
     },
     snapshot() {
@@ -362,6 +378,159 @@ function cloudSnapshot(items, revision = 6, options = {}) {
   };
 }
 
+function cloneArrayBuffer(buffer) {
+  return buffer.slice(0);
+}
+
+function bytesFromBody(body) {
+  const bytes = new TextEncoder().encode(typeof body === "string" ? body : JSON.stringify(body));
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+
+function snapshotBytes(runtime) {
+  return bytesFromBody(runtime.body);
+}
+
+function jsonBytesResponse(body) {
+  return new Response(bytesFromBody(body), {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    status: 200,
+  });
+}
+
+function responseFromArrayBuffer(buffer) {
+  return new Response(cloneArrayBuffer(buffer), {
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    status: 200,
+  });
+}
+
+function requestUrl(request) {
+  return typeof request === "string" ? request : request.url;
+}
+
+function createFakeCacheStorage(options = {}) {
+  const namespaces = new Map();
+  const operations = [];
+
+  function namespace(name) {
+    const key = String(name);
+    if (!namespaces.has(key)) namespaces.set(key, new Map());
+    return namespaces.get(key);
+  }
+
+  function cache(name) {
+    return {
+      async match(request) {
+        const url = requestUrl(request);
+        operations.push({ name, type: "match", url });
+        const stored = namespace(name).get(url);
+        return stored ? responseFromArrayBuffer(stored) : undefined;
+      },
+      async put(request, response) {
+        const url = requestUrl(request);
+        operations.push({ name, type: "put", url });
+        if (options.putThrows) throw new Error("cache put failed");
+        namespace(name).set(url, cloneArrayBuffer(await response.arrayBuffer()));
+      },
+      async delete(request) {
+        const url = requestUrl(request);
+        operations.push({ name, type: "delete", url });
+        return namespace(name).delete(url);
+      },
+    };
+  }
+
+  return {
+    operations,
+    async open(name) {
+      operations.push({ name, type: "open" });
+      if (options.openThrows) throw new Error("cache open failed");
+      return cache(String(name));
+    },
+    seed(name, url, body) {
+      const buffer = body instanceof ArrayBuffer ? body : bytesFromBody(body);
+      namespace(name).set(String(url), cloneArrayBuffer(buffer));
+    },
+  };
+}
+
+function verifiedIdentity(runtime, overrides = {}) {
+  return {
+    generatedAt: runtime.manifest.generatedAt,
+    itemsCount: runtime.manifest.itemsCount,
+    revision: runtime.manifest.revision,
+    savedAt: "2026-08-07T12:30:00.000Z",
+    schemaVersion: 1,
+    sha256: runtime.manifest.sha256,
+    snapshotPath: runtime.manifest.snapshotPath,
+    snapshotUrl: runtime.manifest.snapshotUrl,
+    ...overrides,
+  };
+}
+
+function verifiedMetadata(current, previous = null) {
+  return JSON.stringify({
+    current,
+    previous,
+    schemaVersion: 1,
+  });
+}
+
+async function loadV2Runtime(options = {}) {
+  const browser = createFakeBrowser();
+  const storage = options.storage === undefined ? createStorage() : options.storage;
+  const cacheStorage = Object.hasOwn(options, "cacheStorage") ? options.cacheStorage : createFakeCacheStorage();
+  const fetch = options.fetch || createFakeFetch(() => {
+    throw new Error("unexpected fetch");
+  });
+  browser.window.TextDecoder = TextDecoder;
+  browser.window.TextEncoder = TextEncoder;
+  browser.window.crypto = webcrypto;
+  browser.window.localStorage = storage;
+  browser.window.fetch = fetch;
+  browser.window.caches = cacheStorage;
+  browser.window.Response = Response;
+  await loadClassicScript(V2_RUNTIME_PATH, browser);
+  return {
+    browser,
+    cacheStorage,
+    fetch,
+    runtime: browser.window.WEB00_CATALOG_RUNTIME,
+    storage,
+  };
+}
+
+function manifestFetchCount(fetch, config = cloudConfig()) {
+  return fetch.calls.filter((call) => call.url.startsWith(config.catalogManifestUrl)).length;
+}
+
+function snapshotFetchCount(fetch, snapshotUrl) {
+  return fetch.calls.filter((call) => call.url === snapshotUrl).length;
+}
+
+function allSnapshotFetchCount(fetch) {
+  return fetch.calls.filter((call) => call.url.includes("/runtime/production/catalog/v1/releases/")).length;
+}
+
+function cacheOperationCount(cacheStorage, type, url) {
+  if (!cacheStorage) return 0;
+  return cacheStorage.operations.filter((operation) => (
+    operation.type === type &&
+    (url === undefined || operation.url === url)
+  )).length;
+}
+
+function abortingHang(init) {
+  return new Promise((_resolve, reject) => {
+    if (init.signal?.aborted) {
+      reject(init.signal.reason);
+      return;
+    }
+    init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+  });
+}
+
 test("API timeout keeps the populated static catalog available", async () => {
   const fetch = createFakeFetch((_url, init) => new Promise((_resolve, reject) => {
     init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
@@ -375,6 +544,389 @@ test("API timeout keeps the populated static catalog available", async () => {
   assert.equal(result.lifecycle, "ready");
   assert.equal(result.errorCode, "WEB00_API_TIMEOUT");
   assert.equal(result.staticFallbackActive, true);
+});
+
+test("v2 catalog runtime physical entrypoint exists before it can become the cutover target", () => {
+  assert.equal(existsSync(V2_RUNTIME_PATH), true);
+});
+
+test("v2 runtime consumes one successful startup prime once and does not retain it as a permanent manifest cache", async () => {
+  const config = cloudConfig();
+  const firstRuntime = cloudSnapshot([apiSite("first-current", "First Current")], 1);
+  const secondRuntime = cloudSnapshot([apiSite("second-current", "Second Current")], 2);
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      return jsonResponse(manifestFetchCount(fetch, config) === 1 ? firstRuntime.manifest : secondRuntime.manifest);
+    }
+    if (url === firstRuntime.snapshotUrl) return jsonBytesResponse(firstRuntime.body);
+    if (url === secondRuntime.snapshotUrl) return jsonBytesResponse(secondRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  const first = runtime.primeManifest(config);
+  const concurrent = runtime.primeManifest(config);
+
+  assert.equal(first, concurrent);
+  await first;
+
+  const firstLoad = await runtime.loadCatalogFromRuntime(config);
+  assert.equal(firstLoad.manifest.revision, firstRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  assert.equal(snapshotFetchCount(fetch, firstRuntime.snapshotUrl), 1);
+
+  const secondLoad = await runtime.loadCatalogFromRuntime(config);
+  assert.equal(secondLoad.manifest.revision, secondRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 2);
+  assert.equal(snapshotFetchCount(fetch, secondRuntime.snapshotUrl), 1);
+});
+
+test("v2 catalog load joins in-flight prime and consumes it before a later freshness load", async () => {
+  const config = cloudConfig();
+  const firstRuntime = cloudSnapshot([apiSite("joined-current", "Joined Current")], 1);
+  const secondRuntime = cloudSnapshot([apiSite("later-current", "Later Current")], 2);
+  const manifestGate = deferred();
+  const fetch = createFakeFetch(async (url) => {
+    const count = manifestFetchCount(fetch, config);
+    if (url.startsWith(config.catalogManifestUrl) && count === 1) {
+      await manifestGate.promise;
+      return jsonResponse(firstRuntime.manifest);
+    }
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(secondRuntime.manifest);
+    if (url === firstRuntime.snapshotUrl) return jsonBytesResponse(firstRuntime.body);
+    if (url === secondRuntime.snapshotUrl) return jsonBytesResponse(secondRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  const prime = runtime.primeManifest(config);
+  const joinedLoad = runtime.loadCatalogFromRuntime(config);
+
+  manifestGate.resolve();
+  await prime;
+
+  const firstLoad = await joinedLoad;
+  assert.equal(firstLoad.manifest.revision, firstRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 1);
+
+  const secondLoad = await runtime.loadCatalogFromRuntime(config);
+  assert.equal(secondLoad.manifest.revision, secondRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 2);
+});
+
+test("v2 explicit newer prime supersedes an older unconsumed successful prime result", async () => {
+  const config = cloudConfig();
+  const oldRuntime = cloudSnapshot([apiSite("old-primed", "Old Primed")], 1);
+  const newRuntime = cloudSnapshot([apiSite("new-primed", "New Primed")], 2);
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      return jsonResponse(manifestFetchCount(fetch, config) === 1 ? oldRuntime.manifest : newRuntime.manifest);
+    }
+    if (url === oldRuntime.snapshotUrl) return jsonBytesResponse(oldRuntime.body);
+    if (url === newRuntime.snapshotUrl) return jsonBytesResponse(newRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  await runtime.primeManifest(config);
+  await runtime.primeManifest(config);
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(manifestFetchCount(fetch, config), 2);
+  assert.equal(result.manifest.revision, newRuntime.manifest.revision);
+  assert.equal(snapshotFetchCount(fetch, newRuntime.snapshotUrl), 1);
+});
+
+test("v2 runtime failed manifest prime does not poison retry", async () => {
+  const config = cloudConfig();
+  const recoveredRuntime = cloudSnapshot([apiSite("recovered-current", "Recovered Current")], 2);
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl) && manifestFetchCount(fetch, config) === 1) {
+      throw new Error("offline");
+    }
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(recoveredRuntime.manifest);
+    if (url === recoveredRuntime.snapshotUrl) return jsonBytesResponse(recoveredRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  await assert.rejects(() => runtime.primeManifest(config), /offline/);
+  const result = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(manifestFetchCount(fetch, config), 2);
+  assert.equal(allSnapshotFetchCount(fetch), 1);
+});
+
+test("v2 hanging prime times out, clears request, and later recovers with fresh manifest", async () => {
+  const recoveredRuntime = cloudSnapshot([apiSite("timeout-recovered", "Timeout Recovered")], 3);
+  const config = cloudConfig({ requestTimeoutMs: 5 });
+  const fetch = createFakeFetch(async (url, init) => {
+    if (url.startsWith(config.catalogManifestUrl) && manifestFetchCount(fetch, config) === 1) {
+      return abortingHang(init);
+    }
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(recoveredRuntime.manifest);
+    if (url === recoveredRuntime.snapshotUrl) return jsonBytesResponse(recoveredRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  await assert.rejects(
+    () => runtime.primeManifest(config),
+    (error) => error?.code === "WEB00_CLOUD_MANIFEST_TIMEOUT",
+  );
+  const recovered = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(recovered.freshness, "ready-current");
+  assert.equal(recovered.manifest.revision, recoveredRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 2);
+});
+
+test("v2 fresh manifest load is bounded by requestTimeoutMs", async () => {
+  const recoveredRuntime = cloudSnapshot([apiSite("fresh-timeout-recovered", "Fresh Timeout Recovered")], 4);
+  const config = cloudConfig({ requestTimeoutMs: 5 });
+  const fetch = createFakeFetch(async (url, init) => {
+    if (url.startsWith(config.catalogManifestUrl) && manifestFetchCount(fetch, config) === 1) {
+      return abortingHang(init);
+    }
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(recoveredRuntime.manifest);
+    if (url === recoveredRuntime.snapshotUrl) return jsonBytesResponse(recoveredRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  const firstAttempt = await Promise.race([
+    runtime.loadCatalogFromRuntime(config).then(
+      () => ({ type: "resolved" }),
+      (error) => ({ error, type: "rejected" }),
+    ),
+    delay(30).then(() => ({ type: "hung" })),
+  ]);
+  assert.notEqual(firstAttempt.type, "hung");
+  assert.equal(firstAttempt.error?.code, "WEB00_CLOUD_MANIFEST_TIMEOUT");
+  const recovered = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(recovered.freshness, "ready-current");
+  assert.equal(recovered.manifest.revision, recoveredRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 2);
+});
+
+test("externally aborted v2 manifest prime clears shared request and permits fresh retry", async () => {
+  const recoveredRuntime = cloudSnapshot([apiSite("abort-recovered", "Abort Recovered")], 5);
+  const config = cloudConfig();
+  const caller = new AbortController();
+  const fetch = createFakeFetch(async (url, init) => {
+    if (url.startsWith(config.catalogManifestUrl) && manifestFetchCount(fetch, config) === 1) {
+      return abortingHang(init);
+    }
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(recoveredRuntime.manifest);
+    if (url === recoveredRuntime.snapshotUrl) return jsonBytesResponse(recoveredRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ fetch });
+
+  const prime = runtime.primeManifest(config, { signal: caller.signal });
+  caller.abort(new Error("caller aborted"));
+
+  await assert.rejects(() => prime, /caller aborted/);
+  const recovered = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(recovered.freshness, "ready-current");
+  assert.equal(recovered.manifest.revision, recoveredRuntime.manifest.revision);
+  assert.equal(manifestFetchCount(fetch, config), 2);
+});
+
+test("v2 warm same revision uses verified cache only after current manifest validates", async () => {
+  const config = cloudConfig();
+  const runtimeData = cloudSnapshot(
+    [apiSite("warm-cache-current", "Warm Cache Current")],
+    7,
+    { settings: { showDemoInModal: true } },
+  );
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, runtimeData.snapshotUrl, snapshotBytes(runtimeData));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(runtimeData)),
+  });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(runtimeData.manifest);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  assert.equal(allSnapshotFetchCount(fetch), 0);
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.transport, "verified-cache");
+  assert.equal(result.cacheStatus, "hit");
+  assert.equal(result.snapshot.settings.showDemoInModal, true);
+});
+
+test("v2 rejects corrupt current verified cache and fetches network snapshot", async () => {
+  const config = cloudConfig();
+  const runtimeData = cloudSnapshot([apiSite("corrupt-cache-current", "Corrupt Cache Current")], 8);
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, runtimeData.snapshotUrl, bytesFromBody({ bad: true }));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(runtimeData)),
+  });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(runtimeData.manifest);
+    if (url === runtimeData.snapshotUrl) return jsonBytesResponse(runtimeData.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.transport, "network");
+  assert.equal(result.cacheStatus, "miss");
+  assert.equal(snapshotFetchCount(fetch, runtimeData.snapshotUrl), 1);
+  assert.equal(cacheOperationCount(cacheStorage, "delete", runtimeData.snapshotUrl), 1);
+});
+
+test("v2 missing current cache bytes are never trusted from metadata alone", async () => {
+  const config = cloudConfig();
+  const runtimeData = cloudSnapshot([apiSite("missing-cache-current", "Missing Cache Current")], 9);
+  const cacheStorage = createFakeCacheStorage();
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(runtimeData)),
+  });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(runtimeData.manifest);
+    if (url === runtimeData.snapshotUrl) return jsonBytesResponse(runtimeData.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.transport, "network");
+  assert.equal(result.cacheStatus, "miss");
+  assert.equal(snapshotFetchCount(fetch, runtimeData.snapshotUrl), 1);
+});
+
+test("v2 cache storage unavailable does not block valid current Cloud render", async () => {
+  const config = cloudConfig();
+  const runtimeData = cloudSnapshot([apiSite("cache-unavailable-current", "Cache Unavailable Current")], 10);
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(runtimeData.manifest);
+    if (url === runtimeData.snapshotUrl) return jsonBytesResponse(runtimeData.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage: undefined, fetch });
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+  const fallback = await runtime.loadVerifiedFallback();
+
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.transport, "network");
+  assert.equal(result.cacheStatus, "write-failed");
+  assert.equal(fallback, null);
+});
+
+test("v2 cache put failure does not block valid current Cloud render or advance metadata", async () => {
+  const config = cloudConfig();
+  const runtimeData = cloudSnapshot([apiSite("quota-current", "Quota Current")], 11);
+  const cacheStorage = createFakeCacheStorage({ putThrows: true });
+  const storage = createStorage();
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(runtimeData.manifest);
+    if (url === runtimeData.snapshotUrl) return jsonBytesResponse(runtimeData.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.transport, "network");
+  assert.equal(result.cacheStatus, "write-failed");
+  assert.equal(storage.snapshot()[VERIFIED_METADATA_KEY], undefined);
+});
+
+test("v2 metadata torn write keeps the old verified pointer authoritative", async () => {
+  const config = cloudConfig();
+  const oldRuntime = cloudSnapshot([apiSite("old-verified", "Old Verified")], 1);
+  const currentRuntime = cloudSnapshot([apiSite("current-network", "Current Network")], 12);
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, oldRuntime.snapshotUrl, snapshotBytes(oldRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(oldRuntime)),
+  }, { setThrows: true });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) return jsonResponse(currentRuntime.manifest);
+    if (url === currentRuntime.snapshotUrl) return jsonBytesResponse(currentRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const result = await runtime.loadCatalogFromRuntime(config);
+  const fallback = await runtime.loadVerifiedFallback();
+
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.transport, "network");
+  assert.equal(result.cacheStatus, "write-failed");
+  assert.equal(fallback.freshness, "degraded-verified");
+  assert.equal(fallback.manifest.revision, oldRuntime.manifest.revision);
+});
+
+test("v2 verified fallback tries current then previous with full validation", async () => {
+  const currentRuntime = cloudSnapshot([apiSite("bad-current", "Bad Current")], 2);
+  const previousRuntime = cloudSnapshot([apiSite("good-previous", "Good Previous")], 1);
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, currentRuntime.snapshotUrl, bytesFromBody({ bad: true }));
+  cacheStorage.seed(VERIFIED_CACHE_NAME, previousRuntime.snapshotUrl, snapshotBytes(previousRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(currentRuntime), verifiedIdentity(previousRuntime)),
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, storage });
+
+  const fallback = await runtime.loadVerifiedFallback();
+
+  assert.equal(fallback.freshness, "degraded-verified");
+  assert.equal(fallback.transport, "verified-cache");
+  assert.equal(fallback.cacheStatus, "fallback");
+  assert.equal(fallback.manifest.revision, previousRuntime.manifest.revision);
+  assert.equal(cacheOperationCount(cacheStorage, "delete", currentRuntime.snapshotUrl), 1);
+});
+
+test("v2 malformed verified metadata is ignored or skips only invalid identities", async (t) => {
+  await t.test("missing metadata returns null", async () => {
+    const { runtime } = await loadV2Runtime();
+    assert.equal(await runtime.loadVerifiedFallback(), null);
+  });
+
+  await t.test("invalid JSON returns null", async () => {
+    const storage = createStorage({ [VERIFIED_METADATA_KEY]: "{bad json" });
+    const { runtime } = await loadV2Runtime({ storage });
+    assert.equal(await runtime.loadVerifiedFallback(), null);
+  });
+
+  await t.test("wrong envelope schema returns null", async () => {
+    const storage = createStorage({ [VERIFIED_METADATA_KEY]: JSON.stringify({ schemaVersion: 2 }) });
+    const { runtime } = await loadV2Runtime({ storage });
+    assert.equal(await runtime.loadVerifiedFallback(), null);
+  });
+
+  await t.test("invalid current identity still permits valid previous", async () => {
+    const previousRuntime = cloudSnapshot([apiSite("metadata-previous", "Metadata Previous")], 1);
+    const cacheStorage = createFakeCacheStorage();
+    cacheStorage.seed(VERIFIED_CACHE_NAME, previousRuntime.snapshotUrl, snapshotBytes(previousRuntime));
+    const storage = createStorage({
+      [VERIFIED_METADATA_KEY]: verifiedMetadata({ schemaVersion: 1 }, verifiedIdentity(previousRuntime)),
+    });
+    const { runtime } = await loadV2Runtime({ cacheStorage, storage });
+    const fallback = await runtime.loadVerifiedFallback();
+
+    assert.equal(fallback.freshness, "degraded-verified");
+    assert.equal(fallback.manifest.revision, previousRuntime.manifest.revision);
+  });
 });
 
 test("API transport and validation failures keep the populated current catalog", async (t) => {
