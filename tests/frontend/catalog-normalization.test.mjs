@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
 
+const V2_API_PATH = "assets/js/catalog-v2/catalog-api.js";
+
 function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
@@ -14,7 +16,7 @@ async function loadCatalog(options = {}) {
   browser.window.WEB00_TEST_MODE = true;
   browser.window.WEB00_DATA = options.data || { SOLUTIONS: [] };
   await loadClassicScript("assets/js/runtime-config.js", browser);
-  await loadClassicScript("assets/js/catalog-api.js", browser);
+  await loadClassicScript(options.apiPath || "assets/js/catalog-api.js", browser);
   return browser.window.WEB00_CATALOG;
 }
 
@@ -175,4 +177,28 @@ test("rejects unsafe public URLs", async () => {
   for (const value of payloads) {
     assert.equal(catalog.sanitizePublicUrl(value, { purpose: "image", allowRelative: true }), "");
   }
+});
+
+test("v2 catalog API preserves unsafe URL rejection before cutover", async () => {
+  const catalog = await loadCatalog({ apiPath: V2_API_PATH });
+  const item = catalog.normalizeApiSite({
+    category: { slug: "goods", title: "Goods" },
+    demoUrl: "javascript:alert(1)",
+    galleryImages: ["//evil.example/gallery.png"],
+    previewImage: {
+      url: "assets/img/previews/safe.png",
+      variants: [{ avifUrl: "assets/%2e%2e/private.avif", webpUrl: "assets/img/previews/safe.webp", width: 640 }],
+    },
+    previewImageUrl: "https://user:pass@example.test/preview.png",
+    siteUrl: "ftp://example.test/catalog",
+    slug: "v2-safe-site",
+    title: "V2 Safe Site",
+  });
+
+  assert.equal(item.demoUrl, "");
+  assert.deepEqual(plain(item.galleryImages), []);
+  assert.deepEqual(plain(item.previewImage.variants), []);
+  assert.equal(item.previewImageUrl, "");
+  assert.equal(item.siteUrl, "");
+  assert.equal(item.source, "api");
 });

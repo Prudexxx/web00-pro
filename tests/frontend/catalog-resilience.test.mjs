@@ -9,6 +9,7 @@ import { createFakeFetch, jsonResponse } from "./helpers/fake-fetch.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
 
 const LKG_KEY = "web00.catalog.api.lkg.v1";
+const V2_API_PATH = "assets/js/catalog-v2/catalog-api.js";
 const V2_RUNTIME_PATH = "assets/js/catalog-v2/catalog-runtime.js";
 const VERIFIED_CACHE_NAME = "web00-catalog-verified-v1";
 const VERIFIED_METADATA_KEY = "web00.catalog.verified.v1";
@@ -185,7 +186,19 @@ function staleBusiLkgSnapshot() {
   };
 }
 
-async function loadCatalog({ fetch, storage = createStorage(), data = staticData(), config } = {}) {
+async function loadCatalog(options = {}) {
+  const {
+    apiPath = "assets/js/catalog-api.js",
+    cacheStorage,
+    config,
+    data = staticData(),
+    fetch = createFakeFetch((url) => {
+      throw new Error(`unexpected fetch ${url}`);
+    }),
+    runtime,
+    runtimePath,
+    storage = createStorage(),
+  } = options;
   const browser = createFakeBrowser();
   browser.window.WEB00_TEST_MODE = true;
   browser.window.WEB00_DATA = data;
@@ -194,16 +207,20 @@ async function loadCatalog({ fetch, storage = createStorage(), data = staticData
   browser.window.crypto = webcrypto;
   browser.window.localStorage = storage;
   browser.window.fetch = fetch;
+  browser.window.caches = Object.hasOwn(options, "cacheStorage") ? cacheStorage : createFakeCacheStorage();
+  browser.window.Response = Response;
   await loadClassicScript("assets/js/runtime-config.js", browser);
   browser.window.WEB00_CONFIG = Object.freeze(config || {
     apiBaseUrl: "https://api.example.test",
     requestTimeoutMs: 1000,
     staticFallbackEnabled: true,
   });
-  if (config?.catalogRuntimeMode === "cloud-primary") {
-    await loadClassicScript("assets/js/catalog-runtime.js", browser);
+  if (runtime) {
+    browser.window.WEB00_CATALOG_RUNTIME = runtime;
+  } else if (runtimePath || config?.catalogRuntimeMode === "cloud-primary") {
+    await loadClassicScript(runtimePath || "assets/js/catalog-runtime.js", browser);
   }
-  await loadClassicScript("assets/js/catalog-api.js", browser);
+  await loadClassicScript(apiPath, browser);
   return { catalog: browser.window.WEB00_CATALOG, storage, tests: browser.window.WEB00_CATALOG_TESTS };
 }
 
@@ -391,6 +408,45 @@ function snapshotBytes(runtime) {
   return bytesFromBody(runtime.body);
 }
 
+function snapshotObject(runtime) {
+  return JSON.parse(runtime.body);
+}
+
+function runtimeResult(runtime, overrides = {}) {
+  return {
+    cacheStatus: overrides.cacheStatus || "miss",
+    freshness: overrides.freshness || "ready-current",
+    manifest: runtime.manifest,
+    snapshot: snapshotObject(runtime),
+    transport: overrides.transport || "network",
+  };
+}
+
+function createRuntimeStub(overrides = {}) {
+  return {
+    async loadCatalogFromRuntime() {
+      throw Object.assign(new Error("runtime current not configured"), { code: "WEB00_CLOUD_RUNTIME_UNAVAILABLE" });
+    },
+    async loadVerifiedFallback() {
+      return null;
+    },
+    ...overrides,
+  };
+}
+
+function errorWithCode(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+function fetchForCloudRuntime(runtime, options = {}) {
+  const config = options.config || cloudConfig();
+  return createFakeFetch(async (url) => {
+    if (String(url).startsWith(config.catalogManifestUrl)) return jsonResponse(runtime.manifest);
+    if (String(url) === runtime.snapshotUrl) return jsonBytesResponse(runtime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+}
+
 function jsonBytesResponse(body) {
   return new Response(bytesFromBody(body), {
     headers: { "Content-Type": "application/json; charset=utf-8" },
@@ -548,6 +604,10 @@ test("API timeout keeps the populated static catalog available", async () => {
 
 test("v2 catalog runtime physical entrypoint exists before it can become the cutover target", () => {
   assert.equal(existsSync(V2_RUNTIME_PATH), true);
+});
+
+test("v2 catalog API physical entrypoint exists before it can become the cutover target", () => {
+  assert.equal(existsSync(V2_API_PATH), true);
 });
 
 test("v2 runtime consumes one successful startup prime once and does not retain it as a permanent manifest cache", async () => {
@@ -726,6 +786,467 @@ test("v2 primeManifest reuses a direct fresh manifest request already in flight"
   assert.equal(primeManifestResult.revision, currentRuntime.manifest.revision);
   assert.equal(catalogResult.transport, "verified-cache");
   assert.equal(allSnapshotFetchCount(fetch), 0);
+});
+
+test("v2 real runtime superseded manifest request leaves newest API resolution ready-current", async () => {
+  const config = cloudConfig();
+  const currentRuntime = cloudSnapshot([apiSite("current-after-supersede", "Current After Supersede")], 15);
+  const manifestGate = deferred();
+  let manifestCalls = 0;
+  const fetch = createFakeFetch(async (url, init) => {
+    if (String(url).startsWith(config.catalogManifestUrl)) {
+      manifestCalls += 1;
+      return new Promise((resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        manifestGate.promise.then(() => resolve(jsonResponse(currentRuntime.manifest)), reject);
+      });
+    }
+    if (url === currentRuntime.snapshotUrl) return jsonBytesResponse(currentRuntime.body);
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { catalog } = await loadCatalog({
+    apiPath: V2_API_PATH,
+    config,
+    data: freshSmokeStaticData(),
+    fetch,
+    runtimePath: V2_RUNTIME_PATH,
+  });
+
+  const first = catalog.resolveCatalogForPage({
+    currentState: catalog.getInitialCatalog(),
+    kind: "solutions",
+  });
+  while (manifestCalls === 0) await delay(0);
+  const second = catalog.resolveCatalogForPage({
+    currentState: catalog.getInitialCatalog(),
+    kind: "solutions",
+  });
+
+  await delay(0);
+  manifestGate.resolve();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+
+  const evidence = JSON.stringify({
+    firstResult,
+    secondResult,
+    fetchCalls: fetch.calls.map((call) => call.url),
+  });
+  assert.equal(firstResult, null, evidence);
+  assert.equal(secondResult?.source, "cloud", evidence);
+  assert.equal(secondResult?.freshness, "ready-current", evidence);
+  assert.equal(secondResult?.lifecycle, "ready", evidence);
+  assert.equal(secondResult?.staticFallbackActive, false, evidence);
+  assert.equal(secondResult?.degraded, false, evidence);
+  assert.deepEqual(plain(secondResult.items.map((item) => item.slug)), ["current-after-supersede"], evidence);
+  assert.equal(manifestFetchCount(fetch, config), 1, evidence);
+  assert.equal(snapshotFetchCount(fetch, currentRuntime.snapshotUrl), 1, evidence);
+  assert.equal(fetch.calls.some((call) => call.url.includes("onrender.com") || call.url.includes("/api/sites")), false, evidence);
+});
+
+test("v2 cloud-primary catalog API exposes zero-stale state transitions", async (t) => {
+  await t.test("bootstrap excludes bundled static catalog and stale LKG", async () => {
+    const storage = createStorage(staleBusiLkgSnapshot());
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      data: freshSmokeStaticData(),
+      runtime: createRuntimeStub(),
+      storage,
+    });
+
+    assert.deepEqual(plain(catalog.getInitialCatalog()), {
+      apiAvailable: false,
+      degraded: false,
+      errorCode: "",
+      freshness: "bootstrap",
+      items: [],
+      lifecycle: "loading",
+      revision: null,
+      settings: { showDemoInModal: false },
+      sha256: "",
+      source: "bootstrap",
+      staticFallbackActive: false,
+      transport: "none",
+    });
+  });
+
+  await t.test("current network result preserves runtime identity without LKG persistence", async () => {
+    const runtimeData = cloudSnapshot(
+      [apiSite("cloud-current-network", "Cloud Current Network")],
+      21,
+      { settings: { showDemoInModal: true } },
+    );
+    const storage = createStorage();
+    const runtime = createRuntimeStub({
+      async loadCatalogFromRuntime(config, request) {
+        assert.equal(config.catalogRuntimeMode, "cloud-primary");
+        assert.equal(typeof request.signal.aborted, "boolean");
+        return runtimeResult(runtimeData, { transport: "network" });
+      },
+    });
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      data: freshSmokeStaticData(),
+      fetch: createFakeFetch((url) => {
+        throw new Error(`unexpected Render/API fetch ${url}`);
+      }),
+      runtime,
+      storage,
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.freshness, "ready-current");
+    assert.equal(result.transport, "network");
+    assert.equal(result.revision, 21);
+    assert.equal(result.sha256, runtimeData.manifest.sha256);
+    assert.deepEqual(plain(result.items.map((item) => item.slug)), ["cloud-current-network"]);
+    assert.equal(result.settings.showDemoInModal, true);
+    assert.equal(result.lifecycle, "ready");
+    assert.equal(result.staticFallbackActive, false);
+    assert.equal(result.degraded, false);
+    assert.equal(storage.snapshot()[LKG_KEY], undefined);
+  });
+
+  await t.test("current verified cache result remains authoritative current", async () => {
+    const runtimeData = cloudSnapshot([apiSite("cloud-current-cache", "Cloud Current Cache")], 22);
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          return runtimeResult(runtimeData, { transport: "verified-cache" });
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.freshness, "ready-current");
+    assert.equal(result.transport, "verified-cache");
+    assert.equal(result.revision, 22);
+    assert.equal(result.staticFallbackActive, false);
+    assert.equal(result.degraded, false);
+  });
+
+  await t.test("valid current empty catalog is not treated as fallback failure", async () => {
+    const runtimeData = cloudSnapshot([], 23);
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      data: freshSmokeStaticData(),
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          return runtimeResult(runtimeData);
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.freshness, "ready-current");
+    assert.equal(result.lifecycle, "empty");
+    assert.deepEqual(plain(result.items), []);
+    assert.equal(result.staticFallbackActive, false);
+    assert.equal(result.degraded, false);
+  });
+
+  await t.test("current failure uses verified fallback before static data", async () => {
+    const verifiedRuntime = cloudSnapshot(
+      [apiSite("verified-before-static", "Verified Before Static")],
+      24,
+      { settings: { showDemoInModal: true } },
+    );
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      data: freshSmokeStaticData(),
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          throw errorWithCode("WEB00_CLOUD_HTTP_503");
+        },
+        async loadVerifiedFallback() {
+          return runtimeResult(verifiedRuntime, {
+            freshness: "degraded-verified",
+            transport: "verified-cache",
+          });
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.freshness, "degraded-verified");
+    assert.equal(result.transport, "verified-cache");
+    assert.equal(result.revision, 24);
+    assert.deepEqual(plain(result.items.map((item) => item.slug)), ["verified-before-static"]);
+    assert.equal(result.settings.showDemoInModal, true);
+    assert.equal(result.errorCode, "WEB00_CLOUD_HTTP_503");
+    assert.equal(result.staticFallbackActive, true);
+    assert.equal(result.degraded, true);
+  });
+
+  await t.test("current and verified failure degrade only to static data when enabled", async () => {
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      data: freshSmokeStaticData(),
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          throw errorWithCode("WEB00_CLOUD_TIMEOUT");
+        },
+        async loadVerifiedFallback() {
+          return null;
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "static");
+    assert.equal(result.freshness, "degraded-static");
+    assert.equal(result.transport, "static");
+    assert.equal(result.revision, null);
+    assert.equal(result.sha256, "");
+    assert.deepEqual(plain(result.items.map((item) => item.slug)), ["web00-smoke-create"]);
+    assert.equal(result.settings.showDemoInModal, false);
+    assert.equal(result.errorCode, "WEB00_CLOUD_TIMEOUT");
+    assert.equal(result.staticFallbackActive, true);
+    assert.equal(result.degraded, true);
+  });
+
+  await t.test("cloud-primary never uses stale LKG when current, verified, and static are unavailable", async () => {
+    const storage = createStorage(staleBusiLkgSnapshot());
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      data: { SOLUTIONS: [] },
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          throw errorWithCode("WEB00_CLOUD_ERROR");
+        },
+        async loadVerifiedFallback() {
+          return null;
+        },
+      }),
+      storage,
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.lifecycle, "fatal");
+    assert.equal(result.items.some((item) => item.title === "Дом для Буси"), false);
+    assert.notEqual(result.source, "lkg");
+  });
+
+  await t.test("cloud-primary static fallback disabled returns fatal instead of static", async () => {
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig({ staticFallbackEnabled: false }),
+      data: freshSmokeStaticData(),
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          throw errorWithCode("WEB00_CLOUD_ERROR");
+        },
+        async loadVerifiedFallback() {
+          return null;
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.lifecycle, "fatal");
+    assert.deepEqual(plain(result.items), []);
+    assert.equal(result.staticFallbackActive, false);
+    assert.equal(result.degraded, true);
+  });
+
+  await t.test("invalid current Cloud items never become ready-current", async () => {
+    const invalidRuntime = cloudSnapshot([{ slug: "bad slug", title: "Bad Cloud" }], 25);
+    const verifiedRuntime = cloudSnapshot([apiSite("verified-after-invalid", "Verified After Invalid")], 26);
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          return runtimeResult(invalidRuntime);
+        },
+        async loadVerifiedFallback() {
+          return runtimeResult(verifiedRuntime, {
+            freshness: "degraded-verified",
+            transport: "verified-cache",
+          });
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "solutions",
+    });
+
+    assert.equal(result.source, "cloud");
+    assert.equal(result.freshness, "degraded-verified");
+    assert.equal(result.errorCode, "WEB00_CLOUD_NO_VALID_ITEMS");
+    assert.deepEqual(plain(result.items.map((item) => item.slug)), ["verified-after-invalid"]);
+  });
+
+  await t.test("demo settings come only from current or verified Cloud snapshots", async () => {
+    async function resolveWithRuntime(runtime) {
+      const loaded = await loadCatalog({
+        apiPath: V2_API_PATH,
+        config: cloudConfig(),
+        data: freshSmokeStaticData(),
+        runtime,
+      });
+      return loaded.catalog.resolveCatalogForPage({
+        currentState: loaded.catalog.getInitialCatalog(),
+        kind: "solutions",
+      });
+    }
+
+    const currentTrue = await resolveWithRuntime(createRuntimeStub({
+      async loadCatalogFromRuntime() {
+        return runtimeResult(cloudSnapshot(
+          [apiSite("current-demo-true", "Current Demo True")],
+          27,
+          { settings: { showDemoInModal: true } },
+        ));
+      },
+    }));
+    const currentFalse = await resolveWithRuntime(createRuntimeStub({
+      async loadCatalogFromRuntime() {
+        return runtimeResult(cloudSnapshot(
+          [apiSite("current-demo-false", "Current Demo False")],
+          28,
+          { settings: { showDemoInModal: false } },
+        ));
+      },
+    }));
+    const currentMissing = await resolveWithRuntime(createRuntimeStub({
+      async loadCatalogFromRuntime() {
+        const runtimeData = cloudSnapshot([apiSite("current-demo-missing", "Current Demo Missing")], 29);
+        const snapshot = snapshotObject(runtimeData);
+        delete snapshot.settings;
+        return { ...runtimeResult(runtimeData), snapshot };
+      },
+    }));
+    const verifiedTrue = await resolveWithRuntime(createRuntimeStub({
+      async loadCatalogFromRuntime() {
+        throw errorWithCode("WEB00_CLOUD_ERROR");
+      },
+      async loadVerifiedFallback() {
+        return runtimeResult(cloudSnapshot(
+          [apiSite("verified-demo-true", "Verified Demo True")],
+          30,
+          { settings: { showDemoInModal: true } },
+        ), {
+          freshness: "degraded-verified",
+          transport: "verified-cache",
+        });
+      },
+    }));
+    const staticFallback = await resolveWithRuntime(createRuntimeStub({
+      async loadCatalogFromRuntime() {
+        throw errorWithCode("WEB00_CLOUD_ERROR");
+      },
+      async loadVerifiedFallback() {
+        return null;
+      },
+    }));
+
+    assert.equal(currentTrue.settings.showDemoInModal, true);
+    assert.equal(currentFalse.settings.showDemoInModal, false);
+    assert.equal(currentMissing.settings.showDemoInModal, false);
+    assert.equal(verifiedTrue.settings.showDemoInModal, true);
+    assert.equal(staticFallback.settings.showDemoInModal, false);
+  });
+
+  await t.test("cloud-primary popular route uses runtime only and defaults to three items", async () => {
+    const fetch = createFakeFetch((url) => {
+      throw new Error(`unexpected Render/API fetch ${url}`);
+    });
+    const runtimeData = cloudSnapshot([
+      apiSite("popular-one", "Popular One"),
+      apiSite("popular-two", "Popular Two"),
+      apiSite("popular-three", "Popular Three"),
+      apiSite("popular-four", "Popular Four"),
+    ], 31);
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      config: cloudConfig(),
+      fetch,
+      runtime: createRuntimeStub({
+        async loadCatalogFromRuntime() {
+          return runtimeResult(runtimeData);
+        },
+      }),
+    });
+
+    const result = await catalog.resolveCatalogForPage({
+      currentState: catalog.getInitialCatalog(),
+      kind: "popular",
+    });
+
+    assert.deepEqual(plain(result.items.map((item) => item.slug)), ["popular-one", "popular-two", "popular-three"]);
+    assert.equal(result.source, "cloud");
+    assert.equal(fetch.calls.length, 0);
+  });
+
+  await t.test("non-cloud v2 behavior still supports the legacy API flow", async () => {
+    const storage = createStorage();
+    const fetch = createFakeFetch((url) => {
+      if (url.startsWith("https://api.example.test/api/sites?")) {
+        return apiResponse([apiSite("api-compatible", "API Compatible")]);
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    const { catalog } = await loadCatalog({
+      apiPath: V2_API_PATH,
+      fetch,
+      storage,
+    });
+
+    const initial = catalog.getInitialCatalog();
+    const result = await catalog.resolveCatalogForPage({
+      currentState: initial,
+      kind: "solutions",
+    });
+
+    assert.equal(initial.source, "static");
+    assert.equal(result.source, "api");
+    assert.deepEqual(plain(result.items.map((item) => item.slug)), ["api-compatible"]);
+    assert.equal(Boolean(storage.snapshot()[LKG_KEY]), true);
+  });
 });
 
 test("v2 explicit newer prime supersedes an older unconsumed successful prime result", async () => {
