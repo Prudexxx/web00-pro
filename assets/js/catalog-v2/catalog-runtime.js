@@ -570,4 +570,16 @@
     validateRuntimeManifest,
     validateRuntimeSnapshot,
   });
+
+  try {
+    const config = window.WEB00_CONFIG || {};
+    if (
+      config.catalogRuntimeMode === "cloud-primary" &&
+      config.catalogManifestUrl === MANIFEST_URL
+    ) {
+      primeManifest(config).catch(() => undefined);
+    }
+  } catch (_) {
+    // Runtime boot must stay resilient when a host page provides an unsafe config object.
+  }
 })();

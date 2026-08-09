@@ -15,6 +15,7 @@
     <meta name="theme-color" content="#8E0F13">
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://web00-public-runtime.s3-website.cloud.ru" crossorigin>
     <link rel="stylesheet" href="assets/css/tokens.css">
     <link rel="stylesheet" href="assets/css/base.css">
     <link rel="stylesheet" href="assets/css/styles.css">
@@ -22,11 +23,11 @@
     <link rel="stylesheet" href="assets/css/components.css">
     <link rel="stylesheet" href="assets/css/home-premium.css">
     <link rel="stylesheet" href="assets/css/home.css?v=light-shell-1">
-    <script defer src="assets/js/data.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/runtime-config.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/catalog-runtime.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/catalog-api.js?v=b9-catalog-lkg-1"></script>
-    <script defer src="assets/js/main.js?v=b9-catalog-lkg-1"></script>
+    <script defer src="assets/js/runtime-config.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/data.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/catalog-v2/catalog-api.js?v=zero-stale-catalog-v1"></script>
+    <script defer src="assets/js/catalog-v2/main.js?v=zero-stale-catalog-v1"></script>
   </head>
   <body data-page="home">
     <main class="mock-page" aria-label="WEB00 homepage">
@@ -112,37 +113,22 @@
           <a href="solutions.html" data-i18n="templates.all">Смотреть все в каталоге</a>
         </div>
         <div class="mock-card-grid">
-          <article class="mock-template-card">
-            <img src="assets/img/previews/mebel-home.png" alt="">
+          <article class="mock-template-card mock-template-card--skeleton" aria-hidden="true" data-popular-skeleton>
             <div class="mock-card-body">
-              <h3 data-i18n="card.mebel.title">Мебельный магазин</h3>
-              <strong data-i18n="card.common.type">Готовое решение</strong>
-              <span class="mock-card-price-note" data-i18n="card.common.priceNote">Стоимость после анкеты</span>
-              <p data-i18n="card.mebel.text">Витрина мебели, каталог товаров и заявки на консультацию.</p>
-              <div class="mock-tags"><span data-i18n="card.mebel.tag1">Каталог товаров</span><span data-i18n="card.common.leads">Заявки</span><span data-i18n="card.common.promo">Готов к продвижению</span></div>
-              <div class="mock-card-actions"><button type="button" data-open-demo-id="mebel" data-i18n="card.demo">Смотреть пример</button><a href="brief.html?solution=mebel" data-i18n="card.launch">Запустить</a></div>
+              <span class="catalog-skeleton__line catalog-skeleton__line--title"></span>
+              <span class="catalog-skeleton__line catalog-skeleton__line--text"></span>
             </div>
           </article>
-          <article class="mock-template-card">
-            <img src="assets/img/previews/medicina-home.png" alt="">
+          <article class="mock-template-card mock-template-card--skeleton" aria-hidden="true" data-popular-skeleton>
             <div class="mock-card-body">
-              <h3 data-i18n="card.med.title">Медицинский центр</h3>
-              <strong data-i18n="card.common.type">Готовое решение</strong>
-              <span class="mock-card-price-note" data-i18n="card.common.priceNote">Стоимость после анкеты</span>
-              <p data-i18n="card.med.text">Спокойная подача услуги, запись на консультацию и доверительный первый экран.</p>
-              <div class="mock-tags"><span data-i18n="card.med.tag1">Запись на приём</span><span data-i18n="card.med.tag2">Доверие</span><span data-i18n="card.common.adaptive">Адаптивный сайт</span></div>
-              <div class="mock-card-actions"><button type="button" data-open-demo-id="medicina" data-i18n="card.demo">Смотреть пример</button><a href="brief.html?solution=medicina" data-i18n="card.launch">Запустить</a></div>
+              <span class="catalog-skeleton__line catalog-skeleton__line--title"></span>
+              <span class="catalog-skeleton__line catalog-skeleton__line--text"></span>
             </div>
           </article>
-          <article class="mock-template-card">
-            <img src="assets/img/previews/doma-bani-home.png" alt="">
+          <article class="mock-template-card mock-template-card--skeleton" aria-hidden="true" data-popular-skeleton>
             <div class="mock-card-body">
-              <h3 data-i18n="card.build.title">Дома и бани из сруба</h3>
-              <strong data-i18n="card.common.type">Готовое решение</strong>
-              <span class="mock-card-price-note" data-i18n="card.common.priceNote">Стоимость после анкеты</span>
-              <p data-i18n="card.build.text">Проекты, преимущества, расчёт стоимости и заявки на строительство.</p>
-              <div class="mock-tags"><span data-i18n="card.build.tag1">Проекты</span><span data-i18n="card.build.tag2">Расчёт</span><span data-i18n="card.common.leads">Заявки</span></div>
-              <div class="mock-card-actions"><button type="button" data-open-demo-id="doma-bani" data-i18n="card.demo">Смотреть пример</button><a href="brief.html?solution=doma-bani" data-i18n="card.launch">Запустить</a></div>
+              <span class="catalog-skeleton__line catalog-skeleton__line--title"></span>
+              <span class="catalog-skeleton__line catalog-skeleton__line--text"></span>
             </div>
           </article>
         </div>

@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash, webcrypto } from "node:crypto";
 
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
 import { createFakeFetch, jsonResponse } from "./helpers/fake-fetch.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
+
+const CLOUD_MANIFEST_URL = "https://web00-public-runtime.s3-website.cloud.ru/runtime/production/catalog/v1/manifest.json";
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -50,7 +53,7 @@ function countMatches(value, pattern) {
 function cloudConfig() {
   return {
     apiBaseUrl: "https://web00-backend-production.onrender.com",
-    catalogManifestUrl: "https://web00-public-runtime.s3-website.cloud.ru/runtime/production/catalog/v1/manifest.json",
+    catalogManifestUrl: CLOUD_MANIFEST_URL,
     catalogRuntimeMode: "cloud-primary",
     requestTimeoutMs: 1000,
     staticFallbackEnabled: true,
@@ -110,6 +113,80 @@ function bootstrapState() {
   });
 }
 
+function runtimeJsonResponse(body) {
+  const bytes = new TextEncoder().encode(JSON.stringify(body));
+  return {
+    ok: true,
+    status: 200,
+    headers: {
+      get(name) {
+        return String(name).toLowerCase() === "content-type" ? "application/json; charset=utf-8" : null;
+      },
+    },
+    async json() {
+      return JSON.parse(new TextDecoder().decode(bytes));
+    },
+    async arrayBuffer() {
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    },
+  };
+}
+
+function runtimeFixture(overrides = {}) {
+  const revision = overrides.revision || 42;
+  const generatedAt = overrides.generatedAt || "2026-08-08T00:00:00.000Z";
+  const items = Array.isArray(overrides.items) ? overrides.items : [catalogItem("cloud-runtime", "Cloud Runtime")];
+  const snapshot = {
+    generatedAt,
+    items,
+    itemsCount: items.length,
+    schemaVersion: 1,
+    revision,
+    settings: { showDemoInModal: false },
+  };
+  const snapshotText = JSON.stringify(snapshot);
+  const sha256 = createHash("sha256").update(snapshotText).digest("hex");
+  const snapshotPath = `runtime/production/catalog/v1/releases/revision-${revision}-${sha256}.json`;
+  const manifest = {
+    generatedAt,
+    itemsCount: items.length,
+    revision,
+    schemaVersion: 1,
+    sha256,
+    snapshotPath,
+    snapshotUrl: `https://web00-public-runtime.s3-website.cloud.ru/${snapshotPath}`,
+  };
+  return { manifest, snapshot };
+}
+
+async function loadV2Runtime(fetch, config = cloudConfig()) {
+  const browser = createFakeBrowser({ page: "solutions" });
+  browser.window.fetch = fetch;
+  browser.window.crypto = webcrypto;
+  browser.window.Response = Response;
+  browser.window.TextDecoder = TextDecoder;
+  browser.window.TextEncoder = TextEncoder;
+  await loadClassicScript("assets/js/runtime-config.js", browser);
+  browser.window.WEB00_CONFIG = Object.freeze(config);
+  await loadClassicScript("assets/js/catalog-v2/catalog-runtime.js", browser);
+  return browser;
+}
+
+function countFetches(fetch, matcher) {
+  return fetch.calls.filter((call) => matcher.test(call.url)).length;
+}
+
+function homeSkeletonHtml() {
+  return Array.from({ length: 3 }, () => `
+    <article class="mock-template-card mock-template-card--skeleton" aria-hidden="true" data-popular-skeleton>
+      <div class="mock-card-body">
+        <span class="catalog-skeleton__line catalog-skeleton__line--title"></span>
+        <span class="catalog-skeleton__line catalog-skeleton__line--text"></span>
+      </div>
+    </article>
+  `).join("");
+}
+
 function createCatalogStub(states, options = {}) {
   const queue = Array.from(states);
   const calls = [];
@@ -142,6 +219,138 @@ function createCatalogStub(states, options = {}) {
       return `<img${className} src="${url}" alt="${model.alt}" loading="${model.loading}" decoding="async">`;
     },
   };
+}
+
+function createGrid(initialGridHtml = "", skeletonSelector = "[data-catalog-skeleton]") {
+  let gridHtml = String(initialGridHtml || "");
+  const history = gridHtml ? [gridHtml] : [];
+  const grid = {
+    querySelector(selector) {
+      if (selector === skeletonSelector && gridHtml.includes(skeletonSelector.slice(1, -1))) return {};
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === skeletonSelector) {
+        return Array.from({ length: countMatches(gridHtml, new RegExp(skeletonSelector.slice(1, -1), "g")) }, () => ({}));
+      }
+      return [];
+    },
+    get innerHTML() {
+      return gridHtml;
+    },
+    set innerHTML(value) {
+      gridHtml = String(value);
+      history.push(gridHtml);
+    },
+  };
+  return { grid, history };
+}
+
+function createBriefTarget() {
+  const field = {
+    addEventListener: () => undefined,
+    classList: classList(),
+    closest: () => null,
+    tagName: "INPUT",
+    type: "text",
+    value: "",
+  };
+  const form = {
+    addEventListener: () => undefined,
+    closest: () => null,
+    elements: {
+      budget: field,
+      consent: { ...field, checked: false, type: "checkbox" },
+      contact: field,
+      industry: field,
+      name: field,
+      taskType: { ...field, tagName: "SELECT" },
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  return {
+    html: "",
+    querySelector: (selector) => (selector === "[data-lead-form]" ? form : null),
+    querySelectorAll: () => [],
+    set innerHTML(value) {
+      this.html = String(value);
+    },
+    get innerHTML() {
+      return this.html;
+    },
+  };
+}
+
+async function loadV2MainPage(page) {
+  const { browser } = page;
+  await loadClassicScript("assets/js/data.js", browser);
+  browser.window.WEB00_DATA = page.data;
+  browser.window.WEB00_CATALOG = page.catalog;
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
+  const [onReady] = browser.listeners.get("DOMContentLoaded");
+  return onReady();
+}
+
+function createHomePage(options = {}) {
+  const browser = createFakeBrowser({ page: "home", href: "https://web00.pro/index.html" });
+  const { grid, history } = createGrid(options.initialGridHtml || homeSkeletonHtml(), "[data-popular-skeleton]");
+  browser.window.addEventListener = () => undefined;
+  browser.window.navigator = {};
+  browser.window.localStorage = options.storage || { getItem: () => null, setItem: () => undefined };
+  browser.document.body.classList = classList();
+  browser.document.documentElement = { classList: classList() };
+  browser.document.querySelector = (selector) => {
+    if (selector === "#popular-templates .mock-card-grid") return grid;
+    return null;
+  };
+  browser.document.querySelectorAll = () => [];
+  return {
+    browser,
+    catalog: options.catalog,
+    data: options.data || { SOLUTIONS: [catalogItem("old-home-static", "Old Home Static")], SERVICES: [], PRICING: [] },
+    grid,
+    history,
+  };
+}
+
+async function bootHomePage(options = {}) {
+  const page = createHomePage(options);
+  await loadV2MainPage(page);
+  return page;
+}
+
+async function startBriefPage(options = {}) {
+  const browser = createFakeBrowser({
+    page: "brief",
+    href: options.href || "https://web00.pro/brief.html?solution=cloud-brief",
+  });
+  const briefTarget = createBriefTarget();
+  const backLink = { href: "", textContent: "" };
+  browser.window.addEventListener = () => undefined;
+  browser.window.navigator = {};
+  browser.window.localStorage = { getItem: () => null, setItem: () => undefined };
+  browser.document.body.classList = classList();
+  browser.document.documentElement = { classList: classList() };
+  browser.document.querySelector = (selector) => {
+    if (selector === "[data-brief-page-content]") return briefTarget;
+    if (selector === "[data-brief-back]") return backLink;
+    return null;
+  };
+  browser.document.querySelectorAll = () => [];
+  const page = {
+    backLink,
+    briefTarget,
+    browser,
+    catalog: options.catalog,
+    data: options.data || { SOLUTIONS: [catalogItem("cloud-brief", "Old Static Brief Card")], SERVICES: [], PRICING: [] },
+  };
+  await loadClassicScript("assets/js/data.js", browser);
+  browser.window.WEB00_DATA = page.data;
+  browser.window.WEB00_CATALOG = page.catalog;
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
+  const [onReady] = browser.listeners.get("DOMContentLoaded");
+  return { page, bootPromise: onReady().then(() => page) };
 }
 
 async function flush() {
@@ -274,6 +483,118 @@ function apiSuccess(slug) {
     meta: { page: 1, limit: 20, total: 1, totalPages: 1 },
   });
 }
+
+test("v2 runtime primes manifest before DOMContentLoaded catalog initialization", async () => {
+  const fixture = runtimeFixture();
+  const fetch = createFakeFetch((url) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return runtimeJsonResponse(fixture.manifest);
+    throw new Error(`unexpected request ${url}`);
+  });
+
+  await loadV2Runtime(fetch, cloudConfig());
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  assert.match(fetch.calls[0].url, new RegExp(`^${CLOUD_MANIFEST_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\?_=`));
+  assert.equal(countFetches(fetch, /releases\/revision-/), 0);
+});
+
+test("v2 runtime does not auto-prime outside exact cloud-primary manifest config", async () => {
+  for (const config of [
+    { ...cloudConfig(), catalogRuntimeMode: "static" },
+    { ...cloudConfig(), catalogManifestUrl: "https://example.test/runtime/production/catalog/v1/manifest.json" },
+    { ...cloudConfig(), catalogManifestUrl: "" },
+  ]) {
+    const fetch = createFakeFetch(() => {
+      throw new Error("unexpected runtime request");
+    });
+    await loadV2Runtime(fetch, config);
+    assert.equal(fetch.calls.length, 0);
+  }
+});
+
+test("v2 startup manifest prime is consumed once by first catalog load", async () => {
+  const fixture = runtimeFixture({ items: [catalogItem("primed-current", "Primed Current")] });
+  const fetch = createFakeFetch((url) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return runtimeJsonResponse(fixture.manifest);
+    if (url === fixture.manifest.snapshotUrl) return runtimeJsonResponse(fixture.snapshot);
+    throw new Error(`unexpected request ${url}`);
+  });
+  const config = cloudConfig();
+  const browser = await loadV2Runtime(fetch, config);
+  await flush();
+
+  const result = await browser.window.WEB00_CATALOG_RUNTIME.loadCatalogFromRuntime(config);
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  assert.equal(countFetches(fetch, /releases\/revision-/), 1);
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.snapshot.items[0].title, "Primed Current");
+});
+
+test("v2 catalog load joins in-flight early runtime manifest prime", async () => {
+  const fixture = runtimeFixture({ items: [catalogItem("joined-current", "Joined Current")] });
+  const manifestGate = createDeferred();
+  const fetch = createFakeFetch((url) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return manifestGate.promise;
+    if (url === fixture.manifest.snapshotUrl) return runtimeJsonResponse(fixture.snapshot);
+    throw new Error(`unexpected request ${url}`);
+  });
+  const config = cloudConfig();
+  const browser = await loadV2Runtime(fetch, config);
+
+  const loadPromise = browser.window.WEB00_CATALOG_RUNTIME.loadCatalogFromRuntime(config);
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  manifestGate.resolve(runtimeJsonResponse(fixture.manifest));
+  const result = await loadPromise;
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 1);
+  assert.equal(result.snapshot.items[0].title, "Joined Current");
+});
+
+test("v2 failed early runtime manifest prime permits a fresh catalog retry", async () => {
+  const fixture = runtimeFixture({ items: [catalogItem("retry-current", "Retry Current")] });
+  const fetch = createFakeFetch((url, _init, callNumber) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL) && callNumber === 1) {
+      return Promise.reject(new Error("offline during startup"));
+    }
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return runtimeJsonResponse(fixture.manifest);
+    if (url === fixture.manifest.snapshotUrl) return runtimeJsonResponse(fixture.snapshot);
+    throw new Error(`unexpected request ${url}`);
+  });
+  const config = cloudConfig();
+  const browser = await loadV2Runtime(fetch, config);
+  await flush();
+
+  const result = await browser.window.WEB00_CATALOG_RUNTIME.loadCatalogFromRuntime(config);
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 2);
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.snapshot.items[0].title, "Retry Current");
+});
+
+test("v2 hanging early runtime manifest prime times out and later recovers", async () => {
+  const fixture = runtimeFixture({ items: [catalogItem("timeout-current", "Timeout Current")] });
+  const fetch = createFakeFetch((url, init, callNumber) => {
+    if (url.startsWith(CLOUD_MANIFEST_URL) && callNumber === 1) {
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      });
+    }
+    if (url.startsWith(CLOUD_MANIFEST_URL)) return runtimeJsonResponse(fixture.manifest);
+    if (url === fixture.manifest.snapshotUrl) return runtimeJsonResponse(fixture.snapshot);
+    throw new Error(`unexpected request ${url}`);
+  });
+  const config = { ...cloudConfig(), requestTimeoutMs: 5 };
+  const browser = await loadV2Runtime(fetch, config);
+
+  await delay(25);
+  const result = await browser.window.WEB00_CATALOG_RUNTIME.loadCatalogFromRuntime(config);
+
+  assert.equal(countFetches(fetch, /manifest\.json/), 2);
+  assert.equal(result.freshness, "ready-current");
+  assert.equal(result.snapshot.items[0].title, "Timeout Current");
+});
 
 test("background retry replaces static cards only after a later non-empty API success", async () => {
   const fetch = createFakeFetch((_url, _init, callNumber) => {
@@ -649,4 +970,107 @@ test("catalog-v2 bootstrap lookup and active solution do not resolve stale DATA.
   assert.match(page.grid.innerHTML, /data-catalog-skeleton/);
   assert.doesNotMatch(page.history.join("\n"), /Old Lookup Card/);
   assert.doesNotMatch(page.leadContent.html, /Old Lookup Card/);
+});
+
+test("catalog-v2 home keeps literal skeleton during delayed Cloud and renders current popular cards atomically", async () => {
+  const pending = createDeferred();
+  const current = catalogState({
+    items: [
+      catalogItem("home-one", "Home One"),
+      catalogItem("home-two", "Home Two"),
+      catalogItem("home-three", "Home Three"),
+    ],
+    revision: 51,
+    sha256: "5".repeat(64),
+  });
+  const catalog = createCatalogStub([pending.promise]);
+  const page = await bootHomePage({
+    catalog,
+    data: { SOLUTIONS: [catalogItem("old-home-static", "Old Home Static")], SERVICES: [], PRICING: [] },
+  });
+
+  assert.equal(countMatches(page.grid.innerHTML, /data-popular-skeleton/g), 3);
+  assert.doesNotMatch(page.history.join("\n"), /Old Home Static|data-open-demo-id/);
+
+  pending.resolve(current);
+  await flush();
+
+  assert.equal(countMatches(page.grid.innerHTML, /mock-template-card/g), 3);
+  assert.match(page.grid.innerHTML, /Home One/);
+  assert.match(page.grid.innerHTML, /Home Two/);
+  assert.match(page.grid.innerHTML, /Home Three/);
+  assert.equal(page.history.length, 2);
+  assert.doesNotMatch(page.history.join("\n"), /Old Home Static/);
+});
+
+test("catalog-v2 home accepts current empty and removes the popular skeleton without static fallback", async () => {
+  const catalog = createCatalogStub([
+    catalogState({
+      items: [],
+      lifecycle: "empty",
+      revision: 52,
+      sha256: "6".repeat(64),
+    }),
+  ]);
+  const page = await bootHomePage({
+    catalog,
+    data: { SOLUTIONS: [catalogItem("old-home-static", "Old Home Static")], SERVICES: [], PRICING: [] },
+  });
+  await flush();
+
+  assert.doesNotMatch(page.grid.innerHTML, /data-popular-skeleton/);
+  assert.match(page.grid.innerHTML, /Популярные сайты скоро появятся/);
+  assert.doesNotMatch(page.history.join("\n"), /Old Home Static/);
+});
+
+test("catalog-v2 home renders degraded verified and degraded static popular states from state items only", async () => {
+  for (const [freshness, item] of [
+    ["degraded-verified", catalogItem("verified-popular", "Verified Popular")],
+    ["degraded-static", catalogItem("static-popular", "Static Popular")],
+  ]) {
+    const catalog = createCatalogStub([
+      catalogState({
+        degraded: true,
+        freshness,
+        items: [item],
+        revision: freshness === "degraded-static" ? null : 53,
+        sha256: freshness === "degraded-static" ? "" : "7".repeat(64),
+        source: freshness === "degraded-static" ? "static" : "cloud",
+        staticFallbackActive: true,
+        transport: freshness === "degraded-static" ? "static" : "verified-cache",
+      }),
+    ]);
+    const page = await bootHomePage({
+      catalog,
+      data: { SOLUTIONS: [catalogItem("old-home-static", "Old Home Static")], SERVICES: [], PRICING: [] },
+    });
+    await flush();
+
+    assert.match(page.grid.innerHTML, new RegExp(item.title));
+    assert.doesNotMatch(page.grid.innerHTML, /Old Home Static/);
+    assert.doesNotMatch(page.grid.innerHTML, /data-popular-skeleton/);
+  }
+});
+
+test("catalog-v2 brief waits for current-or-degraded catalog before selected solution lookup", async () => {
+  const pending = createDeferred();
+  const current = catalogState({
+    items: [catalogItem("cloud-brief", "Cloud Brief")],
+    revision: 54,
+    sha256: "8".repeat(64),
+  });
+  const catalog = createCatalogStub([pending.promise]);
+  const { page, bootPromise } = await startBriefPage({
+    catalog,
+    data: { SOLUTIONS: [catalogItem("cloud-brief", "Old Static Brief Card")], SERVICES: [], PRICING: [] },
+  });
+
+  await flush();
+  assert.equal(page.briefTarget.innerHTML, "");
+
+  pending.resolve(current);
+  await bootPromise;
+
+  assert.match(page.briefTarget.innerHTML, /Cloud Brief/);
+  assert.doesNotMatch(page.briefTarget.innerHTML, /Old Static Brief Card/);
 });

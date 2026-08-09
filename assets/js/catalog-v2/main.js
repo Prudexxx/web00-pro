@@ -976,12 +976,31 @@
     `;
   }
 
+  function popularSkeletonCardHtml() {
+    return `
+      <article class="mock-template-card mock-template-card--skeleton" aria-hidden="true" data-popular-skeleton>
+        <div class="mock-card-body">
+          <span class="catalog-skeleton__line catalog-skeleton__line--title"></span>
+          <span class="catalog-skeleton__line catalog-skeleton__line--text"></span>
+        </div>
+      </article>
+    `;
+  }
+
   function renderCatalogSkeleton(count = 6) {
     const grid = $("[data-solutions-grid]");
     if (!grid) return;
     if (grid.querySelector("[data-catalog-skeleton]")) return;
     if (String(grid.innerHTML || "").trim()) return;
     grid.innerHTML = Array.from({ length: count }, (_item, index) => skeletonCardHtml(index)).join("");
+  }
+
+  function renderPopularSkeleton() {
+    const grid = $("#popular-templates .mock-card-grid");
+    if (!grid) return;
+    if (grid.querySelector("[data-popular-skeleton]")) return;
+    if (String(grid.innerHTML || "").trim()) return;
+    grid.innerHTML = Array.from({ length: 3 }, () => popularSkeletonCardHtml()).join("");
   }
 
   function clearSolutionsGrid() {
@@ -1124,19 +1143,30 @@
       return popularCatalogState;
     }
     popularCatalogState = CATALOG.getInitialCatalog({ limit: 3 });
+    if (isCloudPrimaryCatalog()) renderPopularSkeleton();
     CATALOG.resolveCatalogForPage({ kind: "popular", limit: 3, currentState: popularCatalogState }).then((nextPopularCatalogState) => {
-      if (nextPopularCatalogState && hasCatalogItems(nextPopularCatalogState)) popularCatalogState = nextPopularCatalogState;
+      if (isCloudPrimaryCatalog()) {
+        if (canRenderCatalogState(nextPopularCatalogState) || nextPopularCatalogState?.lifecycle === "fatal") {
+          popularCatalogState = nextPopularCatalogState;
+        }
+      } else if (nextPopularCatalogState && hasCatalogItems(nextPopularCatalogState)) {
+        popularCatalogState = nextPopularCatalogState;
+      }
       renderPopularSolutions();
     }).catch(() => undefined);
     return popularCatalogState;
   }
 
-  async function initBriefCatalogState() {
-    if (!CATALOG || page !== "brief") return catalogState;
-    catalogState = CATALOG.getInitialCatalog();
-    CATALOG.resolveCatalogForPage({ kind: "solutions", currentState: catalogState }).then((nextCatalogState) => {
-      if (nextCatalogState && hasCatalogItems(nextCatalogState)) catalogState = nextCatalogState;
-    }).catch(() => undefined);
+  async function resolveBriefCatalogReady() {
+    if (!CATALOG || page !== "brief") return null;
+    const initial = CATALOG.getInitialCatalog();
+    catalogState = initial;
+    try {
+      const resolved = await CATALOG.resolveCatalogForPage({ kind: "solutions", currentState: initial });
+      catalogState = canRenderCatalogState(resolved) ? resolved : initial;
+    } catch (_) {
+      catalogState = initial;
+    }
     return catalogState;
   }
 
@@ -1348,19 +1378,40 @@
   function renderPopularSolutions() {
     const grid = $("#popular-templates .mock-card-grid");
     if (!grid || !popularCatalogState) return;
-    if ((popularCatalogState.source === "cloud" || popularCatalogState.source === "api") && popularCatalogState.lifecycle === "empty") {
+    const cloudPrimary = isCloudPrimaryCatalog();
+    if (cloudPrimary && !canRenderCatalogState(popularCatalogState)) {
+      if (popularCatalogState.lifecycle === "fatal") {
+        grid.innerHTML = `
+          <article class="mock-template-card mock-template-card--empty">
+            <div class="mock-card-body">
+              <h3>Каталог временно недоступен</h3>
+              <p>Популярные сайты появятся после восстановления каталога.</p>
+            </div>
+          </article>
+        `;
+      }
+      return;
+    }
+    if (
+      cloudPrimary
+        ? popularCatalogState.lifecycle === "empty"
+        : ((popularCatalogState.source === "cloud" || popularCatalogState.source === "api") && popularCatalogState.lifecycle === "empty")
+    ) {
       grid.innerHTML = `
         <article class="mock-template-card mock-template-card--empty">
           <div class="mock-card-body">
             <h3>Популярные сайты скоро появятся</h3>
             <p>Каталог подключён, но популярных решений пока нет.</p>
-            <div class="mock-card-actions"><a href="solutions.html">Открыть каталог</a></div>
           </div>
         </article>
       `;
       return;
     }
-    if (!((popularCatalogState.source === "cloud" || popularCatalogState.source === "api") && popularCatalogState.lifecycle === "ready")) return;
+    if (
+      cloudPrimary
+        ? !canRenderCatalogState(popularCatalogState)
+        : !((popularCatalogState.source === "cloud" || popularCatalogState.source === "api") && popularCatalogState.lifecycle === "ready")
+    ) return;
 
     grid.innerHTML = popularCatalogState.items.slice(0, 3).map((solution, index) => {
       const identifier = solutionIdentifier(solution);
@@ -2707,7 +2758,7 @@
       renderStatusPage();
       initStatusLookup();
     } else if (page === "brief") {
-      await initBriefCatalogState();
+      await resolveBriefCatalogReady();
       initBriefPage();
     } else {
       await initHome();
