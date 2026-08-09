@@ -1,4 +1,11 @@
-const WEB00_CACHE = "web00-shell-v6-catalog-network-first";
+const WEB00_CACHE = "web00-shell-v7-zero-stale";
+const RUNTIME_VERSION = "zero-stale-catalog-v1";
+
+const CATALOG_V2_RUNTIME_ASSETS = [
+  `assets/js/catalog-v2/catalog-runtime.js?v=${RUNTIME_VERSION}`,
+  `assets/js/catalog-v2/catalog-api.js?v=${RUNTIME_VERSION}`,
+  `assets/js/catalog-v2/main.js?v=${RUNTIME_VERSION}`,
+];
 
 const SHELL_ASSETS = [
   "index.html",
@@ -11,12 +18,10 @@ const SHELL_ASSETS = [
   "assets/css/shell.css",
   "assets/css/components.css",
   "assets/js/data.js",
-  "assets/js/catalog-runtime.js",
-  "assets/js/catalog-api.js",
-  "assets/js/main.js",
+  ...CATALOG_V2_RUNTIME_ASSETS,
   "assets/icons/web00-icon-192.png",
   "assets/icons/web00-icon-512.png",
-  "assets/icons/web00-maskable-512.png"
+  "assets/icons/web00-maskable-512.png",
 ];
 
 function isRuntimeConfigRequest(url) {
@@ -25,6 +30,14 @@ function isRuntimeConfigRequest(url) {
 
 function isCatalogDataRequest(url) {
   return url.origin === self.location.origin && url.pathname.endsWith("/assets/js/data.js");
+}
+
+function isCatalogV2RuntimeRequest(url) {
+  return url.origin === self.location.origin && (
+    url.pathname.endsWith("/assets/js/catalog-v2/catalog-runtime.js") ||
+    url.pathname.endsWith("/assets/js/catalog-v2/catalog-api.js") ||
+    url.pathname.endsWith("/assets/js/catalog-v2/main.js")
+  );
 }
 
 function isApiRequest(url) {
@@ -64,9 +77,36 @@ async function networkFirstCatalogData(request) {
   throw networkError || new TypeError("WEB00 catalog data unavailable.");
 }
 
+async function networkFirstExactRuntime(request) {
+  let networkResponse;
+  let networkError;
+
+  try {
+    networkResponse = await fetch(request, { cache: "no-store" });
+    if (networkResponse.ok) {
+      const cache = await caches.open(WEB00_CACHE);
+      await cache.put(request, networkResponse.clone());
+      return networkResponse;
+    }
+  } catch (error) {
+    networkError = error;
+  }
+
+  const cache = await caches.open(WEB00_CACHE);
+  const cached = await cache.match(request);
+  if (cached) {
+    return cached;
+  }
+  if (networkResponse) {
+    return networkResponse;
+  }
+
+  throw networkError || new TypeError("WEB00 runtime unavailable.");
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(WEB00_CACHE).then((cache) => cache.addAll(SHELL_ASSETS)).catch(() => undefined)
+    caches.open(WEB00_CACHE).then((cache) => cache.addAll(SHELL_ASSETS))
   );
   self.skipWaiting();
 });
@@ -90,6 +130,11 @@ self.addEventListener("fetch", (event) => {
 
   if (isCatalogDataRequest(url)) {
     event.respondWith(networkFirstCatalogData(request));
+    return;
+  }
+
+  if (isCatalogV2RuntimeRequest(url)) {
+    event.respondWith(networkFirstExactRuntime(request));
     return;
   }
 

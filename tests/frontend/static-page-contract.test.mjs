@@ -20,11 +20,9 @@ const ROOT_MAIN_PAGES = [
   "status.html",
 ];
 
-const CATALOG_V2_PAGES = ["index.html", "solutions.html", "brief.html"];
+const CLOUD_PRECONNECT_PAGES = ["index.html", "solutions.html", "brief.html"];
 
-const ROOT_LEGACY_MAIN_PAGES = ROOT_MAIN_PAGES.filter((page) => !CATALOG_V2_PAGES.includes(page));
-
-const SOLUTIONS_V2_SCRIPTS = [
+const CATALOG_V2_SCRIPTS = [
   "assets/js/runtime-config.js?v=zero-stale-catalog-v1",
   "assets/js/catalog-v2/catalog-runtime.js?v=zero-stale-catalog-v1",
   "assets/js/data.js?v=zero-stale-catalog-v1",
@@ -140,36 +138,15 @@ test("brief and modal integration use normalized catalog lookup and gallery inde
   assert.doesNotMatch(source, /data-gallery-image="\$\{attr\(image\)\}"/);
 });
 
-test("root pages except solutions keep canonical B9 deferred script order", async () => {
-  const expected = [
-    "assets/js/data.js?v=b9-catalog-lkg-1",
-    "assets/js/runtime-config.js?v=b9-catalog-lkg-1",
-    "assets/js/catalog-runtime.js?v=b9-catalog-lkg-1",
-    "assets/js/catalog-api.js?v=b9-catalog-lkg-1",
-    "assets/js/main.js?v=b9-catalog-lkg-1",
-  ];
-
-  for (const page of ROOT_LEGACY_MAIN_PAGES) {
+test("all root pages use the catalog-v2 zero-stale deferred script order only", async () => {
+  for (const page of ROOT_MAIN_PAGES) {
     const html = await readFile(page, "utf8");
     const scripts = deferredScriptSources(html);
-    const b8Start = scripts.findIndex((src) => src.startsWith("assets/js/data.js"));
-    assert.notEqual(b8Start, -1, `${page} should load data.js`);
-    assert.deepEqual(scripts.slice(b8Start, b8Start + 5), expected, `${page} script order`);
-    assert.equal(scripts.filter((src) => expected.includes(src)).length, 5, `${page} should not duplicate B9 scripts`);
-    assert.doesNotMatch(html, /<script\s+async/i, `${page} should not async public scripts`);
-    assert.doesNotMatch(html, /<base\s/i, `${page} should not use base href`);
-  }
-});
-
-test("index, solutions, and brief use the catalog-v2 zero-stale deferred script order only", async () => {
-  for (const page of CATALOG_V2_PAGES) {
-    const html = await readFile(page, "utf8");
-    const scripts = deferredScriptSources(html);
-    const start = scripts.indexOf(SOLUTIONS_V2_SCRIPTS[0]);
+    const start = scripts.indexOf(CATALOG_V2_SCRIPTS[0]);
 
     assert.notEqual(start, -1, `${page} should load runtime-config first for the v2 cutover`);
-    assert.deepEqual(scripts.slice(start, start + SOLUTIONS_V2_SCRIPTS.length), SOLUTIONS_V2_SCRIPTS, `${page} script order`);
-    assert.equal(scripts.filter((src) => SOLUTIONS_V2_SCRIPTS.includes(src)).length, SOLUTIONS_V2_SCRIPTS.length, `${page} should not duplicate v2 scripts`);
+    assert.deepEqual(scripts.slice(start, start + CATALOG_V2_SCRIPTS.length), CATALOG_V2_SCRIPTS, `${page} script order`);
+    assert.equal(scripts.filter((src) => CATALOG_V2_SCRIPTS.includes(src)).length, CATALOG_V2_SCRIPTS.length, `${page} should not duplicate v2 scripts`);
     assert.doesNotMatch(html, /assets\/js\/catalog-runtime\.js\?v=b9-catalog-lkg-1/, `${page} should not mix legacy runtime`);
     assert.doesNotMatch(html, /assets\/js\/catalog-api\.js\?v=b9-catalog-lkg-1/, `${page} should not mix legacy API`);
     assert.doesNotMatch(html, /assets\/js\/main\.js\?v=b9-catalog-lkg-1/, `${page} should not mix legacy main`);
@@ -179,7 +156,7 @@ test("index, solutions, and brief use the catalog-v2 zero-stale deferred script 
 });
 
 test("index, solutions, and brief preconnect to the Cloud runtime origin exactly once", async () => {
-  for (const page of CATALOG_V2_PAGES) {
+  for (const page of CLOUD_PRECONNECT_PAGES) {
     const html = await readFile(page, "utf8");
     const preconnects = html.match(/<link rel="preconnect" href="https:\/\/web00-public-runtime\.s3-website\.cloud\.ru" crossorigin>/g) || [];
 
