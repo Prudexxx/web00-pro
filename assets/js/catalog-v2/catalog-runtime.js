@@ -229,20 +229,17 @@
     }
   }
 
-  function createManifestRequest(config, options = {}) {
+  function createManifestRequest(config, options = {}, requestOptions = {}) {
     const request = {
-      consumedByCatalogLoad: false,
+      consumedByCatalogLoad: requestOptions.consumedByCatalogLoad === true,
       promise: null,
     };
     request.promise = fetchManifestBounded(config, options);
     return request;
   }
 
-  function primeManifest(config, options = {}) {
-    if (activeManifestRequest) return activeManifestRequest.promise;
-
-    primedManifestResult = null;
-    const request = createManifestRequest(config, options);
+  function startActiveManifestRequest(config, options = {}, requestOptions = {}) {
+    const request = createManifestRequest(config, options, requestOptions);
     activeManifestRequest = request;
     request.promise = request.promise
       .then((manifest) => {
@@ -262,6 +259,14 @@
           activeManifestRequest = null;
         }
       });
+    return request;
+  }
+
+  function primeManifest(config, options = {}) {
+    if (activeManifestRequest) return activeManifestRequest.promise;
+
+    primedManifestResult = null;
+    const request = startActiveManifestRequest(config, options, { consumedByCatalogLoad: false });
     return request.promise;
   }
 
@@ -284,7 +289,14 @@
       return result;
     }
 
-    return fetchManifestBounded(config, options);
+    const request = startActiveManifestRequest(config, options, { consumedByCatalogLoad: true });
+    try {
+      return await request.promise;
+    } finally {
+      if (primedManifestResult && primedManifestResult.request === request) {
+        primedManifestResult = null;
+      }
+    }
   }
 
   function hasCacheStorage() {

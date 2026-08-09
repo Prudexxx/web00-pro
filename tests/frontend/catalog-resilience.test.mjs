@@ -614,6 +614,73 @@ test("v2 catalog load joins in-flight prime and consumes it before a later fresh
   assert.equal(manifestFetchCount(fetch, config), 2);
 });
 
+test("v2 concurrent fresh catalog loads share one in-flight manifest request", async () => {
+  const config = cloudConfig();
+  const currentRuntime = cloudSnapshot([apiSite("direct-single-flight", "Direct Single Flight")], 13);
+  const manifestGate = deferred();
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, currentRuntime.snapshotUrl, snapshotBytes(currentRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(currentRuntime)),
+  });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      await manifestGate.promise;
+      return jsonResponse(currentRuntime.manifest);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const firstLoad = runtime.loadCatalogFromRuntime(config);
+  const secondLoad = runtime.loadCatalogFromRuntime(config);
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  manifestGate.resolve();
+  const [firstResult, secondResult] = await Promise.all([firstLoad, secondLoad]);
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  assert.equal(firstResult.freshness, "ready-current");
+  assert.equal(secondResult.freshness, "ready-current");
+  assert.equal(firstResult.transport, "verified-cache");
+  assert.equal(secondResult.transport, "verified-cache");
+  assert.equal(firstResult.manifest.revision, currentRuntime.manifest.revision);
+  assert.equal(secondResult.manifest.revision, currentRuntime.manifest.revision);
+  assert.equal(allSnapshotFetchCount(fetch), 0);
+});
+
+test("v2 primeManifest reuses a direct fresh manifest request already in flight", async () => {
+  const config = cloudConfig();
+  const currentRuntime = cloudSnapshot([apiSite("prime-joins-direct", "Prime Joins Direct")], 14);
+  const manifestGate = deferred();
+  const cacheStorage = createFakeCacheStorage();
+  cacheStorage.seed(VERIFIED_CACHE_NAME, currentRuntime.snapshotUrl, snapshotBytes(currentRuntime));
+  const storage = createStorage({
+    [VERIFIED_METADATA_KEY]: verifiedMetadata(verifiedIdentity(currentRuntime)),
+  });
+  const fetch = createFakeFetch(async (url) => {
+    if (url.startsWith(config.catalogManifestUrl)) {
+      await manifestGate.promise;
+      return jsonResponse(currentRuntime.manifest);
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  const { runtime } = await loadV2Runtime({ cacheStorage, fetch, storage });
+
+  const catalogLoad = runtime.loadCatalogFromRuntime(config);
+  const prime = runtime.primeManifest(config);
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  manifestGate.resolve();
+  const [catalogResult, primeManifestResult] = await Promise.all([catalogLoad, prime]);
+
+  assert.equal(manifestFetchCount(fetch, config), 1);
+  assert.equal(catalogResult.manifest.revision, currentRuntime.manifest.revision);
+  assert.equal(primeManifestResult.revision, currentRuntime.manifest.revision);
+  assert.equal(catalogResult.transport, "verified-cache");
+  assert.equal(allSnapshotFetchCount(fetch), 0);
+});
+
 test("v2 explicit newer prime supersedes an older unconsumed successful prime result", async () => {
   const config = cloudConfig();
   const oldRuntime = cloudSnapshot([apiSite("old-primed", "Old Primed")], 1);
