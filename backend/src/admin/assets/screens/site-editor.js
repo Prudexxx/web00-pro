@@ -49,6 +49,7 @@ const PUBLIC_CATALOG_SETTINGS_PATH = "/api/admin/public-catalog/settings";
 const DRAFT_AUTOSAVE_MS = 1000;
 const CREATE_RETRY_BACKOFF_MS = 1000;
 const PUBLICATION_POLL_INTERVAL_MS = 1500;
+const PUBLICATION_STATUS_MAX_ATTEMPTS = 20;
 const DEMO_MODE_OPTIONS = Object.freeze([
   {
     label: "Без демо",
@@ -656,7 +657,7 @@ export function createSiteEditorScreen(options) {
       });
       const site = readSiteResponseEntity(response);
 
-      if (site.status !== "published") {
+      if (!hasPublishedLifecycleState(site)) {
         throw invalidSaveResponse();
       }
 
@@ -667,7 +668,7 @@ export function createSiteEditorScreen(options) {
       }
 
       const verified = await verifySavedSiteById(siteIdForPublication);
-      if (verified.status !== "published") {
+      if (!hasPublishedLifecycleState(verified)) {
         throw error;
       }
 
@@ -676,12 +677,12 @@ export function createSiteEditorScreen(options) {
   }
 
   async function observePublicCatalogAfterPublication() {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (let attempt = 0; attempt < PUBLICATION_STATUS_MAX_ATTEMPTS; attempt += 1) {
       if (destroyed) {
         throw publicationAbortedError();
       }
       if (attempt > 0) {
-        await wait(publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50);
+        await wait(publicationPollIntervalMs);
       }
       if (destroyed) {
         throw publicationAbortedError();
@@ -694,12 +695,12 @@ export function createSiteEditorScreen(options) {
           method: "GET",
           signal: publicationPollController.signal
         });
-        const syncStatus = readPublicCatalogStatusSyncStatus(response);
+        const catalogStatus = readPublicCatalogStatus(response);
 
-        if (syncStatus === "ready") {
+        if (isPublicCatalogReady(catalogStatus)) {
           return null;
         }
-        if (syncStatus === "failed") {
+        if (catalogStatus.syncStatus === "failed") {
           return "Изменение сохранено, но каталог не опубликован.";
         }
       } catch (error) {
@@ -1779,7 +1780,7 @@ export function createSiteEditorScreen(options) {
         throw publicationAbortedError();
       }
       setDemoSwitchStatus(status, "Публикуется...");
-      const delay = publicationPollIntervalMs > 0 ? publicationPollIntervalMs : 50;
+      const delay = publicationPollIntervalMs;
 
       if (attempt > 0) {
         await wait(delay);
@@ -1796,7 +1797,7 @@ export function createSiteEditorScreen(options) {
         throw publicationAbortedError();
       }
       const confirmed = readPublicCatalogStatusShowDemoInModal(response);
-      const syncStatus = readPublicCatalogStatusSyncStatus(response);
+      const catalogStatus = readPublicCatalogStatus(response);
 
       if (typeof confirmed === "boolean") {
         publicCatalogShowDemoInModal = confirmed;
@@ -1805,10 +1806,10 @@ export function createSiteEditorScreen(options) {
         demoModalStatusAvailable = true;
         updateDemoSwitchControl(switchControl, status);
       }
-      if (syncStatus === "ready") {
+      if (isPublicCatalogReady(catalogStatus)) {
         return;
       }
-      if (syncStatus === "failed") {
+      if (catalogStatus.syncStatus === "failed") {
         throw demoSyncError();
       }
     }
@@ -1845,19 +1846,44 @@ export function createSiteEditorScreen(options) {
     return null;
   }
 
-  function readPublicCatalogStatusSyncStatus(response) {
-    const syncStatus = response?.data?.syncStatus ?? response?.data?.status?.syncStatus;
+  function readPublicCatalogStatus(response) {
+    const statusData = response?.data?.status && typeof response.data.status === "object"
+      ? response.data.status
+      : response?.data;
+    const syncStatus = statusData?.syncStatus;
+    const desiredRevision = statusData?.desiredRevision;
+    const publishedRevision = statusData?.publishedRevision;
 
     if (
-      syncStatus === "pending" ||
-      syncStatus === "syncing" ||
-      syncStatus === "ready" ||
-      syncStatus === "failed"
+      isPublicCatalogSyncStatus(syncStatus) &&
+      isNonNegativeInteger(desiredRevision) &&
+      isNonNegativeInteger(publishedRevision) &&
+      publishedRevision <= desiredRevision
     ) {
-      return syncStatus;
+      return {
+        desiredRevision,
+        publishedRevision,
+        syncStatus
+      };
     }
 
     throw invalidResponseError();
+  }
+
+  function isPublicCatalogSyncStatus(syncStatus) {
+    return syncStatus === "pending" ||
+      syncStatus === "syncing" ||
+      syncStatus === "ready" ||
+      syncStatus === "failed";
+  }
+
+  function isNonNegativeInteger(value) {
+    return Number.isInteger(value) && value >= 0;
+  }
+
+  function isPublicCatalogReady(catalogStatus) {
+    return catalogStatus.syncStatus === "ready" &&
+      catalogStatus.desiredRevision === catalogStatus.publishedRevision;
   }
 
   function readPublicCatalogSyncResultStatus(sync) {
@@ -2764,6 +2790,13 @@ function sitePath(siteId) {
   }
 
   return `/api/admin/sites/${siteId}`;
+}
+
+function hasPublishedLifecycleState(site) {
+  return site?.status === "published" &&
+    typeof site?.publishedAt === "string" &&
+    site.publishedAt.length > 0 &&
+    site?.deletedAt === null;
 }
 
 function safeMessage(error) {

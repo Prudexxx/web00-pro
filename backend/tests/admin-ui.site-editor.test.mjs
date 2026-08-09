@@ -222,7 +222,7 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
         if (requestPath === "/api/admin/public-catalog/status") {
-          return Promise.resolve({ data: { showDemoInModal, syncStatus: "ready" } });
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal }));
         }
         throw new Error(`Unexpected path ${requestPath}`);
       })
@@ -258,12 +258,7 @@ describe("admin site editor screen", () => {
         }
         if (requestPath === "/api/admin/public-catalog/status") {
           statusReads += 1;
-          return Promise.resolve({
-            data: {
-              showDemoInModal: statusReads > 1,
-              syncStatus: "ready"
-            }
-          });
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal: statusReads > 1 }));
         }
         if (requestPath === "/api/admin/public-catalog/settings") {
           return Promise.resolve({ data: { showDemoInModal: options.body.showDemoInModal, sync: { status: "pending" } } });
@@ -309,7 +304,7 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
         if (requestPath === "/api/admin/public-catalog/status") {
-          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: "ready" } });
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal: false }));
         }
         if (requestPath === "/api/admin/public-catalog/settings") {
           return Promise.reject({ code: "PUBLIC_CATALOG_SYNC_CONFLICT", requestId: "req_demo_patch", status: 409 });
@@ -393,7 +388,7 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
         if (requestPath === "/api/admin/public-catalog/status") {
-          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: "ready" } });
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal: false }));
         }
         if (requestPath === "/api/ready") {
           return Promise.resolve({ status: "ready" });
@@ -449,7 +444,7 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
         if (requestPath === "/api/admin/public-catalog/status") {
-          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: "ready" } });
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal: false }));
         }
         if (requestPath === "/api/ready") {
           return Promise.resolve({ status: "ready" });
@@ -468,6 +463,8 @@ describe("admin site editor screen", () => {
           return Promise.resolve({
             data: siteFixture({
               id: "00000000-0000-4000-8000-000000000701",
+              deletedAt: null,
+              publishedAt: "2026-07-30T12:00:00.000Z",
               slug: "atomic-create",
               status: "published",
               title: "Atomic create"
@@ -511,6 +508,79 @@ describe("admin site editor screen", () => {
     expect(requests.some((request) => request.requestPath.includes("/api/admin/publication/pages"))).toBe(false);
   });
 
+  it("continues polling when Atomic status is ready but the published revision is stale", async () => {
+    const documentRef = createFakeDocument();
+    const requests = [];
+    const publicationStatuses = [
+      catalogStatusResponse({ publishedRevision: 9 }),
+      catalogStatusResponse({ publishedRevision: 10 })
+    ];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath === "/api/admin/categories?limit=100&page=1") {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.resolve(options.signal
+            ? publicationStatuses.shift() ?? catalogStatusResponse()
+            : catalogStatusResponse({ showDemoInModal: false }));
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites" && options.method === "POST") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000701",
+              slug: options.body.slug,
+              status: "draft",
+              title: options.body.title
+            })
+          });
+        }
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000701/publish") {
+          return Promise.resolve({
+            data: siteFixture({
+              id: "00000000-0000-4000-8000-000000000701",
+              deletedAt: null,
+              publishedAt: "2026-07-30T12:00:00.000Z",
+              slug: "atomic-create",
+              status: "published",
+              title: "Atomic create"
+            })
+          });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      createRetryBackoffMs: 0,
+      documentRef,
+      mode: "create",
+      onCancel: vi.fn(),
+      onSaved: vi.fn(),
+      onStatus: vi.fn(),
+      pollIntervalMs: 0,
+      role: "admin"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Atomic create");
+    setValue(screen.element, "categoryId", "00000000-0000-4000-8000-000000000001");
+    setValue(screen.element, "shortDescription", "Short");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+
+    await waitFor(() => screen.element.textContent.includes("Опубликовано"));
+
+    expect(requests.filter((request) => (
+      request.requestPath === "/api/admin/public-catalog/status" &&
+      request.options.method === "GET" &&
+      request.options.signal
+    ))).toHaveLength(2);
+  });
+
   it("publishes an edited draft once and verifies uncertain publish responses by reading the site", async () => {
     const documentRef = createFakeDocument();
     const requests = [];
@@ -521,7 +591,7 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
         if (requestPath === "/api/admin/public-catalog/status") {
-          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: "ready" } });
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal: false }));
         }
         if (requestPath === "/api/ready") {
           return Promise.resolve({ status: "ready" });
@@ -529,7 +599,12 @@ describe("admin site editor screen", () => {
         if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
           return Promise.resolve({
             data: requests.some((request) => request.requestPath.endsWith("/publish"))
-              ? siteFixture({ status: "published", title: "Edited draft" })
+              ? siteFixture({
+                deletedAt: null,
+                publishedAt: "2026-07-30T12:00:00.000Z",
+                status: "published",
+                title: "Edited draft"
+              })
               : siteFixture({ status: "draft" })
           });
         }
@@ -565,6 +640,65 @@ describe("admin site editor screen", () => {
     expect(requests.some((request) => request.requestPath.includes("/api/admin/publication/pages"))).toBe(false);
   });
 
+  it("does not accept an uncertain publish readback without a publication timestamp", async () => {
+    const documentRef = createFakeDocument();
+    const onSaved = vi.fn();
+    const requests = [];
+    const apiClient = {
+      requestJson: vi.fn((requestPath, options = {}) => {
+        requests.push({ options, requestPath });
+        if (requestPath.startsWith("/api/admin/categories")) {
+          return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
+        }
+        if (requestPath === "/api/admin/public-catalog/status") {
+          return Promise.resolve(catalogStatusResponse({ showDemoInModal: false }));
+        }
+        if (requestPath === "/api/ready") {
+          return Promise.resolve({ status: "ready" });
+        }
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "GET") {
+          return Promise.resolve({
+            data: requests.some((request) => request.requestPath.endsWith("/publish"))
+              ? siteFixture({
+                deletedAt: null,
+                publishedAt: null,
+                status: "published",
+                title: "Edited draft"
+              })
+              : siteFixture({ status: "draft" })
+          });
+        }
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101" && options.method === "PATCH") {
+          return Promise.resolve({ data: siteFixture({ status: "draft", title: options.body.title }) });
+        }
+        if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish") {
+          return Promise.reject({ code: "REQUEST_TIMEOUT", status: 0 });
+        }
+        throw new Error(`Unexpected path ${requestPath}`);
+      })
+    };
+    const screen = createSiteEditorScreen({
+      apiClient,
+      documentRef,
+      mode: "edit",
+      onCancel: vi.fn(),
+      onSaved,
+      onStatus: vi.fn(),
+      pollIntervalMs: 0,
+      role: "admin",
+      siteId: "00000000-0000-4000-8000-000000000101"
+    });
+
+    await screen.load();
+    setValue(screen.element, "title", "Edited draft");
+    screen.element.querySelector("form").dispatchEvent(fakeEvent("submit"));
+
+    await waitFor(() => screen.element.textContent.includes("Сервер не ответил вовремя. Данные формы сохранены."));
+
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(requests.filter((request) => request.requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish")).toHaveLength(1);
+  });
+
   it("shows an Atomic catalog warning after a successful lifecycle mutation when sync fails", async () => {
     const documentRef = createFakeDocument();
     const apiClient = {
@@ -573,7 +707,11 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: [categoryFixture()], meta: metaFixture(1) });
         }
         if (requestPath === "/api/admin/public-catalog/status") {
-          return Promise.resolve({ data: { showDemoInModal: false, syncStatus: options.signal ? "failed" : "ready" } });
+          return Promise.resolve(catalogStatusResponse({
+            publishedRevision: options.signal ? 9 : 10,
+            showDemoInModal: false,
+            syncStatus: options.signal ? "failed" : "ready"
+          }));
         }
         if (requestPath === "/api/ready") {
           return Promise.resolve({ status: "ready" });
@@ -585,7 +723,14 @@ describe("admin site editor screen", () => {
           return Promise.resolve({ data: siteFixture({ status: "draft", title: options.body.title }) });
         }
         if (requestPath === "/api/admin/sites/00000000-0000-4000-8000-000000000101/publish") {
-          return Promise.resolve({ data: siteFixture({ status: "published", title: "Warn draft" }) });
+          return Promise.resolve({
+            data: siteFixture({
+              deletedAt: null,
+              publishedAt: "2026-07-30T12:00:00.000Z",
+              status: "published",
+              title: "Warn draft"
+            })
+          });
         }
         throw new Error(`Unexpected path ${requestPath}`);
       })
@@ -2130,9 +2275,11 @@ function categoryFixture() {
 
 function siteFixture(overrides = {}) {
   return {
+    active: true,
     category: categoryFixture(),
     categoryId: "00000000-0000-4000-8000-000000000001",
     deliveryLabel: null,
+    deletedAt: null,
     demoLocalUrl: null,
     demoMode: null,
     demoUrl: null,
@@ -2147,6 +2294,7 @@ function siteFixture(overrides = {}) {
     previewType: null,
     priceAmountCents: null,
     priceLabel: null,
+    publishedAt: null,
     shortDescription: "Short",
     siteUrl: null,
     slug: "crm-site",
@@ -2155,6 +2303,18 @@ function siteFixture(overrides = {}) {
     tags: ["cms"],
     title: "CRM Site",
     ...overrides
+  };
+}
+
+function catalogStatusResponse(overrides = {}) {
+  return {
+    data: {
+      desiredRevision: 10,
+      publishedRevision: 10,
+      showDemoInModal: false,
+      syncStatus: "ready",
+      ...overrides
+    }
   };
 }
 

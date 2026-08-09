@@ -27,7 +27,7 @@ const DIRECTION_VALUES = new Set(["asc", "desc"]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PUBLIC_CATALOG_STATUS_PATH = "/api/admin/public-catalog/status";
 const CATALOG_STATUS_POLL_INTERVAL_MS = 1500;
-const CATALOG_STATUS_MAX_ATTEMPTS = 5;
+const CATALOG_STATUS_MAX_ATTEMPTS = 20;
 const LIFECYCLE_ACTIONS = {
   publish: {
     confirmLabel: "Опубликовать",
@@ -331,7 +331,7 @@ export function createSitesListScreen(options) {
         return null;
       }
       if (attempt > 0) {
-        await wait(catalogStatusPollIntervalMs > 0 ? catalogStatusPollIntervalMs : 50);
+        await wait(catalogStatusPollIntervalMs);
       }
       if (destroyed) {
         return null;
@@ -344,12 +344,12 @@ export function createSitesListScreen(options) {
           method: "GET",
           signal: catalogStatusController.signal
         });
-        const syncStatus = readPublicCatalogStatusSyncStatus(response);
+        const catalogStatus = readPublicCatalogStatus(response);
 
-        if (syncStatus === "ready") {
+        if (isPublicCatalogReady(catalogStatus)) {
           return null;
         }
-        if (syncStatus === "failed") {
+        if (catalogStatus.syncStatus === "failed") {
           return "Изменение сохранено, но каталог не опубликован.";
         }
       } catch (error) {
@@ -362,36 +362,69 @@ export function createSitesListScreen(options) {
     return "Изменение сохранено. Каталог продолжает обновляться.";
   }
 
-  function readPublicCatalogStatusSyncStatus(response) {
-    const syncStatus = response?.data?.syncStatus ?? response?.data?.status?.syncStatus;
+  function readPublicCatalogStatus(response) {
+    const statusData = response?.data?.status && typeof response.data.status === "object"
+      ? response.data.status
+      : response?.data;
+    const syncStatus = statusData?.syncStatus;
+    const desiredRevision = statusData?.desiredRevision;
+    const publishedRevision = statusData?.publishedRevision;
 
     if (
-      syncStatus === "pending" ||
-      syncStatus === "syncing" ||
-      syncStatus === "ready" ||
-      syncStatus === "failed"
+      isPublicCatalogSyncStatus(syncStatus) &&
+      isNonNegativeInteger(desiredRevision) &&
+      isNonNegativeInteger(publishedRevision) &&
+      publishedRevision <= desiredRevision
     ) {
-      return syncStatus;
+      return {
+        desiredRevision,
+        publishedRevision,
+        syncStatus
+      };
     }
 
     throw new Error("Invalid public catalog status response.");
   }
 
+  function isPublicCatalogSyncStatus(syncStatus) {
+    return syncStatus === "pending" ||
+      syncStatus === "syncing" ||
+      syncStatus === "ready" ||
+      syncStatus === "failed";
+  }
+
+  function isNonNegativeInteger(value) {
+    return Number.isInteger(value) && value >= 0;
+  }
+
+  function isPublicCatalogReady(catalogStatus) {
+    return catalogStatus.syncStatus === "ready" &&
+      catalogStatus.desiredRevision === catalogStatus.publishedRevision;
+  }
+
   function hasLifecycleTargetState(site, actionId) {
     if (actionId === "publish") {
-      return site?.status === "published" && !isDeletedSite(site);
+      return site?.status === "published" &&
+        hasPublishedTimestamp(site) &&
+        !isDeletedSite(site);
     }
     if (actionId === "unpublish") {
-      return site?.status === "draft" && !isDeletedSite(site);
+      return site?.status === "draft" &&
+        site?.publishedAt === null &&
+        !isDeletedSite(site);
     }
     if (actionId === "soft-delete") {
-      return isDeletedSite(site);
+      return isDeletedSite(site) && site?.active === false;
     }
     if (actionId === "restore") {
       return !isDeletedSite(site);
     }
 
     return false;
+  }
+
+  function hasPublishedTimestamp(site) {
+    return typeof site?.publishedAt === "string" && site.publishedAt.length > 0;
   }
 
   function isUncertainLifecycleError(error) {
