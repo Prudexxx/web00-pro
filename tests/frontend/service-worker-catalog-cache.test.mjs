@@ -6,8 +6,15 @@ import vm from "node:vm";
 import { createFakeBrowser } from "./helpers/fake-browser.mjs";
 import { loadClassicScript } from "./helpers/load-classic-script.mjs";
 
-const CURRENT_CACHE = "web00-shell-v6-catalog-network-first";
+const CURRENT_CACHE = "web00-shell-v7-zero-stale";
+const LEGACY_V6_CACHE = "web00-shell-v6-catalog-network-first";
+const RUNTIME_VERSION = "zero-stale-catalog-v1";
 const DATA_URL = "https://web00.pro/assets/js/data.js?v=fresh";
+const V2_RUNTIME_URLS = [
+  `https://web00.pro/assets/js/catalog-v2/catalog-runtime.js?v=${RUNTIME_VERSION}`,
+  `https://web00.pro/assets/js/catalog-v2/catalog-api.js?v=${RUNTIME_VERSION}`,
+  `https://web00.pro/assets/js/catalog-v2/main.js?v=${RUNTIME_VERSION}`,
+];
 
 test("service worker fetches catalog data.js from network before generic shell cache and keeps the latest successful copy", async () => {
   const worker = await loadServiceWorker({
@@ -64,6 +71,217 @@ test("service worker keeps generic cache-first behavior for non-catalog shell as
   assert.equal(worker.operations[0].type, "cache.match");
 });
 
+test("legacy v6 service worker can satisfy query-string-only runtime migration with old cached bytes", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => jsResponse("window.__NEW_RUNTIME__ = true;"),
+    sourcePath: "tests/frontend/fixtures/legacy-sw-v6.js",
+  });
+  await worker.put(
+    LEGACY_V6_CACHE,
+    "https://web00.pro/assets/js/main.js",
+    "window.__OLD_RUNTIME__ = true;"
+  );
+  worker.clearOperations();
+
+  const response = await worker.fetch("https://web00.pro/assets/js/main.js?v=zero-stale");
+
+  assert.equal(await response.text(), "window.__OLD_RUNTIME__ = true;");
+  assert.equal(worker.fetchCalls.length, 0);
+  assert.equal(worker.operations[0].type, "cache.match");
+});
+
+test("service worker install rejects when the shell precache cannot complete", async () => {
+  const worker = await loadServiceWorker({
+    addAllThrows: new Error("precache failed"),
+    fetchHandler: async () => jsResponse("ok"),
+  });
+
+  await assert.rejects(() => worker.install(), /precache failed/);
+});
+
+test("service worker install precaches exact catalog-v2 runtime entries", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => jsResponse("ok"),
+  });
+
+  await worker.install();
+
+  for (const url of V2_RUNTIME_URLS) {
+    const cached = await worker.match(CURRENT_CACHE, url);
+    assert.ok(cached, `${url} should be precached with its exact version query`);
+    assert.match(await cached.text(), /cached assets\/js\/catalog-v2\//);
+  }
+  assert.equal(await worker.match(CURRENT_CACHE, "https://web00.pro/assets/js/catalog-runtime.js?v=b9-catalog-lkg-1", { ignoreSearch: true }), undefined);
+  assert.equal(await worker.match(CURRENT_CACHE, "https://web00.pro/assets/js/catalog-api.js?v=b9-catalog-lkg-1", { ignoreSearch: true }), undefined);
+  assert.equal(await worker.match(CURRENT_CACHE, "https://web00.pro/assets/js/main.js?v=b9-catalog-lkg-1", { ignoreSearch: true }), undefined);
+});
+
+test("service worker activate retires old WEB00 shell caches and preserves unrelated caches", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => jsResponse("ok"),
+  });
+  await worker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/data.js", "old v6");
+  await worker.put("web00-shell-v5-old", "https://web00.pro/assets/js/data.js", "old v5");
+  await worker.put("third-party-cache", "https://web00.pro/assets/js/data.js", "external");
+
+  await worker.activate();
+
+  const names = await worker.cacheNames();
+  assert.equal(names.includes(LEGACY_V6_CACHE), false);
+  assert.equal(names.includes("web00-shell-v5-old"), false);
+  assert.equal(names.includes("third-party-cache"), true);
+});
+
+test("service worker fetches catalog-v2 runtime from the network first and caches the exact URL", async () => {
+  const runtimeUrl = V2_RUNTIME_URLS[2];
+  const worker = await loadServiceWorker({
+    fetchHandler: async (request) => jsResponse(`network:${requestUrl(request)}`),
+  });
+  await worker.put(CURRENT_CACHE, "https://web00.pro/assets/js/catalog-v2/main.js?v=previous", "stale runtime");
+  worker.clearOperations();
+
+  const response = await worker.fetch(runtimeUrl);
+
+  assert.equal(await response.text(), `network:${runtimeUrl}`);
+  assert.equal(worker.fetchCalls.length, 1);
+  assert.equal(worker.fetchCalls[0].url, runtimeUrl);
+  assert.equal(worker.fetchCalls[0].cache, "no-store");
+  assert.equal(worker.operations[0].type, "fetch");
+
+  const cached = await worker.match(CURRENT_CACHE, runtimeUrl);
+  assert.equal(await cached.text(), `network:${runtimeUrl}`);
+});
+
+test("service worker falls back to the exact cached catalog-v2 runtime URL after network failure", async () => {
+  const runtimeUrl = V2_RUNTIME_URLS[2];
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => {
+      throw new TypeError("network down");
+    },
+  });
+  await worker.put(CURRENT_CACHE, runtimeUrl, "cached exact runtime");
+  worker.clearOperations();
+
+  const response = await worker.fetch(runtimeUrl);
+
+  assert.equal(await response.text(), "cached exact runtime");
+  assert.equal(worker.fetchCalls.length, 1);
+  assert.equal(worker.fetchCalls[0].cache, "no-store");
+  assert.equal(worker.operations.some((entry) => entry.type === "cache.match" && entry.ignoreSearch), false);
+});
+
+test("service worker uses only exact catalog-v2 runtime query matches after network failure", async () => {
+  const runtimeUrl = V2_RUNTIME_URLS[2];
+  const previousUrl = "https://web00.pro/assets/js/catalog-v2/main.js?v=previous";
+  const worker = await loadServiceWorker({
+    fetchHandler: async () => {
+      throw new TypeError("network down");
+    },
+  });
+  await worker.put(CURRENT_CACHE, previousUrl, "stale runtime");
+  worker.clearOperations();
+
+  await assert.rejects(() => worker.fetch(runtimeUrl), /WEB00 runtime unavailable|network down/);
+  assert.equal(worker.fetchCalls.length, 1);
+  assert.equal(worker.operations.some((entry) => entry.type === "cache.match" && entry.ignoreSearch), false);
+});
+
+test("legacy v6 service worker cannot satisfy catalog-v2 physical runtime paths from old shell entries", async () => {
+  const worker = await loadServiceWorker({
+    fetchHandler: async (request) => jsResponse(`network:${new URL(requestUrl(request), "https://web00.pro/").pathname}`),
+    sourcePath: "tests/frontend/fixtures/legacy-sw-v6.js",
+  });
+  await worker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/main.js", "old main");
+  await worker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/catalog-api.js", "old api");
+  await worker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/catalog-runtime.js", "old runtime");
+  worker.clearOperations();
+
+  const main = await worker.fetch("https://web00.pro/assets/js/catalog-v2/main.js");
+  const api = await worker.fetch("https://web00.pro/assets/js/catalog-v2/catalog-api.js");
+  const runtime = await worker.fetch("https://web00.pro/assets/js/catalog-v2/catalog-runtime.js");
+
+  assert.equal(await main.text(), "network:/assets/js/catalog-v2/main.js");
+  assert.equal(await api.text(), "network:/assets/js/catalog-v2/catalog-api.js");
+  assert.equal(await runtime.text(), "network:/assets/js/catalog-v2/catalog-runtime.js");
+  assert.equal(worker.fetchCalls.length, 3);
+});
+
+test("legacy v6 to v7 migration keeps exact catalog-v2 runtime available offline without reload loops", async () => {
+  const sharedCacheStorage = createServiceWorkerCacheStorage();
+  const legacyWorker = await loadServiceWorker({
+    cacheStorage: sharedCacheStorage,
+    fetchHandler: async (request) => jsResponse(`network:${new URL(requestUrl(request), "https://web00.pro/").pathname}`),
+    sourcePath: "tests/frontend/fixtures/legacy-sw-v6.js",
+  });
+  await legacyWorker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/main.js", "old main");
+  await legacyWorker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/catalog-api.js", "old api");
+  await legacyWorker.put(LEGACY_V6_CACHE, "https://web00.pro/assets/js/catalog-runtime.js", "old runtime");
+  await legacyWorker.put("third-party-cache", "https://web00.pro/external.js", "external");
+  legacyWorker.clearOperations();
+
+  const legacyMain = await legacyWorker.fetch("https://web00.pro/assets/js/catalog-v2/main.js");
+  const legacyPhysicalEscape = await legacyMain.text() === "network:/assets/js/catalog-v2/main.js";
+
+  const v7Worker = await loadServiceWorker({
+    cacheStorage: sharedCacheStorage,
+    fetchHandler: async (request) => jsResponse(`network:${requestUrl(request)}`),
+  });
+
+  await v7Worker.install();
+  const exactVersionedRuntimePrecached = (await Promise.all(
+    V2_RUNTIME_URLS.map(async (url) => Boolean(await v7Worker.match(CURRENT_CACHE, url))),
+  )).every(Boolean);
+
+  await v7Worker.activate();
+  const cacheNames = await v7Worker.cacheNames();
+  const oldShellCacheRetired = !cacheNames.includes(LEGACY_V6_CACHE);
+  const unrelatedCacheRetained = cacheNames.includes("third-party-cache");
+
+  v7Worker.setFetchHandler(async () => {
+    throw new TypeError("offline after v7 activation");
+  });
+  const offlineMain = await v7Worker.fetch(V2_RUNTIME_URLS[2]);
+  const exactV2OfflineRuntime = (await offlineMain.text()).includes("cached assets/js/catalog-v2/main.js");
+
+  const migratedClient = await loadCatalogV2MainWithServiceWorkerController({
+    controller: {},
+    sessionMarker: CURRENT_CACHE,
+  });
+  migratedClient.controllerChange.handler();
+  migratedClient.controllerChange.handler();
+
+  const firstInstallClient = await loadCatalogV2MainWithServiceWorkerController({
+    controller: null,
+  });
+  firstInstallClient.controllerChange.handler();
+
+  const evidence = {
+    legacyPhysicalEscape,
+    oldShellCacheRetired,
+    unrelatedCacheRetained,
+    exactVersionedRuntimePrecached,
+    exactV2OfflineRuntime,
+    legacyToV7Reloads: migratedClient.reloads.length,
+    duplicateControllerChangeReloads: migratedClient.reloads.length - 1,
+    firstInstallReloads: firstInstallClient.reloads.length,
+    futureUpdateNotBlockedBySessionStorage: migratedClient.storage.getCalls.length === 0 && migratedClient.storage.setCalls.length === 0,
+    reloadLoopDetected: migratedClient.reloads.length > 1 || firstInstallClient.reloads.length > 0,
+  };
+
+  assert.deepEqual(evidence, {
+    legacyPhysicalEscape: true,
+    oldShellCacheRetired: true,
+    unrelatedCacheRetained: true,
+    exactVersionedRuntimePrecached: true,
+    exactV2OfflineRuntime: true,
+    legacyToV7Reloads: 1,
+    duplicateControllerChangeReloads: 0,
+    firstInstallReloads: 0,
+    futureUpdateNotBlockedBySessionStorage: true,
+    reloadLoopDetected: false,
+  });
+});
+
 test("service worker does not intercept cross-origin Cloud runtime manifest", async () => {
   const worker = await loadServiceWorker({
     fetchHandler: async () => new Response(JSON.stringify({ marker: "fresh-cloud-manifest" }), {
@@ -81,7 +299,7 @@ test("service worker does not intercept cross-origin Cloud runtime manifest", as
   assert.equal(worker.operations.some((entry) => entry.type === "cache.match"), false);
 });
 
-test("main.js registers service worker updates without HTTP cache and reloads once after controller migration", async () => {
+test("catalog-v2 main.js registers service worker updates without HTTP cache and reloads once after controller migration", async () => {
   const registerCalls = [];
   const serviceWorkerListeners = [];
   const reloads = [];
@@ -129,7 +347,7 @@ test("main.js registers service worker updates without HTTP cache and reloads on
     reloads.push("reload");
   };
 
-  await loadClassicScript("assets/js/main.js", browser);
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
   for (const handler of browser.listeners.get("DOMContentLoaded") || []) {
     await handler();
   }
@@ -148,7 +366,7 @@ test("main.js registers service worker updates without HTTP cache and reloads on
   assert.equal(storage.setCalls.length, 0);
 });
 
-test("main.js does not let an old unversioned reload marker block a future service worker update", async () => {
+test("catalog-v2 main.js does not let an old unversioned reload marker block a future service worker update", async () => {
   const registerCalls = [];
   const serviceWorkerListeners = [];
   const reloads = [];
@@ -199,7 +417,7 @@ test("main.js does not let an old unversioned reload marker block a future servi
     reloads.push("reload");
   };
 
-  await loadClassicScript("assets/js/main.js", browser);
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
   for (const handler of browser.listeners.get("DOMContentLoaded") || []) {
     await handler();
   }
@@ -216,7 +434,7 @@ test("main.js does not let an old unversioned reload marker block a future servi
   assert.equal(storage.setCalls.length, 0);
 });
 
-test("an existing marker from the previous completed migration does not block a later genuine controller change", async () => {
+test("catalog-v2 main.js does not let a previous completed migration marker block a later genuine controller change", async () => {
   const registerCalls = [];
   const serviceWorkerListeners = [];
   const reloads = [];
@@ -267,7 +485,7 @@ test("an existing marker from the previous completed migration does not block a 
     reloads.push("reload");
   };
 
-  await loadClassicScript("assets/js/main.js", browser);
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
   for (const handler of browser.listeners.get("DOMContentLoaded") || []) {
     await handler();
   }
@@ -284,7 +502,7 @@ test("an existing marker from the previous completed migration does not block a 
   assert.equal(storage.setCalls.length, 0);
 });
 
-test("main.js does not reload on first service worker install without an existing controller", async () => {
+test("catalog-v2 main.js does not reload on first service worker install without an existing controller", async () => {
   const registerCalls = [];
   const serviceWorkerListeners = [];
   const reloads = [];
@@ -332,7 +550,7 @@ test("main.js does not reload on first service worker install without an existin
     reloads.push("reload");
   };
 
-  await loadClassicScript("assets/js/main.js", browser);
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
   for (const handler of browser.listeners.get("DOMContentLoaded") || []) {
     await handler();
   }
@@ -349,12 +567,88 @@ test("main.js does not reload on first service worker install without an existin
   assert.equal(storage.setCalls.length, 0);
 });
 
-async function loadServiceWorker({ fetchHandler }) {
-  const source = await readFile("sw.js", "utf8");
+async function loadCatalogV2MainWithServiceWorkerController(options = {}) {
+  const registerCalls = [];
+  const serviceWorkerListeners = [];
+  const reloads = [];
+  const storage = trackedSessionStorage();
+  if (options.sessionMarker) {
+    storage.setItem("web00.serviceWorker.controllerchangeReloaded", options.sessionMarker);
+    storage.getCalls.length = 0;
+    storage.setCalls.length = 0;
+  }
+  const browser = createFakeBrowser({
+    href: "https://web00.pro/index.html",
+    navigator: {
+      serviceWorker: {
+        addEventListener(type, handler) {
+          serviceWorkerListeners.push({ handler, type });
+        },
+        controller: options.controller || null,
+        register(...args) {
+          registerCalls.push(args);
+          return Promise.resolve({});
+        },
+      },
+    },
+    page: "home",
+    sessionStorage: storage,
+  });
+  browser.window.WEB00_DATA = {
+    FAQ: [],
+    PRICING: [],
+    SERVICES: [],
+    SOLUTIONS: [{
+      active: true,
+      galleryImages: [],
+      id: "smoke",
+      previewImage: "",
+      slug: "smoke",
+      title: "Smoke",
+    }],
+  };
+  const emptyCatalogState = { items: [], lifecycle: "ready", source: "static" };
+  browser.window.WEB00_CATALOG = {
+    findCatalogItem: () => null,
+    getInitialCatalog: () => emptyCatalogState,
+    getStaticCatalog: () => ({ items: [] }),
+    resolveCatalogForPage: async () => emptyCatalogState,
+  };
+  browser.window.addEventListener = () => undefined;
+  browser.window.localStorage = { getItem: () => null, setItem: () => undefined };
+  browser.window.location.reload = () => {
+    reloads.push("reload");
+  };
+
+  await loadClassicScript("assets/js/catalog-v2/main.js", browser);
+  for (const handler of browser.listeners.get("DOMContentLoaded") || []) {
+    await handler();
+  }
+
+  assert.equal(registerCalls.length, 1);
+  assert.equal(registerCalls[0][0], "sw.js");
+  assert.equal(registerCalls[0][1]?.updateViaCache, "none");
+  const controllerChange = serviceWorkerListeners.find((listener) => listener.type === "controllerchange");
+  assert.ok(controllerChange, "controllerchange listener should be registered for old-service-worker migration");
+
+  return {
+    controllerChange,
+    registerCalls,
+    reloads,
+    storage,
+  };
+}
+
+async function loadServiceWorker(options = {}) {
+  const source = await readFile(options.sourcePath || "sw.js", "utf8");
   const listeners = new Map();
-  const operations = [];
+  const cacheStorage = options.cacheStorage || createServiceWorkerCacheStorage({
+    addAllThrows: options.addAllThrows,
+  });
+  const operations = cacheStorage.operations;
   const fetchCalls = [];
-  const caches = fakeCacheStorage(operations);
+  let fetchHandler = options.fetchHandler || (async () => jsResponse("ok"));
+  const caches = cacheStorage.caches;
   const self = {
     addEventListener(type, handler) {
       listeners.set(type, handler);
@@ -379,9 +673,21 @@ async function loadServiceWorker({ fetchHandler }) {
     },
     self,
   });
-  vm.runInContext(source, context, { filename: "sw.js" });
+  vm.runInContext(source, context, { filename: options.sourcePath || "sw.js" });
 
   return {
+    activate: async () => {
+      const handler = listeners.get("activate");
+      assert.ok(handler, "sw.js should register an activate handler");
+      const waits = [];
+      handler({
+        waitUntil(promise) {
+          waits.push(Promise.resolve(promise));
+        },
+      });
+      await Promise.all(waits);
+    },
+    cacheNames: () => caches.keys(),
     fetch: async (url, init = {}) => {
       const handler = listeners.get("fetch");
       assert.ok(handler, "sw.js should register a fetch handler");
@@ -398,18 +704,40 @@ async function loadServiceWorker({ fetchHandler }) {
     clearOperations: () => {
       operations.length = 0;
     },
+    install: async () => {
+      const handler = listeners.get("install");
+      assert.ok(handler, "sw.js should register an install handler");
+      const waits = [];
+      handler({
+        waitUntil(promise) {
+          waits.push(Promise.resolve(promise));
+        },
+      });
+      await Promise.all(waits);
+    },
     match: (cacheName, url, options) => caches.matchIn(cacheName, url, options),
     operations,
     put: (cacheName, url, body, options) => caches.putIn(cacheName, url, body, options),
+    setFetchHandler(nextFetchHandler) {
+      fetchHandler = nextFetchHandler;
+    },
   };
 }
 
-function fakeCacheStorage(operations) {
+function createServiceWorkerCacheStorage(options = {}) {
+  const operations = [];
+  return {
+    caches: fakeCacheStorage(operations, options),
+    operations,
+  };
+}
+
+function fakeCacheStorage(operations, options = {}) {
   const cachesByName = new Map();
 
   function ensure(name) {
     if (!cachesByName.has(name)) {
-      cachesByName.set(name, fakeCache(name, operations));
+      cachesByName.set(name, fakeCache(name, operations, options));
     }
     return cachesByName.get(name);
   }
@@ -420,6 +748,7 @@ function fakeCacheStorage(operations) {
     match: async (request, options = {}) => {
       operations.push({
         beforeFirstFetch: !operations.some((entry) => entry.type === "fetch"),
+        ignoreSearch: Boolean(options.ignoreSearch),
         type: "cache.match",
         url: requestUrl(request),
       });
@@ -438,16 +767,27 @@ function fakeCacheStorage(operations) {
   };
 }
 
-function fakeCache(name, operations) {
+function fakeCache(name, operations, options = {}) {
   const entries = new Map();
 
   return {
     addAll: async (assets) => {
+      operations.push({ assets: [...assets], name, type: "cache.addAll" });
+      if (options.addAllThrows) {
+        throw options.addAllThrows;
+      }
       for (const asset of assets) {
         entries.set(normalizeUrl(asset), jsResponse(`/* cached ${asset} */`));
       }
     },
     match: async (request, options = {}) => {
+      operations.push({
+        beforeFirstFetch: !operations.some((entry) => entry.type === "fetch"),
+        ignoreSearch: Boolean(options.ignoreSearch),
+        name,
+        type: "cache.match",
+        url: requestUrl(request),
+      });
       const key = normalizeUrl(requestUrl(request), options);
       if (options.ignoreSearch) {
         for (const [entryKey, response] of entries) {

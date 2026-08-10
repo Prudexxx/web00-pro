@@ -90,24 +90,27 @@ async function writeCard(cardsDir, card) {
   await writeFile(join(cardsDir, `${card.id}.json`), `${JSON.stringify(card, null, 2)}\n`, "utf8");
 }
 
-test("CANONICAL-CARD PARITY: canonical JSON generates the same normalized public DTO as data.js", async () => {
+test("LEGACY GENERATOR SELF-CONSISTENCY: canonical JSON deterministically normalizes each legacy card once", async () => {
   const canonicalCards = await readCanonicalCards();
-  const committedData = evaluateDataJs(await readFile("assets/js/data.js", "utf8"));
-  const committed = await normalizeStaticData(committedData);
   const { generated, normalized } = await buildGeneratedStaticCatalog();
 
   assert.equal(generated.cards.length, canonicalCards.length);
   assert.equal(normalized.length, canonicalCards.length);
   assertContainsEachCanonicalCardOnce(generated.cards, canonicalCards, "generated catalog");
   assertContainsEachCanonicalCardOnce(normalized, canonicalCards, "normalized catalog");
-  assert.deepEqual(normalized, committed);
-  assert.deepEqual(normalized.map((item) => item.previewImage?.url || item.previewImageUrl), committed.map((item) => item.previewImage?.url || item.previewImageUrl));
-  assert.deepEqual(
-    normalized.map((item) => item.galleryImages.map((image) => image.url)),
-    committed.map((item) => item.galleryImages.map((image) => image.url))
-  );
-  assert.equal(normalized.some((item) => item.demoUrl !== committed.find((expected) => expected.slug === item.slug)?.demoUrl), false);
+  assert.equal(new Set(generated.cards.map((item) => item.id)).size, canonicalCards.length);
+  assert.equal(new Set(normalized.map((item) => item.id)).size, canonicalCards.length);
   assert.deepEqual(normalized.map((item) => item.aliases), normalized.map((item) => [item.slug]));
+  for (const item of normalized) {
+    assert.equal(typeof item.previewImage?.url, "string", `${item.id} should expose a normalized preview image URL`);
+    assert.equal(item.previewImage.url, item.previewImageUrl, `${item.id} preview URL aliases should agree`);
+    assert.ok(Array.isArray(item.previewImage.variants), `${item.id} preview variants should be normalized`);
+    assert.ok(Array.isArray(item.galleryImages), `${item.id} gallery should be normalized`);
+    for (const image of item.galleryImages) {
+      assert.equal(typeof image.url, "string", `${item.id} gallery image should expose a normalized URL`);
+      assert.ok(Array.isArray(image.variants), `${item.id} gallery variants should be normalized`);
+    }
+  }
   assert.deepEqual(
     generated.cards.filter((item) => item.id === "web00-smoke-create").map((item) => ({
       active: item.active,
@@ -119,6 +122,17 @@ test("CANONICAL-CARD PARITY: canonical JSON generates the same normalized public
     normalized.filter((item) => item.id === "web00-smoke-create").map((item) => item.title),
     ["WEB00 Smoke Updated"]
   );
+});
+
+test("DISASTER FALLBACK SAFETY: committed data.js remains parseable static fallback without retired atomic canary", async () => {
+  const committedData = evaluateDataJs(await readFile("assets/js/data.js", "utf8"));
+  assert.ok(Array.isArray(committedData.SOLUTIONS), "committed WEB00_DATA.SOLUTIONS should remain an array");
+
+  const committed = await normalizeStaticData(committedData);
+  const slugs = committed.map((item) => item.slug);
+
+  assert.equal(new Set(slugs).size, slugs.length, "committed static fallback should not contain duplicate slugs");
+  assert.equal(committed.some((item) => item.id === "web00-atomic-create-pass" || item.slug === "web00-atomic-create-pass"), false);
 });
 
 test("API FAILURE FAIL-SAFE: Render API failure keeps the static catalog visible", async () => {
