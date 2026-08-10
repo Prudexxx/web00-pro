@@ -12,7 +12,7 @@ export const IMAGE_MULTIPART_LIMITS = {
   batchTotalBytes: 30 * 1024 * 1024,
   fieldNameSize: 80,
   fields: 2,
-  fileSize: 5 * 1024 * 1024,
+  fileSize: 30 * 1024 * 1024,
   files: 10,
   headerPairs: 100,
   singleFiles: 1,

@@ -1702,7 +1702,7 @@ describe("admin site editor screen", () => {
           if (clientFileId === "00000000-0000-4000-8000-000000000404") {
             return Promise.reject({
               code: "IMAGE_TOO_LARGE",
-              message: "Файл должен быть не больше 5 MB.",
+              message: "Файл должен быть не больше 30 MiB.",
               status: 413
             });
           }
@@ -1772,7 +1772,7 @@ describe("admin site editor screen", () => {
     ]) {
       expect(screen.element.textContent).toContain(fileName);
     }
-    expect(screen.element.textContent).toContain("Файл должен быть не больше 5 MB.");
+    expect(screen.element.textContent).toContain("Файл должен быть не больше 30 MiB.");
     expect(screen.element.textContent).toContain("Не удалось загрузить изображение.");
     expect(screen.element.textContent).toContain("req_gallery_file_5");
     expect(screen.element.textContent).toContain("Скопировать requestId");

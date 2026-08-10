@@ -46,7 +46,7 @@ describe("admin image UI contract", () => {
     expect(IMAGE_UPLOAD_LIMITS).toEqual({
       batchBytes: 30 * 1024 * 1024,
       batchFiles: 10,
-      fileBytes: 5 * 1024 * 1024,
+      fileBytes: 30 * 1024 * 1024,
       galleryImages: 20,
       imageAlt: 160
     });

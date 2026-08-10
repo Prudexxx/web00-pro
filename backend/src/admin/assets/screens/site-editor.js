@@ -1370,7 +1370,7 @@ export function createSiteEditorScreen(options) {
       createElement("p", {
         documentRef,
         className: "admin-field-help",
-        text: "JPG, PNG, WEBP, AVIF. 5 MB на файл. За раз можно выбрать до 10 файлов, общий размер до 30 MB. В галерее максимум 20 изображений."
+        text: "JPG, PNG, WEBP, AVIF. 30 MiB на файл. За раз можно выбрать до 10 файлов, общий размер до 30 MiB. В галерее максимум 20 изображений."
       }),
       createElement("label", {
         documentRef,

@@ -115,7 +115,7 @@ describe("admin image manager screen", () => {
 
     setFiles(screen.element, "previewImage", [imageFile("large.png", "image/png", IMAGE_UPLOAD_LIMITS.fileBytes + 1)]);
     screen.element.querySelector('[data-action="replace-preview"]').dispatchEvent(fakeEvent("submit"));
-    expect(screen.element.textContent).toContain("5 MiB");
+    expect(screen.element.textContent).toContain("30 MiB");
 
     setFiles(screen.element, "previewImage", [imageFile("ok.avif", "image/avif", 12)]);
     setValue(screen.element, "previewAlt", "x".repeat(161));
