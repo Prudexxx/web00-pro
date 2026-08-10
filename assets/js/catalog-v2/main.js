@@ -1027,11 +1027,10 @@
     return demoModalSettingFromCatalogState(popularCatalogState) === true;
   }
 
-  function isTrustedInternalDemoUrl(url) {
+  function isSafeExternalDemoUrl(url) {
     try {
       const parsed = new URL(String(url || ""));
       return parsed.protocol === "https:" &&
-        parsed.origin === window.location.origin &&
         parsed.username === "" &&
         parsed.password === "";
     } catch (_) {
@@ -1684,7 +1683,7 @@
     const showExternalDemoInside = isExternalDemo &&
       catalogShowDemoInModal() &&
       Boolean(demoUrl) &&
-      isTrustedInternalDemoUrl(demoUrl);
+      isSafeExternalDemoUrl(demoUrl);
     const externalFallbackOnly = isExternalDemo && !showExternalDemoInside;
     setDemoDialogMode(solution);
     const target = $("[data-demo-modal-content]");
