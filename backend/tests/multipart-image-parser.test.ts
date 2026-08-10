@@ -1,6 +1,6 @@
 import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { createBusboyMultipartImageParser } from "../src/modules/images/multipart-image-parser.js";
+import { IMAGE_MULTIPART_LIMITS, createBusboyMultipartImageParser } from "../src/modules/images/multipart-image-parser.js";
 
 const firstId = "11111111-1111-4111-8111-111111111111";
 const secondId = "22222222-2222-4222-8222-222222222222";
@@ -68,6 +68,10 @@ function multipartFile(
 }
 
 describe("createBusboyMultipartImageParser", () => {
+  it("pins product upload defaults at 30 MiB", () => {
+    expect(IMAGE_MULTIPART_LIMITS.fileSize).toBe(30 * 1024 * 1024);
+    expect(IMAGE_MULTIPART_LIMITS.batchTotalBytes).toBe(30 * 1024 * 1024);
+  });
   it("parses one image file with clientFileId and trimmed alt", async () => {
     const parser = createBusboyMultipartImageParser();
 

@@ -3,7 +3,7 @@ import { createRandomUuid } from "./random-id.js";
 export const IMAGE_UPLOAD_LIMITS = Object.freeze({
   batchBytes: 30 * 1024 * 1024,
   batchFiles: 10,
-  fileBytes: 5 * 1024 * 1024,
+  fileBytes: 30 * 1024 * 1024,
   galleryImages: 20,
   imageAlt: 160
 });
@@ -87,7 +87,7 @@ export function validateImageFile(file) {
     throw new Error("Поддерживаются только JPEG, PNG, WEBP или AVIF.");
   }
   if (file.size > IMAGE_UPLOAD_LIMITS.fileBytes) {
-    throw new Error("Файл должен быть не больше 5 MB.");
+    throw new Error("Файл должен быть не больше 30 MiB.");
   }
 }
 
@@ -104,7 +104,7 @@ export function validateBatch(files) {
   const total = files.reduce((sum, file) => sum + file.size, 0);
 
   if (total > IMAGE_UPLOAD_LIMITS.batchBytes) {
-    throw new Error("Общий размер выбранных изображений должен быть не больше 30 MB.");
+    throw new Error("Общий размер выбранных изображений должен быть не больше 30 MiB.");
   }
 }
 

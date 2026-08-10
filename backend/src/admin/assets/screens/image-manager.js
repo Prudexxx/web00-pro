@@ -10,7 +10,7 @@ import { createConfirmationDialog } from "../dialog.js";
 export const IMAGE_UPLOAD_LIMITS = Object.freeze({
   batchBytes: 30 * 1024 * 1024,
   batchFiles: 10,
-  fileBytes: 5 * 1024 * 1024,
+  fileBytes: 30 * 1024 * 1024,
   galleryImages: 20,
   imageAlt: 160
 });
@@ -979,7 +979,7 @@ function validateImageFile(file) {
     throw new Error("Поддерживаются только JPEG, PNG, WebP или AVIF.");
   }
   if (file.size > IMAGE_UPLOAD_LIMITS.fileBytes) {
-    throw new Error("Файл должен быть не больше 5 MiB.");
+    throw new Error("Файл должен быть не больше 30 MiB.");
   }
 }
 
